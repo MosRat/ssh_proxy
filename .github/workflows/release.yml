@@ -60,6 +60,7 @@ jobs:
           python3 -m pip install --user ziglang
           export PATH="$HOME/.local/bin:$PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          ln -sf "$(command -v python-zig)" "$HOME/.local/bin/zig"
           zig version
 
       - uses: actions/cache@v5
