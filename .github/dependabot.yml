@@ -8,16 +8,3 @@ updates:
       github-actions:
         patterns:
           - "*"
-
-  - package-ecosystem: "cargo"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-
-  - package-ecosystem: "npm"
-    directory: "/apps/vscode-remote-proxy"
-    schedule:
-      interval: "weekly"
-    groups:
-      vscode-extension-dev:
-        dependency-type: "development"
