@@ -11,7 +11,13 @@ import {
 } from './sshProxyKernelStatus';
 import { buildSshProxyRouteArgs } from './sshProxyRouteArgs';
 import { resolveSshProxyExecutableCandidates, sshProxyUnavailableCandidatesMessage } from './sshProxyDiscovery';
+import { SshProxyControlConnection } from './sshProxyCliUtils';
 import { shouldStopSshProxyRoute } from './routeOwnership';
+import {
+  shutdownSshProxySessionDaemon,
+  startSshProxySessionDaemon,
+  SshProxySessionDaemon,
+} from './sshProxySessionDaemon';
 import { AppliedProxy, RemoteProxyConfig } from './types';
 
 export class SshProxyKernelBackend implements ForwardingBackend {
@@ -28,6 +34,8 @@ export class SshProxyKernelBackend implements ForwardingBackend {
   private ownsCurrentRoute = false;
   private snapshot: SshProxyKernelStatusSnapshot = emptySshProxyKernelStatusSnapshot();
   private currentCli: SshProxyCli | undefined;
+  private currentControl: SshProxyControlConnection | undefined;
+  private sessionDaemon: SshProxySessionDaemon | undefined;
 
   public readonly onDidChange = this.changeEmitter.event;
 
@@ -105,9 +113,10 @@ export class SshProxyKernelBackend implements ForwardingBackend {
 
     try {
       const cli = await this.availableCli(config);
-      await this.ensureLocalService(cli, config);
+      const control = await this.ensureLocalService(cli, config);
+      this.currentControl = control;
 
-      const routeArgs = buildSshProxyRouteArgs(config, sshHost, proxy);
+      const routeArgs = buildSshProxyRouteArgs(config, sshHost, proxy, control);
       const explain = await cli.routeExplainJson(routeArgs);
       this.setSnapshot({ routeExplain: explain });
       this.output.appendLine(`ssh_proxy route explain: ${prettyJson(explain)}`);
@@ -122,7 +131,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       }
       const routeState = createSshProxyRouteState(started, proxy, config.sshProxyConnectMode);
       this.setSnapshot({ routeStart: started, routeState });
-      await this.refreshRouteStatus(cli, routeState.routeId);
+      await this.refreshRouteStatus(cli, routeState.routeId, control);
       this.applyRouteState(proxy, this.snapshot.routeState ?? routeState);
 
       this.statusValue = 'running';
@@ -131,6 +140,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
         this.output.appendLine(`ssh_proxy route health: ${prettyJson(record.health)}`);
       }
     } catch (error) {
+      await this.stopSessionDaemon();
       this.lastErrorValue = error instanceof Error ? error.message : String(error);
       this.statusValue = 'failed';
       this.changeEmitter.fire();
@@ -144,7 +154,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       try {
         const cli = this.cliForCurrent();
         if (cli) {
-          const stopped = await cli.stopRouteJson(routeId);
+          const stopped = await cli.stopRouteJson(routeId, this.currentControl);
           this.setSnapshot({ routeStop: stopped });
           this.output.appendLine(`ssh_proxy stop-route: ${prettyJson(stopped)}`);
         }
@@ -157,11 +167,13 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     }
 
     if (clearIntent) {
+      await this.stopSessionDaemon();
       this.currentProxy = undefined;
       this.currentSshHostValue = undefined;
       this.childRouteId = undefined;
       this.currentCliKey = undefined;
       this.currentCli = undefined;
+      this.currentControl = undefined;
       this.currentSelectedTransport = undefined;
       this.currentFallbackReason = undefined;
       this.currentConnectMode = undefined;
@@ -198,23 +210,70 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     )));
   }
 
-  private async ensureLocalService(cli: SshProxyCli, config: RemoteProxyConfig): Promise<void> {
+  private async ensureLocalService(cli: SshProxyCli, config: RemoteProxyConfig): Promise<SshProxyControlConnection | undefined> {
+    const reusedSession = await this.reuseSessionDaemonIfHealthy(cli);
+    if (reusedSession) {
+      return reusedSession;
+    }
+
     const initialStatus = await this.readLocalServiceStatus(cli);
     this.setSnapshot({ serviceStatus: initialStatus });
     if (isSshProxyOk(initialStatus) === true) {
-      return;
+      this.output.appendLine('ssh_proxy local service is healthy; reusing default control endpoint');
+      return undefined;
     }
 
     if (!config.sshProxyAutoInstallLocalService) {
-      throw new Error(`ssh_proxy local service is not healthy and auto-install is disabled: ${prettyJson(initialStatus)}`);
+      return this.startSessionDaemon(cli, `local service is not healthy and auto-install is disabled: ${prettyJson(initialStatus)}`);
     }
 
     this.output.appendLine('ssh_proxy local service is not healthy; attempting user install');
-    await cli.serviceInstall('user');
+    try {
+      await cli.serviceInstall('user');
+    } catch (error) {
+      return this.startSessionDaemon(cli, `user service install failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const repairedStatus = await this.readLocalServiceStatus(cli);
     this.setSnapshot({ serviceStatus: repairedStatus });
     if (isSshProxyOk(repairedStatus) !== true) {
-      throw new Error(`ssh_proxy local service is still not healthy after install: ${prettyJson(repairedStatus)}`);
+      return this.startSessionDaemon(cli, `local service is still not healthy after install: ${prettyJson(repairedStatus)}`);
+    }
+    this.output.appendLine('ssh_proxy local service is healthy after repair; reusing default control endpoint');
+    return undefined;
+  }
+
+  private async reuseSessionDaemonIfHealthy(cli: SshProxyCli): Promise<SshProxyControlConnection | undefined> {
+    const daemon = this.sessionDaemon;
+    if (!daemon) {
+      return undefined;
+    }
+    if (daemon.child.exitCode !== null || daemon.child.signalCode !== null) {
+      await this.stopSessionDaemon();
+      return undefined;
+    }
+    try {
+      const status = await cli.nodeControlStatusJson(daemon);
+      const ok = isSshProxyOk(status) === true;
+      if (!ok) {
+        await this.stopSessionDaemon();
+        return undefined;
+      }
+      this.currentControl = { endpoint: daemon.endpoint, token: daemon.token };
+      this.setSnapshot({
+        serviceStatus: {
+          ok: true,
+          mode: 'session-daemon',
+          endpoint: daemon.endpoint,
+          transport: daemon.transport,
+          status,
+        },
+      });
+      this.output.appendLine(`ssh_proxy session daemon is still healthy; reusing ${daemon.endpoint}`);
+      return this.currentControl;
+    } catch (error) {
+      await this.stopSessionDaemon();
+      this.output.appendLine(`ssh_proxy session daemon reuse failed: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
     }
   }
 
@@ -229,9 +288,39 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     }
   }
 
-  private async refreshRouteStatus(cli: SshProxyCli, routeId: string): Promise<void> {
+  private async startSessionDaemon(cli: SshProxyCli, reason: string): Promise<SshProxyControlConnection> {
+    await this.stopSessionDaemon();
+    const daemon = await startSshProxySessionDaemon(cli, this.output, reason);
+    this.sessionDaemon = daemon;
+    const status = await cli.nodeControlStatusJson(daemon);
+    this.setSnapshot({
+      serviceStatus: {
+        ok: true,
+        mode: 'session-daemon',
+        endpoint: daemon.endpoint,
+        transport: daemon.transport,
+        status,
+      },
+    });
+    return { endpoint: daemon.endpoint, token: daemon.token };
+  }
+
+  private async stopSessionDaemon(): Promise<void> {
+    const daemon = this.sessionDaemon;
+    this.sessionDaemon = undefined;
+    if (daemon && this.currentCli) {
+      await shutdownSshProxySessionDaemon(this.currentCli, daemon, this.output);
+    } else if (daemon) {
+      daemon.child.kill();
+    }
+    if (this.currentControl?.endpoint === daemon?.endpoint) {
+      this.currentControl = undefined;
+    }
+  }
+
+  private async refreshRouteStatus(cli: SshProxyCli, routeId: string, control: SshProxyControlConnection | undefined): Promise<void> {
     try {
-      const routes = await cli.routesJson();
+      const routes = await cli.routesJson(control);
       const currentState = this.snapshot.routeState;
       if (currentState) {
         this.setSnapshot({

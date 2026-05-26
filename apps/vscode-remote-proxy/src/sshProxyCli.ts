@@ -1,12 +1,16 @@
-import { spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import * as vscode from 'vscode';
 import {
+  buildSshProxyNodeControlShutdownArgs,
+  buildSshProxyNodeControlStatusArgs,
+  buildSshProxyNodeDaemonArgs,
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
   buildSshProxyStopRouteArgs,
   formatSshProxyCommand,
   normalizeSshProxyExecutable,
   parseSshProxyJson,
+  SshProxyControlConnection,
   summarizeSshProxyOutput,
 } from './sshProxyCliUtils';
 import {
@@ -75,28 +79,56 @@ export class SshProxyCli {
   }
 
   public async routeExplainJson(args: readonly string[]): Promise<unknown> {
-    return this.runJson([...args, '--explain', '--json'], undefined, {
+    return this.runJson(['route', ...args, '--explain', '--json'], undefined, {
       label: 'ssh_proxy route explain',
       timeoutMs: ROUTE_TIMEOUT_MS,
     });
   }
 
   public async routeStartJson(args: readonly string[]): Promise<unknown> {
-    return this.runJson([...args, '--json'], undefined, {
+    return this.runJson(['route', ...args, '--json'], undefined, {
       label: 'ssh_proxy route start',
       timeoutMs: ROUTE_TIMEOUT_MS,
     });
   }
 
-  public async stopRouteJson(id: string): Promise<unknown> {
-    return this.runJson(buildSshProxyStopRouteArgs(id), undefined, {
+  public async nodeControlStatusJson(connection: SshProxyControlConnection = {}): Promise<unknown> {
+    return this.runJson(buildSshProxyNodeControlStatusArgs(connection), undefined, {
+      label: 'ssh_proxy node status',
+      timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
+    });
+  }
+
+  public async nodeControlShutdownJson(connection: SshProxyControlConnection = {}): Promise<unknown> {
+    return this.runJson(buildSshProxyNodeControlShutdownArgs(connection), undefined, {
+      label: 'ssh_proxy node shutdown',
+      timeoutMs: STOP_ROUTE_TIMEOUT_MS,
+    });
+  }
+
+  public startNodeDaemon(options: {
+    readonly control: string;
+    readonly transport: string;
+    readonly token: string;
+    readonly name?: string;
+  }): ChildProcess {
+    const args = buildSshProxyNodeDaemonArgs(options);
+    this.output.appendLine(formatSshProxyCommand(this.executable, args));
+    return spawn(this.executable, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  }
+
+  public async stopRouteJson(id: string, connection: SshProxyControlConnection = {}): Promise<unknown> {
+    return this.runJson(buildSshProxyStopRouteArgs(id, connection), undefined, {
       label: 'ssh_proxy stop route',
       timeoutMs: STOP_ROUTE_TIMEOUT_MS,
     });
   }
 
-  public async routesJson(): Promise<unknown> {
-    return this.runJson(buildSshProxyRoutesArgs(), undefined, {
+  public async routesJson(connection: SshProxyControlConnection = {}): Promise<unknown> {
+    return this.runJson(buildSshProxyRoutesArgs(connection), undefined, {
       label: 'ssh_proxy node routes',
       timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
     });

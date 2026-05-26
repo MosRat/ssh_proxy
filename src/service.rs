@@ -126,11 +126,14 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
     let daemon = query_daemon_status(plan).await;
     let health = service_health(plan).await;
     let platform = platform::platform_status_summary(plan);
-    let overall_ok =
-        daemon["reachable"].as_bool().unwrap_or(false) || platform["ok"].as_bool().unwrap_or(false);
+    let daemon_reachable = daemon["reachable"].as_bool().unwrap_or(false);
+    let platform_ok = platform["ok"].as_bool().unwrap_or(false);
+    let overall_ok = daemon_reachable || platform_ok;
+    let manager = service_manager_summary(plan, daemon_reachable, platform_ok);
     Ok(json!({
         "ok": overall_ok,
         "kind": "service_status",
+        "state": service_state_name(daemon_reachable, platform_ok),
         "version": env!("CARGO_PKG_VERSION"),
         "user": current_user(),
         "scope": service_scope_name(plan.scope),
@@ -158,11 +161,80 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
         "report_to": plan.report_to,
         "health": health,
         "daemon": daemon,
+        "manager": manager,
         "platform": {
             "service_name": platform_service_name(plan.scope),
             "status": platform,
         }
     }))
+}
+
+fn service_manager_summary(
+    plan: &ServicePlan,
+    daemon_reachable: bool,
+    platform_ok: bool,
+) -> Value {
+    let fallback_recommended = !daemon_reachable;
+    json!({
+        "kind": persistent_manager_kind(plan.scope),
+        "service_name": platform_service_name(plan.scope),
+        "persistent_installed_or_registered": platform_ok,
+        "daemon_reachable": daemon_reachable,
+        "session_daemon_fallback": {
+            "supported": true,
+            "recommended": fallback_recommended,
+            "reason": if fallback_recommended {
+                "default daemon endpoint is not reachable; clients may start a session-owned daemon without installing a persistent service"
+            } else {
+                "default daemon endpoint is reachable; reuse the existing daemon"
+            },
+        },
+        "next_action": service_next_action(daemon_reachable, platform_ok),
+    })
+}
+
+fn service_state_name(daemon_reachable: bool, platform_ok: bool) -> &'static str {
+    match (daemon_reachable, platform_ok) {
+        (true, true) => "running_with_persistent_manager",
+        (true, false) => "running_without_persistent_manager",
+        (false, true) => "persistent_manager_registered_but_daemon_unreachable",
+        (false, false) => "unavailable",
+    }
+}
+
+fn service_next_action(daemon_reachable: bool, platform_ok: bool) -> &'static str {
+    match (daemon_reachable, platform_ok) {
+        (true, _) => "reuse_default_daemon",
+        (false, true) => "start_or_repair_persistent_service",
+        (false, false) => "install_persistent_service_or_start_session_daemon",
+    }
+}
+
+fn persistent_manager_kind(scope: plan::ServiceScope) -> &'static str {
+    match scope {
+        plan::ServiceScope::User => {
+            if cfg!(windows) {
+                "windows_scheduled_task_user"
+            } else if cfg!(target_os = "macos") {
+                "launchd_user"
+            } else if cfg!(target_os = "linux") {
+                "systemd_user"
+            } else {
+                "user_service"
+            }
+        }
+        plan::ServiceScope::System => {
+            if cfg!(windows) {
+                "windows_service_system"
+            } else if cfg!(target_os = "macos") {
+                "launchd_system"
+            } else if cfg!(target_os = "linux") {
+                "systemd_system"
+            } else {
+                "system_service"
+            }
+        }
+    }
 }
 
 async fn service_health(plan: &ServicePlan) -> Value {
@@ -593,9 +665,23 @@ mod tests {
         assert_eq!(summary["health"]["listeners"]["control"]["ok"], true);
         assert_eq!(summary["health"]["route_store"]["ok"], true);
         assert_eq!(summary["health"]["listeners"]["quic"]["configured"], true);
+        assert!(summary["state"].is_string());
+        assert_eq!(summary["manager"]["session_daemon_fallback"]["supported"], true);
+        assert!(summary["manager"]["next_action"].is_string());
         assert!(summary["platform"]["status"]["ok"].is_boolean());
         assert!(!summary.to_string().contains("secret"));
         assert!(summary["daemon"]["reachable"].is_boolean());
+    }
+
+    #[test]
+    fn service_state_names_cover_core_cases() {
+        assert_eq!(service_state_name(true, true), "running_with_persistent_manager");
+        assert_eq!(service_state_name(true, false), "running_without_persistent_manager");
+        assert_eq!(service_state_name(false, true), "persistent_manager_registered_but_daemon_unreachable");
+        assert_eq!(service_state_name(false, false), "unavailable");
+        assert_eq!(service_next_action(true, false), "reuse_default_daemon");
+        assert_eq!(service_next_action(false, true), "start_or_repair_persistent_service");
+        assert_eq!(service_next_action(false, false), "install_persistent_service_or_start_session_daemon");
     }
 
     #[test]

@@ -79,6 +79,40 @@ test('keeps user ssh args before route options', () => {
   );
 });
 
+test('targets a session daemon endpoint when the service fallback is active', () => {
+  assert.deepEqual(
+    buildSshProxyRouteArgs(
+      config(),
+      'edge',
+      proxy({ routeId: 'vscode-remote-proxy-custom' }),
+      {
+        endpoint: 'tcp://127.0.0.1:19181',
+        token: 'session-token',
+      },
+    ),
+    [
+      'edge',
+      '--direction',
+      'remote-uses-local',
+      '--connect-mode',
+      'reverse-link',
+      '--bind',
+      '127.0.0.1',
+      '--port',
+      '17890',
+      '--egress-proxy',
+      'http://127.0.0.1:18080',
+      '--id',
+      'vscode-remote-proxy-custom',
+      '--endpoint',
+      'tcp://127.0.0.1:19181',
+      '--token',
+      'session-token',
+      '--volatile',
+    ],
+  );
+});
+
 test('omits volatile flag when persistent routes are explicitly requested', () => {
   assert.equal(
     buildSshProxyRouteArgs(

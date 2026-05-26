@@ -12,9 +12,6 @@ use serde_json::{Value, json};
 #[cfg(windows)]
 use super::plan::command_quote;
 use super::plan::{ServicePlan, ServiceScope, ensure_admin, platform_service_name};
-
-#[cfg(windows)]
-const SERVICE_NAME: &str = "ssh_proxy";
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "local.ssh-proxy.daemon";
 

@@ -2,6 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildSshProxyNodeControlShutdownArgs,
+  buildSshProxyNodeControlStatusArgs,
+  buildSshProxyNodeDaemonArgs,
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
   buildSshProxyStopRouteArgs,
@@ -21,6 +24,53 @@ test('builds JSON command shapes consumed by the extension', () => {
   assert.deepEqual(buildSshProxyServiceStatusArgs(), ['service', '--json', 'status']);
   assert.deepEqual(buildSshProxyRoutesArgs(), ['node', 'control', '--json', 'routes']);
   assert.deepEqual(buildSshProxyStopRouteArgs('route-1'), ['node', 'control', '--json', 'stop-route', 'route-1']);
+});
+
+test('builds node control commands for a session daemon endpoint', () => {
+  const connection = {
+    endpoint: 'tcp://127.0.0.1:19181',
+    token: 'session-token',
+  };
+  assert.deepEqual(
+    buildSshProxyNodeControlStatusArgs(connection),
+    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'status'],
+  );
+  assert.deepEqual(
+    buildSshProxyRoutesArgs(connection),
+    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'routes'],
+  );
+  assert.deepEqual(
+    buildSshProxyStopRouteArgs('route-1', connection),
+    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'stop-route', 'route-1'],
+  );
+  assert.deepEqual(
+    buildSshProxyNodeControlShutdownArgs(connection),
+    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'shutdown'],
+  );
+});
+
+test('builds session daemon command shape', () => {
+  assert.deepEqual(
+    buildSshProxyNodeDaemonArgs({
+      control: 'tcp://127.0.0.1:19181',
+      transport: '127.0.0.1:19180',
+      token: 'session-token',
+      name: 'vscode-remote-proxy-session',
+    }),
+    [
+      'node',
+      'daemon',
+      '--control',
+      'tcp://127.0.0.1:19181',
+      '--transport',
+      '127.0.0.1:19180',
+      '--token',
+      'session-token',
+      '--no-route-autostart',
+      '--name',
+      'vscode-remote-proxy-session',
+    ],
+  );
 });
 
 test('redacts token flags and proxy URL credentials', () => {

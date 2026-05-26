@@ -1,6 +1,12 @@
 import { AppliedProxy, RemoteProxyConfig } from './types';
+import { SshProxyControlConnection } from './sshProxyCliUtils';
 
-export function buildSshProxyRouteArgs(config: RemoteProxyConfig, sshHost: string, proxy: AppliedProxy): string[] {
+export function buildSshProxyRouteArgs(
+  config: RemoteProxyConfig,
+  sshHost: string,
+  proxy: AppliedProxy,
+  control: SshProxyControlConnection = {},
+): string[] {
   const args = [
     sshHost,
     '--direction',
@@ -16,6 +22,13 @@ export function buildSshProxyRouteArgs(config: RemoteProxyConfig, sshHost: strin
     '--id',
     proxy.routeId ?? `vscode-remote-proxy-${hashSshProxyRouteTarget(sshHost)}`,
   ];
+
+  if (control.endpoint) {
+    args.push('--endpoint', control.endpoint);
+  }
+  if (control.token) {
+    args.push('--token', control.token);
+  }
 
   if (config.sshProxyRouteVolatile) {
     args.push('--volatile');

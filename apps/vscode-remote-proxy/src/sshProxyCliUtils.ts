@@ -1,5 +1,10 @@
 export const DEFAULT_SSH_PROXY_EXECUTABLE = 'ssh_proxy';
 
+export interface SshProxyControlConnection {
+  readonly endpoint?: string;
+  readonly token?: string;
+}
+
 const SECRET_VALUE_FLAGS = new Set([
   '--token',
   '--remote-token',
@@ -26,12 +31,43 @@ export function buildSshProxyServiceStatusArgs(): string[] {
   return ['service', '--json', 'status'];
 }
 
-export function buildSshProxyStopRouteArgs(routeId: string): string[] {
-  return ['node', 'control', '--json', 'stop-route', routeId];
+export function buildSshProxyNodeControlStatusArgs(connection: SshProxyControlConnection = {}): string[] {
+  return buildSshProxyNodeControlArgs(connection, ['status']);
 }
 
-export function buildSshProxyRoutesArgs(): string[] {
-  return ['node', 'control', '--json', 'routes'];
+export function buildSshProxyNodeControlShutdownArgs(connection: SshProxyControlConnection = {}): string[] {
+  return buildSshProxyNodeControlArgs(connection, ['shutdown']);
+}
+
+export function buildSshProxyStopRouteArgs(routeId: string, connection: SshProxyControlConnection = {}): string[] {
+  return buildSshProxyNodeControlArgs(connection, ['stop-route', routeId]);
+}
+
+export function buildSshProxyRoutesArgs(connection: SshProxyControlConnection = {}): string[] {
+  return buildSshProxyNodeControlArgs(connection, ['routes']);
+}
+
+export function buildSshProxyNodeDaemonArgs(options: {
+  readonly control: string;
+  readonly transport: string;
+  readonly token: string;
+  readonly name?: string;
+}): string[] {
+  const args = [
+    'node',
+    'daemon',
+    '--control',
+    options.control,
+    '--transport',
+    options.transport,
+    '--token',
+    options.token,
+    '--no-route-autostart',
+  ];
+  if (options.name) {
+    args.push('--name', options.name);
+  }
+  return args;
 }
 
 export function redactSshProxyArgs(args: readonly string[]): string[] {
@@ -98,4 +134,16 @@ function quoteCommandPart(part: string): string {
     return part;
   }
   return `"${part.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function buildSshProxyNodeControlArgs(connection: SshProxyControlConnection, command: readonly string[]): string[] {
+  const args = ['node', 'control'];
+  if (connection.endpoint) {
+    args.push('--endpoint', connection.endpoint);
+  }
+  if (connection.token) {
+    args.push('--token', connection.token);
+  }
+  args.push('--json', ...command);
+  return args;
 }
