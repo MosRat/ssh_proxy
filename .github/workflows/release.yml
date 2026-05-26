@@ -1,0 +1,393 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag. Defaults to the current ref name."
+        required: false
+        type: string
+      draft:
+        description: "Create the GitHub release as a draft."
+        required: true
+        default: true
+        type: boolean
+      prerelease:
+        description: "Mark the GitHub release as a prerelease."
+        required: true
+        default: false
+        type: boolean
+      publish_vscode:
+        description: "Publish the packaged VS Code extension to Marketplace."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux-musl:
+    name: linux-x64-musl
+    runs-on: ubuntu-24.04
+    outputs:
+      sidecar-name: ssh_proxy-x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild,zig
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: release-rust-${{ runner.os }}-${{ runner.arch }}-musl-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            release-rust-${{ runner.os }}-${{ runner.arch }}-musl-${{ steps.rust.outputs.cachekey }}-
+            release-rust-${{ runner.os }}-${{ runner.arch }}-musl-
+
+      - run: cargo zigbuild --target x86_64-unknown-linux-musl --release
+
+      - name: Package musl binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist package/ssh_proxy-x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/ssh_proxy dist/ssh_proxy-x86_64-unknown-linux-musl
+          cp dist/ssh_proxy-x86_64-unknown-linux-musl package/ssh_proxy-x86_64-unknown-linux-musl/ssh_proxy
+          cp README.md LICENSE package/ssh_proxy-x86_64-unknown-linux-musl/
+          chmod +x package/ssh_proxy-x86_64-unknown-linux-musl/ssh_proxy
+          tar -C package -czf dist/ssh_proxy-x86_64-unknown-linux-musl.tar.gz ssh_proxy-x86_64-unknown-linux-musl
+          sha256sum dist/ssh_proxy-x86_64-unknown-linux-musl.tar.gz > dist/ssh_proxy-x86_64-unknown-linux-musl.tar.gz.sha256
+          sha256sum dist/ssh_proxy-x86_64-unknown-linux-musl > dist/ssh_proxy-x86_64-unknown-linux-musl.sha256
+          {
+            echo "## linux-x64-musl"
+            echo
+            echo "- Archive: \`ssh_proxy-x86_64-unknown-linux-musl.tar.gz\`"
+            echo "- Raw sidecar: \`ssh_proxy-x86_64-unknown-linux-musl\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x64-musl
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  build-binaries:
+    name: ${{ matrix.name }}
+    needs: build-linux-musl
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: ".exe"
+            archive: ssh_proxy-x86_64-pc-windows-msvc.zip
+          - name: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            exe: ".exe"
+            archive: ssh_proxy-aarch64-pc-windows-msvc.zip
+          - name: linux-x64-gnu
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            exe: ""
+            archive: ssh_proxy-x86_64-unknown-linux-gnu.tar.gz
+          - name: linux-arm64-gnu
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            exe: ""
+            archive: ssh_proxy-aarch64-unknown-linux-gnu.tar.gz
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            exe: ""
+            archive: ssh_proxy-x86_64-apple-darwin.tar.gz
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            exe: ""
+            archive: ssh_proxy-aarch64-apple-darwin.tar.gz
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: release-rust-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            release-rust-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{ steps.rust.outputs.cachekey }}-
+            release-rust-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-x64-musl
+          path: sidecar
+
+      - name: Build release binary
+        shell: pwsh
+        env:
+          SSH_PROXY_LINUX_MUSL_BIN: ${{ github.workspace }}/sidecar/ssh_proxy-x86_64-unknown-linux-musl
+        run: cargo build --target ${{ matrix.target }} --release
+
+      - name: Stage binary
+        shell: pwsh
+        run: |
+          $packageDir = "package/ssh_proxy-${{ matrix.target }}"
+          $distDir = "dist"
+          New-Item -ItemType Directory -Force -Path $packageDir, $distDir | Out-Null
+          Copy-Item -LiteralPath "target/${{ matrix.target }}/release/ssh_proxy${{ matrix.exe }}" -Destination "$packageDir/ssh_proxy${{ matrix.exe }}"
+          Copy-Item -LiteralPath "README.md" -Destination $packageDir
+          Copy-Item -LiteralPath "LICENSE" -Destination $packageDir
+          if ($env:RUNNER_OS -ne "Windows") {
+            chmod +x "$packageDir/ssh_proxy${{ matrix.exe }}"
+          }
+
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "package/ssh_proxy-${{ matrix.target }}/*" -DestinationPath "dist/${{ matrix.archive }}" -Force
+          Get-FileHash "dist/${{ matrix.archive }}" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  ${{ matrix.archive }}" } |
+            Set-Content -NoNewline "dist/${{ matrix.archive }}.sha256"
+
+      - name: Package Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C package -czf "dist/${{ matrix.archive }}" "ssh_proxy-${{ matrix.target }}"
+          shasum -a 256 "dist/${{ matrix.archive }}" | sed 's#dist/##' > "dist/${{ matrix.archive }}.sha256"
+
+      - name: Write build summary
+        shell: bash
+        run: |
+          {
+            echo "## ${{ matrix.name }}"
+            echo
+            echo "- Runner: ${{ matrix.os }}"
+            echo "- Target: \`${{ matrix.target }}\`"
+            echo "- Archive: \`${{ matrix.archive }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  package-vscode-extension:
+    name: vscode-extension-with-kernel
+    needs: build-linux-musl
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: release-rust-${{ runner.os }}-${{ runner.arch }}-vscode-kernel-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            release-rust-${{ runner.os }}-${{ runner.arch }}-vscode-kernel-${{ steps.rust.outputs.cachekey }}-
+            release-rust-${{ runner.os }}-${{ runner.arch }}-vscode-kernel-
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/vscode-remote-proxy/package-lock.json
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-x64-musl
+          path: sidecar
+
+      - name: Build Windows kernel binary
+        shell: pwsh
+        env:
+          SSH_PROXY_LINUX_MUSL_BIN: ${{ github.workspace }}/sidecar/ssh_proxy-x86_64-unknown-linux-musl
+        run: cargo build --release
+
+      - name: Stage bundled extension binaries
+        shell: pwsh
+        run: |
+          $assetRoot = "apps/vscode-remote-proxy/assets/bin"
+          New-Item -ItemType Directory -Force -Path "$assetRoot/win32-x64", "$assetRoot/linux-x64" | Out-Null
+          Copy-Item -LiteralPath "target/release/ssh_proxy.exe" -Destination "$assetRoot/win32-x64/ssh_proxy.exe" -Force
+          Copy-Item -LiteralPath "sidecar/ssh_proxy-x86_64-unknown-linux-musl" -Destination "$assetRoot/linux-x64/ssh_proxy" -Force
+          Get-ChildItem -Recurse $assetRoot | Format-Table FullName,Length
+
+      - name: Install extension dependencies
+        run: npm --prefix apps/vscode-remote-proxy ci
+
+      - name: Package VSIX
+        shell: pwsh
+        run: |
+          $pkg = Get-Content -Raw "apps/vscode-remote-proxy/package.json" | ConvertFrom-Json
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          Push-Location "apps/vscode-remote-proxy"
+          try {
+            npm exec -- vsce package --out "../../dist/vscode-remote-proxy-$($pkg.version)-with-kernel.vsix"
+          } finally {
+            Pop-Location
+          }
+          Get-FileHash "dist/vscode-remote-proxy-$($pkg.version)-with-kernel.vsix" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  vscode-remote-proxy-$($pkg.version)-with-kernel.vsix" } |
+            Set-Content -NoNewline "dist/vscode-remote-proxy-$($pkg.version)-with-kernel.vsix.sha256"
+          {
+            "## VS Code extension"
+            ""
+            "- Package: ``vscode-remote-proxy-$($pkg.version)-with-kernel.vsix``"
+            "- Bundled kernels: ``win32-x64`` and ``linux-x64``"
+          } | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vscode-extension-with-kernel
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  github-release:
+    name: github-release
+    needs:
+      - build-linux-musl
+      - build-binaries
+      - package-vscode-extension
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag_name }}"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "# ssh_proxy $tag"
+            echo
+            echo "## Artifacts"
+            echo
+            find release-artifacts -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.vsix' \) -print |
+              sort |
+              while read -r file; do
+                size="$(du -h "$file" | cut -f1)"
+                echo "- \`$(basename "$file")\` ($size)"
+              done
+            echo
+            echo "## SHA256"
+            echo
+            echo '```text'
+            find release-artifacts -type f -name '*.sha256' -print |
+              sort |
+              while read -r file; do
+                cat "$file"
+                echo
+              done
+            echo '```'
+          } > release-notes.md
+
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          generate_release_notes: true
+          body_path: release-notes.md
+          files: |
+            release-artifacts/**/*.zip
+            release-artifacts/**/*.tar.gz
+            release-artifacts/**/*.vsix
+            release-artifacts/**/*.sha256
+
+  publish-vscode-marketplace:
+    name: publish-vscode-marketplace
+    needs: package-vscode-extension
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_vscode
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/vscode-remote-proxy/package-lock.json
+
+      - run: npm --prefix apps/vscode-remote-proxy ci
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: vscode-extension-with-kernel
+          path: dist
+
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "VSCE_PAT repository secret is not configured" >&2
+            exit 1
+          fi
+          vsix="$(find dist -type f -name '*.vsix' | sort | head -n 1)"
+          npm --prefix apps/vscode-remote-proxy exec -- vsce publish --packagePath "$vsix" -p "$VSCE_PAT"
+          {
+            echo "## VS Code Marketplace"
+            echo
+            echo "- Published package: \`$(basename "$vsix")\`"
+          } >> "$GITHUB_STEP_SUMMARY"

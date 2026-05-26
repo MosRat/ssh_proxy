@@ -1,0 +1,17 @@
+/target
+/.idea
+/.vscode
+*.log
+*.tmp
+reverse-smoke.*
+py-smoke.*
+/docs/bench-*.md
+/docs/test-*.md
+/docs/*performance-analysis*.md
+
+# Local environment and machine-specific run configuration.
+/.env
+/.env.*
+!/.env.example
+/scripts/*.local.ps1
+!/scripts/*.local.example.ps1

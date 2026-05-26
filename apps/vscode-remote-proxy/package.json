@@ -1,0 +1,486 @@
+{
+  "name": "vscode-remote-proxy",
+  "displayName": "Remote Proxy Auto Forward",
+  "description": "Automatically reverse-forward a local proxy into VS Code Remote SSH and apply proxy settings for terminals, extensions, and Git.",
+  "version": "0.0.2",
+  "publisher": "MosRat-2333",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MosRat/ssh_proxy.git",
+    "directory": "apps/vscode-remote-proxy"
+  },
+  "bugs": {
+    "url": "https://github.com/MosRat/ssh_proxy/issues"
+  },
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "remote",
+    "ssh",
+    "proxy",
+    "tunnel",
+    "forward"
+  ],
+  "extensionDependencies": [
+    "ms-vscode-remote.remote-ssh"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:remoteProxy.start",
+    "onCommand:remoteProxy.stop",
+    "onCommand:remoteProxy.restart",
+    "onCommand:remoteProxy.applySettings",
+    "onCommand:remoteProxy.cleanupRemote",
+    "onCommand:remoteProxy.pickLocalProxy",
+    "onCommand:remoteProxy.pickSshHost",
+    "onCommand:remoteProxy.clearSshHost",
+    "onCommand:remoteProxy.openMenu",
+    "onCommand:remoteProxy.diagnose",
+    "onCommand:remoteProxy.showOutput",
+    "onCommand:remoteProxy.openSettings",
+    "onCommand:remoteProxy.showStatus"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "remoteProxy.start",
+        "title": "Remote Proxy: Start"
+      },
+      {
+        "command": "remoteProxy.stop",
+        "title": "Remote Proxy: Stop"
+      },
+      {
+        "command": "remoteProxy.restart",
+        "title": "Remote Proxy: Restart"
+      },
+      {
+        "command": "remoteProxy.applySettings",
+        "title": "Remote Proxy: Apply Remote Settings"
+      },
+      {
+        "command": "remoteProxy.cleanupRemote",
+        "title": "Remote Proxy: Clean Remote Settings"
+      },
+      {
+        "command": "remoteProxy.pickLocalProxy",
+        "title": "Remote Proxy: Pick Local Proxy"
+      },
+      {
+        "command": "remoteProxy.pickSshHost",
+        "title": "Remote Proxy: Pick SSH Host"
+      },
+      {
+        "command": "remoteProxy.clearSshHost",
+        "title": "Remote Proxy: Clear SSH Host Override"
+      },
+      {
+        "command": "remoteProxy.openMenu",
+        "title": "Remote Proxy: Open Menu"
+      },
+      {
+        "command": "remoteProxy.diagnose",
+        "title": "Remote Proxy: Diagnose"
+      },
+      {
+        "command": "remoteProxy.showOutput",
+        "title": "Remote Proxy: Show Output"
+      },
+      {
+        "command": "remoteProxy.openSettings",
+        "title": "Remote Proxy: Open Settings"
+      },
+      {
+        "command": "remoteProxy.showStatus",
+        "title": "Remote Proxy: Show Status"
+      }
+    ],
+    "configuration": {
+      "title": "Remote Proxy",
+      "properties": {
+        "remoteProxy.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Remote Proxy Auto Forward."
+        },
+        "remoteProxy.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start forwarding when a supported remote window opens."
+        },
+        "remoteProxy.backend": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "ssh_proxy",
+            "openssh"
+          ],
+          "default": "auto",
+          "description": "Choose the forwarding backend. auto prefers ssh_proxy and falls back to OpenSSH."
+        },
+        "remoteProxy.localProxy.mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "env",
+            "manual"
+          ],
+          "default": "auto",
+          "description": "How to find the local proxy. auto checks manual URL, environment variables, then common ports."
+        },
+        "remoteProxy.localProxy.url": {
+          "type": "string",
+          "default": "",
+          "description": "Manual local proxy URL, for example http://127.0.0.1:<port> or socks5://127.0.0.1:<port>."
+        },
+        "remoteProxy.localProxy.hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "127.0.0.1",
+            "localhost"
+          ],
+          "description": "Local hosts to probe when detecting proxy ports."
+        },
+        "remoteProxy.localProxy.autoPorts": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "default": [
+            7890,
+            7897,
+            1080,
+            8080,
+            3128,
+            6152
+          ],
+          "description": "Local ports to probe when detecting a proxy."
+        },
+        "remoteProxy.localProxy.defaultScheme": {
+          "type": "string",
+          "enum": [
+            "http",
+            "socks5"
+          ],
+          "default": "http",
+          "description": "Proxy scheme to use for detected ports that came from probing instead of a URL."
+        },
+        "remoteProxy.remote.port": {
+          "type": "number",
+          "default": 17890,
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Remote loopback port exposed by SSH reverse forwarding."
+        },
+        "remoteProxy.remote.autoPickPort": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically try nearby remote ports when the preferred port is already in use."
+        },
+        "remoteProxy.remote.portRangeSize": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Number of remote ports to try, starting at remoteProxy.remote.port, when autoPickPort is enabled."
+        },
+        "remoteProxy.remote.bindHost": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Remote bind address for the forwarded proxy. Keep this as 127.0.0.1 unless you intentionally need a wider bind."
+        },
+        "remoteProxy.noProxy": {
+          "type": "string",
+          "default": "localhost,127.0.0.1,::1",
+          "description": "NO_PROXY value written to terminal and server environments."
+        },
+        "remoteProxy.hostProfiles": {
+          "type": "object",
+          "default": {},
+          "description": "Per-host overrides keyed by SSH alias or resolved user@hostname.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "localProxyUrl": {
+                "type": "string",
+                "description": "Override local proxy URL for this host."
+              },
+              "remotePort": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "Preferred remote proxy port for this host."
+              },
+              "remoteBindHost": {
+                "type": "string",
+                "description": "Remote bind address for this host."
+              },
+              "noProxy": {
+                "type": "string",
+                "description": "NO_PROXY value for this host."
+              },
+              "applyGitConfig": {
+                "type": "boolean",
+                "description": "Whether to set Git proxy config for this host."
+              },
+              "applyGitGlobalConfig": {
+                "type": "boolean",
+                "description": "Whether to set global Git proxy config for this host."
+              },
+              "applyGitWorkspaceConfig": {
+                "type": "boolean",
+                "description": "Whether to set workspace Git proxy config for this host."
+              },
+              "applyGitForceOverride": {
+                "type": "boolean",
+                "description": "Whether to overwrite existing Git proxy config values for this host."
+              },
+              "applyServerEnvSetup": {
+                "type": "boolean",
+                "description": "Whether to patch server-env-setup for this host."
+              }
+            }
+          }
+        },
+        "remoteProxy.ssh.executable": {
+          "type": "string",
+          "default": "ssh",
+          "description": "SSH executable used for reverse forwarding and remote setup."
+        },
+        "remoteProxy.ssh.host": {
+          "type": "string",
+          "default": "",
+          "description": "Override SSH host alias. Leave empty to derive it from the Remote SSH authority."
+        },
+        "remoteProxy.ssh.useStorageFallback": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow automatic SSH host detection from VS Code globalStorage when no current-window signal is available. Disabled by default because this storage can be stale in Extension Development Host windows."
+        },
+        "remoteProxy.ssh.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra arguments passed to ssh before the host."
+        },
+        "remoteProxy.ssh.batchMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass BatchMode=yes to ssh so background commands fail instead of waiting for an interactive password prompt."
+        },
+        "remoteProxy.ssh.connectTimeout": {
+          "type": "number",
+          "default": 12,
+          "minimum": 1,
+          "description": "SSH ConnectTimeout in seconds."
+        },
+        "remoteProxy.ssh.serverAliveInterval": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 3600,
+          "description": "SSH ServerAliveInterval in seconds for the background reverse tunnel."
+        },
+        "remoteProxy.ssh.serverAliveCountMax": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "SSH ServerAliveCountMax for the background reverse tunnel."
+        },
+        "remoteProxy.ssh.tcpKeepAlive": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass TCPKeepAlive=yes to the background SSH reverse tunnel."
+        },
+        "remoteProxy.sshProxy.executable": {
+          "type": "string",
+          "default": "ssh_proxy",
+          "description": "ssh_proxy executable used by the kernel backend."
+        },
+        "remoteProxy.sshProxy.autoInstallLocalService": {
+          "type": "boolean",
+          "default": true,
+          "description": "Install or repair the local ssh_proxy service before creating a kernel route."
+        },
+        "remoteProxy.sshProxy.connectMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "reverse-link",
+            "direct"
+          ],
+          "default": "reverse-link",
+          "description": "Route connect mode used by the ssh_proxy kernel backend."
+        },
+        "remoteProxy.sshProxy.routeVolatile": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create kernel routes as volatile by default."
+        },
+        "remoteProxy.sshProxy.remoteSetup": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "ssh_proxy",
+            "openssh"
+          ],
+          "default": "auto",
+          "description": "Choose the remote setup command runner used after a kernel route starts."
+        },
+        "remoteProxy.forward.retryOnExit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Restart the SSH reverse-forward process if it exits unexpectedly."
+        },
+        "remoteProxy.forward.retryDelaySeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "Delay before restarting the SSH reverse-forward process after an unexpected exit."
+        },
+        "remoteProxy.forward.restartOnHostChange": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically restart forwarding when the detected Remote SSH host changes."
+        },
+        "remoteProxy.forward.verifyAfterStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Verify that the remote forwarded port accepts TCP connections after starting ssh -R."
+        },
+        "remoteProxy.forward.healthCheckEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Periodically verify that the active or reused remote forwarded port is still reachable, and restart or take over if it fails."
+        },
+        "remoteProxy.forward.healthCheckIntervalSeconds": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "Interval for active remote forwarded port health checks."
+        },
+        "remoteProxy.forward.healthCheckFailureThreshold": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Consecutive failed health checks required before restarting an active proxy route."
+        },
+        "remoteProxy.forward.restartBackoffMaxSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 600,
+          "description": "Maximum exponential backoff delay before restarting after repeated health check failures."
+        },
+        "remoteProxy.singleton.reuseEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reuse one local ssh -R proxy tunnel across multiple VS Code windows connected to the same SSH user and server."
+        },
+        "remoteProxy.singleton.leaseTtlSeconds": {
+          "type": "number",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 300,
+          "description": "How long a tunnel lease heartbeat remains fresh before another window may take over."
+        },
+        "remoteProxy.singleton.startLockTimeoutSeconds": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 120,
+          "description": "How long a window waits for another window's in-progress proxy start before taking over a stale start lock."
+        },
+        "remoteProxy.apply.vscodeSettings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also apply http.proxy and terminal.integrated.env through the VS Code configuration API. Disabled by default because this UI extension may otherwise update local user settings."
+        },
+        "remoteProxy.apply.remoteMachineSettings": {
+          "type": "boolean",
+          "default": true,
+          "description": "For SSH remotes, also patch the remote VS Code server Machine settings file."
+        },
+        "remoteProxy.apply.terminalEnv": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, and NO_PROXY for integrated terminals."
+        },
+        "remoteProxy.apply.gitConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set remote Git http.proxy and https.proxy through ssh."
+        },
+        "remoteProxy.apply.gitGlobalConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Force-set remote global Git http.proxy and https.proxy."
+        },
+        "remoteProxy.apply.gitWorkspaceConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Force-set local Git proxy config for each current remote workspace folder that is inside a Git worktree."
+        },
+        "remoteProxy.apply.gitForceOverride": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use git config --replace-all so existing Git proxy values are overwritten instead of appended."
+        },
+        "remoteProxy.apply.serverEnvSetup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Patch ~/.vscode-server/server-env-setup so remote extensions inherit proxy environment variables after reconnect."
+        },
+        "remoteProxy.apply.remoteStatusFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "Write ~/.vscode-server/remote-proxy-status.json with the active proxy URL for diagnostics and shell integrations."
+        },
+        "remoteProxy.apply.proxySupport": {
+          "type": "string",
+          "enum": [
+            "override",
+            "on",
+            "off",
+            "fallback"
+          ],
+          "default": "override",
+          "description": "Value for VS Code's http.proxySupport setting."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "kernel:stage": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/stage-vscode-extension-binaries.ps1",
+    "test": "npm run compile && node --test test/sshProxyRouteArgs.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/proxyLeaseRecord.test.js test/proxyLease.test.js test/portPersistence.test.js test/reliabilityPolicy.test.js test/statusDisplay.test.js test/remoteSetupScripts.test.js test/remoteCommandRunnerUtils.test.js test/remoteSetupRunnerPolicy.test.js test/routeOwnership.test.js test/sshProxyDiscovery.test.js",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "package:with-kernel": "npm run kernel:stage && vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.86.0",
+    "@vscode/vsce": "^3.9.1",
+    "typescript": "^5.4.5"
+  }
+}

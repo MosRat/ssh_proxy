@@ -1,0 +1,7 @@
+node_modules/
+out/
+*.vsix
+*.tgz
+.DS_Store
+assets/bin/win32-x64/ssh_proxy.exe
+assets/bin/linux-x64/ssh_proxy

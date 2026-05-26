@@ -1,0 +1,82 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    env:
+      SSH_PROXY_ALLOW_MISSING_SIDECAR: "1"
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-
+            rust-${{ runner.os }}-${{ runner.arch }}-
+
+      - run: cargo fmt -- --check
+      - run: cargo check
+      - run: cargo test --tests
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "## Rust CI"
+            echo
+            echo "- Runner: ${{ runner.os }} ${{ runner.arch }}"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  vscode:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: apps/vscode-remote-proxy
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/vscode-remote-proxy/package-lock.json
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Write summary
+        if: always()
+        run: |
+          {
+            echo "## VS Code Extension CI"
+            echo
+            echo "- Runner: ${{ runner.os }} ${{ runner.arch }}"
+            echo "- Node: 24"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

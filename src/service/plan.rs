@@ -1,0 +1,315 @@
+use std::{fs, net::SocketAddr, path::PathBuf, process::Command};
+
+use anyhow::{Context, Result, bail};
+
+use crate::{cli, config, control_socket};
+
+pub(crate) struct ServicePlan {
+    pub(crate) command: cli::ServiceCommand,
+    pub(crate) scope: ServiceScope,
+    pub(crate) source_exe: PathBuf,
+    pub(crate) exe: PathBuf,
+    pub(crate) copy_exe: bool,
+    pub(crate) endpoint: String,
+    pub(crate) transport: Option<std::net::SocketAddr>,
+    pub(crate) token: Option<String>,
+    pub(crate) tls_transport: Option<SocketAddr>,
+    pub(crate) quic_transport: Option<SocketAddr>,
+    pub(crate) tls_cert: Option<PathBuf>,
+    pub(crate) tls_key: Option<PathBuf>,
+    pub(crate) tls_client_ca: Option<PathBuf>,
+    pub(crate) report_to: Vec<String>,
+    pub(crate) config_path: PathBuf,
+    pub(crate) route_store_path: PathBuf,
+    pub(crate) config_to_save: Option<config::AppConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServiceScope {
+    User,
+    System,
+}
+
+impl ServicePlan {
+    pub(crate) fn new(args: cli::ServiceArgs, mut config: config::AppConfig) -> Result<Self> {
+        let source_exe = std::env::current_exe().context("failed to locate current executable")?;
+        let should_materialize_config = matches!(
+            args.command,
+            cli::ServiceCommand::Install | cli::ServiceCommand::Print
+        );
+        let copy_exe = !args.no_copy;
+        let exe = if copy_exe {
+            args.install_dir
+                .unwrap_or(default_local_install_dir()?)
+                .join(executable_name())
+        } else {
+            source_exe.clone()
+        };
+        let endpoint = args
+            .control
+            .or_else(|| config.daemon.control_endpoint.clone())
+            .unwrap_or_else(|| {
+                config
+                    .daemon
+                    .control_listen
+                    .map(|addr| format!("tcp://{addr}"))
+                    .unwrap_or_else(control_socket::default_endpoint_string)
+            });
+        let transport = if args.no_transport {
+            None
+        } else {
+            let configured = args
+                .transport
+                .or(config.daemon.transport_listen)
+                .or_else(|| Some(control_socket::default_user_tcp_addr(19080)));
+            configured.map(|addr| {
+                if addr.port() == 0
+                    || (args.transport.is_none() && config.daemon.transport_listen.is_none())
+                {
+                    config::first_available_addr(addr, 200)
+                } else {
+                    addr
+                }
+            })
+        };
+        let token = match args.token {
+            Some(token) => Some(token),
+            None if should_materialize_config => Some(config.ensure_daemon_token()?),
+            None => config.daemon.token.clone(),
+        };
+        if should_materialize_config {
+            config.ensure_node_identity()?;
+        }
+        let tls_transport = args.tls_transport.or(config.daemon.tls_transport_listen);
+        let quic_transport = args.quic_transport.or(config.daemon.quic_transport_listen);
+        let tls_cert = args
+            .tls_cert
+            .or_else(|| config.daemon.tls_cert.as_ref().map(config::expand_path));
+        let tls_key = args
+            .tls_key
+            .or_else(|| config.daemon.tls_key.as_ref().map(config::expand_path));
+        let tls_client_ca = args.tls_client_ca.or_else(|| {
+            config
+                .daemon
+                .tls_client_ca
+                .as_ref()
+                .map(config::expand_path)
+        });
+        let report_to = if args.report_to.is_empty() {
+            config.daemon.report_to.clone()
+        } else {
+            args.report_to
+        };
+        if should_materialize_config {
+            if config.daemon.control_endpoint.is_none() && config.daemon.control_listen.is_none() {
+                config.daemon.control_endpoint = Some(endpoint.clone());
+            }
+            if config.daemon.transport_listen.is_none() {
+                config.daemon.transport_listen = transport;
+            }
+            if config.daemon.tls_transport_listen.is_none() {
+                config.daemon.tls_transport_listen = tls_transport;
+            }
+            if config.daemon.quic_transport_listen.is_none() {
+                config.daemon.quic_transport_listen = quic_transport;
+            }
+            if config.daemon.tls_cert.is_none() {
+                config.daemon.tls_cert = tls_cert.clone();
+            }
+            if config.daemon.tls_key.is_none() {
+                config.daemon.tls_key = tls_key.clone();
+            }
+            if config.daemon.tls_client_ca.is_none() {
+                config.daemon.tls_client_ca = tls_client_ca.clone();
+            }
+            if config.daemon.report_to.is_empty() {
+                config.daemon.report_to = report_to.clone();
+            }
+        }
+        let route_store_path = config
+            .daemon
+            .routes_path
+            .as_ref()
+            .map(config::expand_path)
+            .unwrap_or(config::routes_path()?);
+        let config_to_save = should_materialize_config.then_some(config);
+        let scope = resolve_scope(args.scope)?;
+        Ok(Self {
+            command: args.command,
+            scope,
+            source_exe,
+            exe,
+            copy_exe,
+            endpoint,
+            transport,
+            token,
+            tls_transport,
+            quic_transport,
+            tls_cert,
+            tls_key,
+            tls_client_ca,
+            report_to,
+            config_path: config::config_path()?,
+            route_store_path,
+            config_to_save,
+        })
+    }
+
+    pub(crate) fn daemon_command(&self) -> String {
+        let transport = self
+            .transport
+            .map(|addr| format!(" --transport {addr}"))
+            .unwrap_or_default();
+        let token = self
+            .token
+            .as_ref()
+            .map(|token| format!(" --token {}", command_quote(token)))
+            .unwrap_or_default();
+        let tls_transport = self
+            .tls_transport
+            .map(|addr| format!(" --tls-transport {addr}"))
+            .unwrap_or_default();
+        let quic_transport = self
+            .quic_transport
+            .map(|addr| format!(" --quic-transport {addr}"))
+            .unwrap_or_default();
+        let tls_cert = self
+            .tls_cert
+            .as_ref()
+            .map(|path| format!(" --tls-cert {}", command_quote(&path.display().to_string())))
+            .unwrap_or_default();
+        let tls_key = self
+            .tls_key
+            .as_ref()
+            .map(|path| format!(" --tls-key {}", command_quote(&path.display().to_string())))
+            .unwrap_or_default();
+        let tls_client_ca = self
+            .tls_client_ca
+            .as_ref()
+            .map(|path| {
+                format!(
+                    " --tls-client-ca {}",
+                    command_quote(&path.display().to_string())
+                )
+            })
+            .unwrap_or_default();
+        let report_to = self
+            .report_to
+            .iter()
+            .map(|endpoint| format!(" --report-to {}", command_quote(endpoint)))
+            .collect::<String>();
+        format!(
+            "{} node daemon --control {}{}{}{}{}{}{}{}{}",
+            command_quote(&self.exe.display().to_string()),
+            command_quote(&self.endpoint),
+            transport,
+            token,
+            tls_transport,
+            quic_transport,
+            tls_cert,
+            tls_key,
+            tls_client_ca,
+            report_to
+        )
+    }
+
+    pub(crate) fn install_binary(&self) -> Result<()> {
+        if !self.copy_exe {
+            return Ok(());
+        }
+        if let Some(parent) = self.exe.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        fs::copy(&self.source_exe, &self.exe).with_context(|| {
+            format!(
+                "failed to copy {} to {}",
+                self.source_exe.display(),
+                self.exe.display()
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = fs::metadata(&self.exe)?.permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&self.exe, permissions)?;
+        }
+        Ok(())
+    }
+}
+
+fn default_local_install_dir() -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        Ok(dirs::data_local_dir()
+            .context("cannot determine LOCALAPPDATA")?
+            .join("ssh_proxy")
+            .join("bin"))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(dirs::home_dir()
+            .context("cannot determine home directory")?
+            .join(".local")
+            .join("bin"))
+    }
+}
+
+fn executable_name() -> &'static str {
+    if cfg!(windows) {
+        "ssh_proxy.exe"
+    } else {
+        "ssh_proxy"
+    }
+}
+
+fn resolve_scope(scope: cli::ServiceScope) -> Result<ServiceScope> {
+    match scope {
+        cli::ServiceScope::User => Ok(ServiceScope::User),
+        cli::ServiceScope::System => {
+            ensure_admin("system service scope requires root/admin privileges")?;
+            Ok(ServiceScope::System)
+        }
+        cli::ServiceScope::Auto if is_admin() => Ok(ServiceScope::System),
+        cli::ServiceScope::Auto => Ok(ServiceScope::User),
+    }
+}
+
+pub(crate) fn command_quote(value: &str) -> String {
+    if cfg!(windows) {
+        format!("\"{}\"", value.replace('"', "\\\""))
+    } else {
+        sh_quote(value)
+    }
+}
+
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+pub(crate) fn ensure_admin(message: &str) -> Result<()> {
+    if is_admin() {
+        Ok(())
+    } else {
+        bail!("{message}; rerun as administrator/root or use --scope user")
+    }
+}
+
+#[cfg(unix)]
+fn is_admin() -> bool {
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .is_some_and(|uid| uid.trim() == "0")
+}
+
+#[cfg(windows)]
+fn is_admin() -> bool {
+    Command::new("net")
+        .arg("session")
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
