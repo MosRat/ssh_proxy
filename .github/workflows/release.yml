@@ -50,7 +50,16 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild,zig
+          tool: cargo-zigbuild
+          fallback: cargo-install
+
+      - name: Install Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user ziglang
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          zig version
 
       - uses: actions/cache@v5
         with:
