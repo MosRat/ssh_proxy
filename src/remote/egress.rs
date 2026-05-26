@@ -91,7 +91,8 @@ async fn connect_via_upstream_proxy(proxy: &str, host: &str, port: u16) -> Resul
 }
 
 async fn connect_via_http_proxy(addr: &str, host: &str, port: u16) -> Result<TcpStream> {
-    let mut stream = connect_direct_tcp(addr_host(addr), addr_port(addr, 8080)?).await?;
+    let endpoint = parse_proxy_endpoint(addr, 8080)?;
+    let mut stream = connect_direct_tcp(&endpoint.host, endpoint.port).await?;
     let request = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n");
     stream.write_all(request.as_bytes()).await?;
     let mut response = Vec::with_capacity(1024);
@@ -117,7 +118,8 @@ async fn connect_via_http_proxy(addr: &str, host: &str, port: u16) -> Result<Tcp
 }
 
 async fn connect_via_socks5_proxy(addr: &str, host: &str, port: u16) -> Result<TcpStream> {
-    let mut stream = connect_direct_tcp(addr_host(addr), addr_port(addr, 1080)?).await?;
+    let endpoint = parse_proxy_endpoint(addr, 1080)?;
+    let mut stream = connect_direct_tcp(&endpoint.host, endpoint.port).await?;
     stream.write_all(&[5, 1, 0]).await?;
     let mut method = [0_u8; 2];
     stream.read_exact(&mut method).await?;
@@ -159,20 +161,57 @@ async fn connect_via_socks5_proxy(addr: &str, host: &str, port: u16) -> Result<T
     Ok(stream)
 }
 
-fn addr_host(value: &str) -> &str {
-    value
-        .rsplit_once(':')
-        .map(|(host, _)| host)
-        .unwrap_or(value)
+#[derive(Debug, PartialEq, Eq)]
+struct ProxyEndpoint {
+    host: String,
+    port: u16,
 }
 
-fn addr_port(value: &str, default: u16) -> Result<u16> {
-    match value.rsplit_once(':') {
-        Some((_, port)) => port
-            .parse()
-            .with_context(|| format!("invalid proxy port in {value:?}")),
-        None => Ok(default),
+fn parse_proxy_endpoint(value: &str, default_port: u16) -> Result<ProxyEndpoint> {
+    let authority_end = value.find(['/', '?', '#']).unwrap_or(value.len());
+    let authority = &value[..authority_end];
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, endpoint)| endpoint)
+        .unwrap_or(authority);
+    if authority.is_empty() {
+        bail!("proxy endpoint is missing a host in {value:?}");
     }
+
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let end = rest
+            .find(']')
+            .ok_or_else(|| anyhow!("invalid bracketed IPv6 proxy endpoint {value:?}"))?;
+        let host = &rest[..end];
+        let tail = &rest[end + 1..];
+        let port = if let Some(port) = tail.strip_prefix(':') {
+            port.parse()
+                .with_context(|| format!("invalid proxy port in {value:?}"))?
+        } else if tail.is_empty() {
+            default_port
+        } else {
+            bail!("invalid IPv6 proxy endpoint suffix in {value:?}");
+        };
+        (host, port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) if !host.contains(':') => {
+                let port = port
+                    .parse()
+                    .with_context(|| format!("invalid proxy port in {value:?}"))?;
+                (host, port)
+            }
+            _ => (authority, default_port),
+        }
+    };
+
+    if host.is_empty() {
+        bail!("proxy endpoint is missing a host in {value:?}");
+    }
+    Ok(ProxyEndpoint {
+        host: host.to_string(),
+        port,
+    })
 }
 
 #[cfg(test)]
@@ -261,5 +300,37 @@ mod tests {
 
     fn endpoint(addr: SocketAddr) -> String {
         format!("{}:{}", addr.ip(), addr.port())
+    }
+
+    #[test]
+    fn proxy_endpoint_ignores_url_suffix() {
+        assert_eq!(
+            parse_proxy_endpoint("127.0.0.1:10808/", 8080).unwrap(),
+            ProxyEndpoint {
+                host: "127.0.0.1".to_string(),
+                port: 10808
+            }
+        );
+        assert_eq!(
+            parse_proxy_endpoint("user:pass@proxy.local:3128/path?x=1", 8080).unwrap(),
+            ProxyEndpoint {
+                host: "proxy.local".to_string(),
+                port: 3128
+            }
+        );
+        assert_eq!(
+            parse_proxy_endpoint("[::1]:1080/", 1080).unwrap(),
+            ProxyEndpoint {
+                host: "::1".to_string(),
+                port: 1080
+            }
+        );
+        assert_eq!(
+            parse_proxy_endpoint("proxy.local/", 8080).unwrap(),
+            ProxyEndpoint {
+                host: "proxy.local".to_string(),
+                port: 8080
+            }
+        );
     }
 }
