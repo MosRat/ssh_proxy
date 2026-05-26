@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 #[cfg(windows)]
 use super::plan::command_quote;
-use super::plan::{ServicePlan, ServiceScope, ensure_admin};
+use super::plan::{ServicePlan, ServiceScope, ensure_admin, platform_service_name};
 
 #[cfg(windows)]
 const SERVICE_NAME: &str = "ssh_proxy";
@@ -369,18 +369,19 @@ fn xml_escape(value: &str) -> String {
 
 #[cfg(windows)]
 pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
+    let service_name = platform_service_name(plan.scope);
     match plan.scope {
         ServiceScope::User => {
             println!("Windows user scheduled task:");
-            println!("  {}", windows_schtasks_create(plan));
-            println!("  schtasks /Run /TN {SERVICE_NAME}");
-            println!("  schtasks /Query /TN {SERVICE_NAME}");
+            println!("  {}", windows_schtasks_create(plan, &service_name));
+            println!("  schtasks /Run /TN {service_name}");
+            println!("  schtasks /Query /TN {service_name}");
         }
         ServiceScope::System => {
             println!("Windows system service:");
-            println!("  {}", windows_sc_create(plan));
-            println!("  sc.exe start {SERVICE_NAME}");
-            println!("  sc.exe query {SERVICE_NAME}");
+            println!("  {}", windows_sc_create(plan, &service_name));
+            println!("  sc.exe start {service_name}");
+            println!("  sc.exe query {service_name}");
         }
     }
     Ok(())
@@ -388,13 +389,14 @@ pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
 
 #[cfg(windows)]
 pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
+    let service_name = platform_service_name(plan.scope);
     match plan.scope {
         ServiceScope::User => run_command(
             "schtasks",
             &[
                 "/Create",
                 "/TN",
-                SERVICE_NAME,
+                &service_name,
                 "/SC",
                 "ONLOGON",
                 "/RL",
@@ -410,7 +412,7 @@ pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
                 "sc.exe",
                 &[
                     "create",
-                    SERVICE_NAME,
+                    &service_name,
                     "start=",
                     "auto",
                     "DisplayName=",
@@ -425,60 +427,65 @@ pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
 
 #[cfg(windows)]
 pub(super) fn platform_uninstall(plan: &ServicePlan) -> Result<()> {
+    let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command("schtasks", &["/Delete", "/TN", SERVICE_NAME, "/F"]),
+        ServiceScope::User => run_command("schtasks", &["/Delete", "/TN", &service_name, "/F"]),
         ServiceScope::System => {
             ensure_admin("removing a Windows system service requires administrator privileges")?;
-            run_command("sc.exe", &["delete", SERVICE_NAME])
+            run_command("sc.exe", &["delete", &service_name])
         }
     }
 }
 
 #[cfg(windows)]
 pub(super) fn platform_start(plan: &ServicePlan) -> Result<()> {
+    let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command("schtasks", &["/Run", "/TN", SERVICE_NAME]),
-        ServiceScope::System => run_command("sc.exe", &["start", SERVICE_NAME]),
+        ServiceScope::User => run_command("schtasks", &["/Run", "/TN", &service_name]),
+        ServiceScope::System => run_command("sc.exe", &["start", &service_name]),
     }
 }
 
 #[cfg(windows)]
 pub(super) fn platform_stop(plan: &ServicePlan) -> Result<()> {
+    let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command("schtasks", &["/End", "/TN", SERVICE_NAME]),
-        ServiceScope::System => run_command("sc.exe", &["stop", SERVICE_NAME]),
+        ServiceScope::User => run_command("schtasks", &["/End", "/TN", &service_name]),
+        ServiceScope::System => run_command("sc.exe", &["stop", &service_name]),
     }
 }
 
 #[cfg(windows)]
 #[allow(dead_code)]
 pub(super) fn platform_status(plan: &ServicePlan) -> Result<()> {
+    let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command_output("schtasks", &["/Query", "/TN", SERVICE_NAME]),
-        ServiceScope::System => run_command_output("sc.exe", &["query", SERVICE_NAME]),
+        ServiceScope::User => run_command_output("schtasks", &["/Query", "/TN", &service_name]),
+        ServiceScope::System => run_command_output("sc.exe", &["query", &service_name]),
     }
 }
 
 #[cfg(windows)]
 pub(super) fn platform_status_summary(plan: &ServicePlan) -> Value {
+    let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => capture_command_output("schtasks", &["/Query", "/TN", SERVICE_NAME]),
-        ServiceScope::System => capture_command_output("sc.exe", &["query", SERVICE_NAME]),
+        ServiceScope::User => capture_command_output("schtasks", &["/Query", "/TN", &service_name]),
+        ServiceScope::System => capture_command_output("sc.exe", &["query", &service_name]),
     }
 }
 
 #[cfg(windows)]
-fn windows_schtasks_create(plan: &ServicePlan) -> String {
+fn windows_schtasks_create(plan: &ServicePlan, service_name: &str) -> String {
     format!(
-        "schtasks /Create /TN {SERVICE_NAME} /SC ONLOGON /RL LIMITED /F /TR {}",
+        "schtasks /Create /TN {service_name} /SC ONLOGON /RL LIMITED /F /TR {}",
         command_quote(&plan.daemon_command())
     )
 }
 
 #[cfg(windows)]
-fn windows_sc_create(plan: &ServicePlan) -> String {
+fn windows_sc_create(plan: &ServicePlan, service_name: &str) -> String {
     format!(
-        "sc.exe create {SERVICE_NAME} start= auto DisplayName= \"ssh_proxy daemon\" binPath= {}",
+        "sc.exe create {service_name} start= auto DisplayName= \"ssh_proxy daemon\" binPath= {}",
         command_quote(&plan.daemon_command())
     )
 }

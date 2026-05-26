@@ -159,7 +159,7 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
         "health": health,
         "daemon": daemon,
         "platform": {
-            "service_name": platform_service_name(),
+            "service_name": platform_service_name(plan.scope),
             "status": platform,
         }
     }))
@@ -548,8 +548,8 @@ fn service_scope_name(scope: plan::ServiceScope) -> &'static str {
     }
 }
 
-fn platform_service_name() -> &'static str {
-    "ssh_proxy"
+fn platform_service_name(scope: plan::ServiceScope) -> String {
+    plan::platform_service_name(scope)
 }
 
 #[cfg(test)]

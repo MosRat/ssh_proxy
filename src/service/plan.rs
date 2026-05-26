@@ -284,6 +284,23 @@ pub(crate) fn command_quote(value: &str) -> String {
     }
 }
 
+pub(crate) fn platform_service_name(scope: ServiceScope) -> String {
+    match scope {
+        ServiceScope::System => "ssh_proxy".to_string(),
+        ServiceScope::User => {
+            #[cfg(windows)]
+            {
+                let user = current_windows_user_component();
+                format!("ssh_proxy-{user}")
+            }
+            #[cfg(not(windows))]
+            {
+                "ssh_proxy".to_string()
+            }
+        }
+    }
+}
+
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -312,4 +329,22 @@ fn is_admin() -> bool {
         .arg("session")
         .output()
         .is_ok_and(|out| out.status.success())
+}
+
+#[cfg(windows)]
+fn current_windows_user_component() -> String {
+    let raw = whoami::username().unwrap_or_else(|_| "user".to_string());
+    let filtered: String = raw
+        .chars()
+        .map(|ch| match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' => ch,
+            _ => '-',
+        })
+        .collect();
+    let trimmed = filtered.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "user".to_string()
+    } else {
+        trimmed
+    }
 }
