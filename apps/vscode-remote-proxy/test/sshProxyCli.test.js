@@ -32,7 +32,7 @@ test('redacts token flags and proxy URL credentials', () => {
       'secret-token',
       '--remote-token=sample-remote-token',
       '--egress-proxy',
-      'http://sample-user:sample-password@127.0.0.1:18080',
+      'http://demo-user:demo-credential@127.0.0.1:18080',
     ]),
     [
       'route',
@@ -48,7 +48,7 @@ test('redacts token flags and proxy URL credentials', () => {
 
 test('redacts credentials in free-form text', () => {
   assert.equal(
-    redactSshProxyText('failed to use socks5://sample-token:sample-password@example.test:1080/path'),
+    redactSshProxyText('failed to use socks5://demo-user:demo-credential@example.test:1080/path'),
     'failed to use socks5://<redacted>@example.test:1080/path',
   );
 });
@@ -64,7 +64,7 @@ test('parses ssh_proxy JSON output and reports invalid JSON with context', () =>
   assert.deepEqual(parseSshProxyJson('{"ok":true}\n'), { ok: true });
   assert.equal(parseSshProxyJson(''), null);
   assert.throws(
-    () => parseSshProxyJson('not json with http://sample-user:sample-password@example.test', 'route explain'),
+    () => parseSshProxyJson('not json with http://demo-user:demo-credential@example.test', 'route explain'),
     /route explain did not return valid JSON:.*http:\/\/<redacted>@example\.test/s,
   );
 });

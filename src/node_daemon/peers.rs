@@ -1875,14 +1875,17 @@ mod tests {
     fn remote_proxy_url_from_plan_preserves_auth_and_suffix() {
         let plan = serde_json::json!({
             "egress": {
-                "upstream_proxy": "http://sample-user:sample-password@127.0.0.1:18080/proxy"
+                "upstream_proxy": "http://demo-user:demo-credential@127.0.0.1:18080/proxy"
             }
         });
         let listen = serde_json::json!("127.0.0.1:17890");
 
         let remote_url = remote_proxy_url_from_plan(&plan, &listen).unwrap();
 
-        assert_eq!(remote_url, "http://sample-user:sample-password@127.0.0.1:17890/proxy");
+        assert_eq!(
+            remote_url,
+            "http://demo-user:demo-credential@127.0.0.1:17890/proxy"
+        );
     }
 
     #[test]

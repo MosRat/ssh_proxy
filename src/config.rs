@@ -1367,10 +1367,7 @@ mod tests {
         assert_eq!(profile.jump, vec!["bastion"]);
         assert_eq!(profile.accept_new, Some(true));
         assert_eq!(profile.remote_transport.as_deref(), Some("tls-tcp"));
-        assert_eq!(
-            profile.remote_tls,
-            Some("192.0.2.2:19082".parse().unwrap())
-        );
+        assert_eq!(profile.remote_tls, Some("192.0.2.2:19082".parse().unwrap()));
         assert_eq!(profile.remote_ca.as_deref(), Some(Path::new("ca.pem")));
         assert_eq!(profile.remote_token.as_deref(), Some("token"));
     }
