@@ -58,6 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --user ziglang
+          export PATH="$HOME/.local/bin:$PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           zig version
 
