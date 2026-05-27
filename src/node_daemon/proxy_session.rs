@@ -1,4 +1,4 @@
-use std::{net::IpAddr, time::Duration};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,10 @@ impl ProxySessionSpec {
 }
 
 impl NodeManager {
-    pub(super) async fn ensure_proxy_session(&self, request: NodeRequest) -> Result<String> {
+    pub(super) async fn ensure_proxy_session(
+        self: Arc<Self>,
+        request: NodeRequest,
+    ) -> Result<String> {
         let spec = request
             .proxy_session
             .ok_or_else(|| anyhow!("ensure_proxy_session requires proxy_session spec"))?;
@@ -109,8 +112,23 @@ impl NodeManager {
             .with_remote_url(Some(spec.remote_url()))
             .transition(JobState::Queued, JobPhase::Queued, 0);
         let job = self.jobs.upsert(job, "proxy session accepted").await?;
-        self.spawn_proxy_session_job(spec.clone(), job.id.clone())
-            .await?;
+        let manager = self.clone();
+        let task_spec = spec.clone();
+        let job_id = job.id.clone();
+        tokio::spawn(async move {
+            if let Err(err) = manager
+                .clone()
+                .run_proxy_session_job(task_spec.clone(), job_id.clone())
+                .await
+            {
+                let failed = job_for_phase(&task_spec, &job_id, JobPhase::Failed, 100)
+                    .failed(err.to_string(), Some("job_task_failed".to_string()));
+                let _ = manager
+                    .jobs
+                    .upsert(failed, "proxy session job task failed")
+                    .await;
+            }
+        });
         response_line(json!({
             "ok": true,
             "kind": "proxy_session",
@@ -181,7 +199,11 @@ impl NodeManager {
         }))
     }
 
-    async fn spawn_proxy_session_job(&self, spec: ProxySessionSpec, job_id: String) -> Result<()> {
+    async fn run_proxy_session_job(
+        self: Arc<Self>,
+        spec: ProxySessionSpec,
+        job_id: String,
+    ) -> Result<()> {
         let route_request = route_request_from_spec(&spec);
         self.jobs
             .upsert(
