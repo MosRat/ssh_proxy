@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use serde_json::json;
 
-use super::{NodeManager, NodeRequest, NodeResponse, response_line};
+use super::{NodeManager, NodeRequest, NodeResponse, jobs, response_line};
 
 impl NodeManager {
     pub(super) async fn nodes_json(&self) -> Result<String> {
@@ -48,12 +48,13 @@ impl NodeManager {
     }
 
     pub(super) async fn jobs_json(&self) -> Result<String> {
+        let status = self.status_value().await?;
         response_line(json!({
             "ok": true,
             "kind": "jobs",
-            "broker_api": "v0.2",
-            "jobs": [],
-            "message": "long-running broker jobs are exposed through this allowlisted endpoint",
+            "daemon_api": "v0.3",
+            "jobs": jobs::route_jobs_from_status(&status),
+            "message": "daemon jobs are the stable v0.3 progress surface",
         }))
     }
 

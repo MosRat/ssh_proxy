@@ -24,6 +24,7 @@ mod args;
 mod control_client;
 mod control_protocol;
 mod control_server;
+mod jobs;
 mod management;
 mod peers;
 mod quic_transport;
@@ -301,6 +302,7 @@ impl NodeManager {
             }));
         }
         drop(routes);
+        let route_jobs = jobs::route_jobs_from_status(&json!({ "routes": running_routes.clone() }));
         let reports = self.peer_reports.lock().await.clone();
         let (node_id, node_name, profiles, peers, token_metadata) = {
             let config = self.config.lock().await;
@@ -333,10 +335,16 @@ impl NodeManager {
             .as_ref()
             .and_then(|path| config::file_sha256_fingerprint(path));
         let has_token = self.token_value().is_some();
+        let daemon_status = jobs::daemon_status_block(&json!({
+            "ok": true,
+            "control": self.control_endpoint.to_string(),
+        }));
         Ok(json!({
             "api_version": control_protocol::NODE_CONTROL_VERSION,
             "ok": true,
             "kind": "node",
+            "daemon_api": "v0.3",
+            "daemon": daemon_status,
             "name": self.name,
             "version": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,
@@ -378,6 +386,7 @@ impl NodeManager {
             "profiles": profiles,
             "peers": peers,
             "running": running,
+            "jobs": route_jobs,
             "routes": running_routes,
             "route_store": self.route_store_path,
             "route_autostart": self.route_autostart,
