@@ -105,6 +105,25 @@ export function buildSshProxyVscodeStatusArgs(options: {
   return args;
 }
 
+export function buildSshProxyDownArgs(options: {
+  readonly routeId?: string;
+  readonly workspace?: string;
+  readonly target?: string;
+}): string[] {
+  const args = ['down'];
+  if (options.routeId) {
+    args.push('--route-id', options.routeId);
+  }
+  if (options.workspace) {
+    args.push('--workspace', options.workspace);
+  }
+  if (options.target) {
+    args.push('--target', options.target);
+  }
+  args.push('--json');
+  return args;
+}
+
 export function buildSshProxyNodeDaemonArgs(options: {
   readonly control: string;
   readonly transport: string;

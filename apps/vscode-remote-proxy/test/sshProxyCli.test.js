@@ -5,6 +5,7 @@ const {
   buildSshProxyNodeControlShutdownArgs,
   buildSshProxyNodeControlStatusArgs,
   buildSshProxyNodeDaemonArgs,
+  buildSshProxyDownArgs,
   buildSshProxyServiceEnsureArgs,
   buildSshProxyServiceInstallArgs,
   buildSshProxyServiceStatusArgs,
@@ -62,6 +63,10 @@ test('builds JSON command shapes consumed by the extension', () => {
   assert.deepEqual(
     buildSshProxyVscodeStatusArgs({ workspace: 'window-a', target: '126' }),
     ['vscode', 'status', '--workspace', 'window-a', '--target', '126', '--json'],
+  );
+  assert.deepEqual(
+    buildSshProxyDownArgs({ routeId: 'v3-window-a', workspace: 'window-a', target: '126' }),
+    ['down', '--route-id', 'v3-window-a', '--workspace', 'window-a', '--target', '126', '--json'],
   );
 });
 

@@ -22,7 +22,6 @@ import { getRemoteContext } from './remoteContext';
 import { buildRemoteProxyMenuItems } from './remoteProxyMenu';
 import { RemoteSetup } from './remoteSetup';
 import { readSshHostEntries } from './sshConfig';
-import { OpenSshReverseBackend } from './openSshReverseBackend';
 import { ForwardingBackend } from './forwardingBackend';
 import {
   decideRestartBackoff,
@@ -78,7 +77,6 @@ export function deactivate(): void {
 }
 
 class RemoteProxyController implements vscode.Disposable {
-  private readonly openSshBackend: OpenSshReverseBackend;
   private readonly sshProxyBackend: SshProxyKernelBackend;
   private forwarder: ForwardingBackend;
   private readonly setup: RemoteSetup;
@@ -95,16 +93,14 @@ class RemoteProxyController implements vscode.Disposable {
   private lastPreferredRemoteBindHost: string | undefined;
 
   public constructor(private readonly output: vscode.OutputChannel, private readonly context: vscode.ExtensionContext) {
-    this.openSshBackend = new OpenSshReverseBackend(output);
     this.sshProxyBackend = new SshProxyKernelBackend(output, context.extensionPath);
-    this.forwarder = this.openSshBackend;
+    this.forwarder = this.sshProxyBackend;
     this.setup = new RemoteSetup(output, context.extensionPath);
     this.leaseCoordinator = new LeaseCoordinator(output);
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 30);
     this.statusBar.command = 'remoteProxy.openMenu';
     this.statusBar.tooltip = undefined;
     this.statusBar.show();
-    this.openSshBackend.onDidChange(() => this.updateStatusBar());
     this.sshProxyBackend.onDidChange(() => this.updateStatusBar());
     this.monitorTimer = setInterval(() => {
       void this.monitorHostChange();
@@ -127,47 +123,37 @@ class RemoteProxyController implements vscode.Disposable {
   }
 
   private async selectForwardingBackend(config: RemoteProxyConfig): Promise<ForwardingBackend> {
-    if (config.backend === 'openssh') {
-      return this.openSshBackend;
-    }
-    if (config.backend === 'ssh_proxy') {
-      return this.sshProxyBackend;
-    }
-
     const resolved = await findAvailableSshProxyCli(
       config.sshProxyExecutable,
       this.output,
       { extensionPath: this.context.extensionPath },
     );
     if (resolved) {
-      this.output.appendLine(`Using ${describeSshProxyDiscovery(resolved.discovery)} as Remote Proxy kernel.`);
+      if (config.backend === 'openssh') {
+        this.output.appendLine('remoteProxy.backend=openssh is ignored in daemon-first mode; using ssh_proxy daemon.');
+      } else {
+        this.output.appendLine(`Using ${describeSshProxyDiscovery(resolved.discovery)} as Remote Proxy daemon client.`);
+      }
       return this.sshProxyBackend;
     }
     const unavailable = sshProxyUnavailableCandidatesMessage(resolveSshProxyExecutableCandidates(
       config.sshProxyExecutable,
       { extensionPath: this.context.extensionPath },
     ));
-    this.output.appendLine(`${unavailable} Falling back to OpenSSH backend.`);
-    return this.openSshBackend;
+    this.output.appendLine(`${unavailable} ssh_proxy daemon client is required in production mode.`);
+    return this.sshProxyBackend;
   }
 
   private async buildForwardingBackendCandidates(config: RemoteProxyConfig): Promise<ForwardingBackend[]> {
-    const preferred = await this.selectForwardingBackend(config);
-    if (preferred === this.sshProxyBackend) {
-      if (config.sshProxyOpenSshFallbackPolicy === 'legacy-auto') {
-        return [this.sshProxyBackend, this.openSshBackend];
-      }
-      return [this.sshProxyBackend];
-    }
-    return [this.openSshBackend];
+    return [await this.selectForwardingBackend(config)];
   }
 
   private describeForwardingBackend(backend: ForwardingBackend): string {
-    return backend === this.sshProxyBackend ? 'ssh_proxy kernel' : 'OpenSSH';
+    return backend === this.sshProxyBackend ? 'ssh_proxy daemon' : 'unknown backend';
   }
 
   private getBackendName(): ForwardingBackendKind {
-    return this.forwarder === this.sshProxyBackend ? 'ssh_proxy' : 'openssh';
+    return 'ssh_proxy';
   }
 
   public async maybeAutoStart(): Promise<void> {
@@ -581,7 +567,6 @@ class RemoteProxyController implements vscode.Disposable {
   public dispose(): void {
     clearInterval(this.monitorTimer);
     void this.leaseCoordinator.releaseOwned();
-    this.openSshBackend.dispose();
     this.sshProxyBackend.dispose();
     this.statusBar.dispose();
   }
@@ -911,12 +896,7 @@ class RemoteProxyController implements vscode.Disposable {
   }
 
   private configForBackend(config: RemoteProxyConfig, backend: ForwardingBackend): RemoteProxyConfig {
-    if (backend !== this.openSshBackend || config.sshProxyRemoteSetup === 'openssh') {
-      return config;
-    }
-    return {
-      ...config,
-      sshProxyRemoteSetup: 'openssh',
-    };
+    void backend;
+    return config;
   }
 }

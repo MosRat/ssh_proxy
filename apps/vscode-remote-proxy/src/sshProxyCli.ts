@@ -4,6 +4,7 @@ import {
   buildSshProxyNodeControlShutdownArgs,
   buildSshProxyNodeControlStatusArgs,
   buildSshProxyNodeDaemonArgs,
+  buildSshProxyDownArgs,
   buildSshProxyServiceEnsureArgs,
   buildSshProxyServiceInstallArgs,
   buildSshProxyServiceStatusArgs,
@@ -127,6 +128,17 @@ export class SshProxyCli {
     return this.runJson(buildSshProxyVscodeStatusArgs(options), undefined, {
       label: 'ssh_proxy vscode status',
       timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
+    });
+  }
+
+  public async downJson(options: {
+    readonly routeId?: string;
+    readonly workspace?: string;
+    readonly target?: string;
+  }): Promise<unknown> {
+    return this.runJson(buildSshProxyDownArgs(options), undefined, {
+      label: 'ssh_proxy down',
+      timeoutMs: STOP_ROUTE_TIMEOUT_MS,
     });
   }
 
