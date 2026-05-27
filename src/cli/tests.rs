@@ -162,6 +162,35 @@ fn daemon_status_uses_v3_daemon_command() {
 }
 
 #[test]
+fn daemon_accepts_global_flags_after_subcommand() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "daemon",
+        "install",
+        "--scope",
+        "system",
+        "--elevate",
+        "--json",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Daemon(args) => {
+            assert_eq!(args.scope, DaemonScope::System);
+            assert!(args.json);
+            match args.command {
+                DaemonCommand::Install { elevate, no_copy } => {
+                    assert!(elevate);
+                    assert!(!no_copy);
+                }
+                other => panic!("unexpected daemon command: {other:?}"),
+            }
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
 fn up_accepts_proxy_session_shape() {
     let cli = Cli::try_parse_from([
         "ssh_proxy",

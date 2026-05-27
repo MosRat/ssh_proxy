@@ -8,10 +8,10 @@ use super::{NodeDaemonArgs, RouteConnectMode};
 
 #[derive(Debug, Clone, Parser)]
 pub struct DaemonArgs {
-    #[arg(long, value_enum, default_value = "system")]
+    #[arg(long, value_enum, default_value = "system", global = true)]
     pub scope: DaemonScope,
 
-    #[arg(long, help = "Emit machine-readable JSON output")]
+    #[arg(long, global = true, help = "Emit machine-readable JSON output")]
     pub json: bool,
 
     #[command(subcommand)]
