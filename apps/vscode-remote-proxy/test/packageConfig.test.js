@@ -41,9 +41,9 @@ const requiredSettings = {
   },
   'remoteProxy.sshProxy.openSshFallbackPolicy': {
     type: 'string',
-    default: 'final',
+    default: 'disabled',
     enum: ['final', 'disabled', 'legacy-auto'],
-    configRead: "config.get<'final' | 'disabled' | 'legacy-auto'>('sshProxy.openSshFallbackPolicy', 'final')",
+    configRead: "config.get<'final' | 'disabled' | 'legacy-auto'>('sshProxy.openSshFallbackPolicy', 'disabled')",
     typeField: 'readonly sshProxyOpenSshFallbackPolicy: SshProxyOpenSshFallbackPolicy;',
   },
   'remoteProxy.sshProxy.brokerMode': {

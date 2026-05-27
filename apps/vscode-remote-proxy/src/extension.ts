@@ -154,10 +154,10 @@ class RemoteProxyController implements vscode.Disposable {
   private async buildForwardingBackendCandidates(config: RemoteProxyConfig): Promise<ForwardingBackend[]> {
     const preferred = await this.selectForwardingBackend(config);
     if (preferred === this.sshProxyBackend) {
-      if (config.sshProxyOpenSshFallbackPolicy === 'disabled') {
-        return [this.sshProxyBackend];
+      if (config.sshProxyOpenSshFallbackPolicy === 'legacy-auto') {
+        return [this.sshProxyBackend, this.openSshBackend];
       }
-      return [this.sshProxyBackend, this.openSshBackend];
+      return [this.sshProxyBackend];
     }
     return [this.openSshBackend];
   }
@@ -656,7 +656,8 @@ class RemoteProxyController implements vscode.Disposable {
         local,
         remoteUrl: makeRemoteProxyUrl(local, config.remoteBindHost, port),
         remotePort: port,
-        remoteBindHost: config.remoteBindHost
+        remoteBindHost: config.remoteBindHost,
+        workspaceId: targetKey
       };
 
       if (!config.remoteAutoPickPort && remoteStatus?.port === port) {

@@ -10,6 +10,7 @@ const {
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
   buildSshProxyStopRouteArgs,
+  buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
   normalizeSshProxyExecutable,
   parseSshProxyJson,
@@ -30,6 +31,33 @@ test('builds JSON command shapes consumed by the extension', () => {
   assert.deepEqual(buildSshProxyServiceInstallArgs('user'), ['service', '--scope', 'user', 'install']);
   assert.deepEqual(buildSshProxyRoutesArgs(), ['node', 'control', '--json', 'routes']);
   assert.deepEqual(buildSshProxyStopRouteArgs('route-1'), ['node', 'control', '--json', 'stop-route', 'route-1']);
+  assert.deepEqual(
+    buildSshProxyVscodeUpArgs({
+      target: '126',
+      workspace: 'window-a',
+      localProxy: 'http://127.0.0.1:10808/',
+      remoteBind: '127.0.0.1',
+      remotePort: 17890,
+      connectMode: 'reverse-link',
+    }),
+    [
+      'vscode',
+      'up',
+      '--target',
+      '126',
+      '--workspace',
+      'window-a',
+      '--local-proxy',
+      'http://127.0.0.1:10808/',
+      '--remote-bind',
+      '127.0.0.1',
+      '--remote-port',
+      '17890',
+      '--connect-mode',
+      'reverse-link',
+      '--json',
+    ],
+  );
 });
 
 test('builds node control commands for a session daemon endpoint', () => {

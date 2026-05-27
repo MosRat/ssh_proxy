@@ -9,7 +9,6 @@ import {
   SshProxyKernelStatusSnapshot,
   SshProxyRouteState,
 } from './sshProxyKernelStatus';
-import { buildSshProxyRouteArgs } from './sshProxyRouteArgs';
 import { resolveSshProxyExecutableCandidates, sshProxyUnavailableCandidatesMessage } from './sshProxyDiscovery';
 import { SshProxyControlConnection } from './sshProxyCliUtils';
 import { isPermissionDeniedMessage, KernelRecoveryCoordinator } from './kernelRecoveryCoordinator';
@@ -115,25 +114,23 @@ export class SshProxyKernelBackend implements ForwardingBackend {
 
     try {
       const cli = await this.availableCli(config);
-      const control = await this.ensureLocalService(cli, config);
-      this.currentControl = control;
+      this.currentControl = undefined;
 
-      const routeArgs = buildSshProxyRouteArgs(config, sshHost, proxy, control);
-      const explain = await cli.routeExplainJson(routeArgs);
-      this.setSnapshot({ routeExplain: explain });
-      this.output.appendLine(`ssh_proxy route explain: ${prettyJson(explain)}`);
-      if (isSshProxyOk(explain) === false) {
-        throw new Error(`ssh_proxy route explain rejected the request: ${prettyJson(explain)}`);
-      }
-
-      const started = await cli.routeStartJson(routeArgs);
+      const started = await cli.vscodeUpJson({
+        target: sshHost,
+        workspace: proxy.workspaceId ?? sshHost,
+        localProxy: proxy.local.url,
+        remoteBind: proxy.remoteBindHost,
+        remotePort: proxy.remotePort,
+        connectMode: config.sshProxyConnectMode,
+      });
       const record = asRecord(started);
       if (record?.ok === false) {
-        throw new Error(`ssh_proxy route rejected the request: ${prettyJson(started)}`);
+        throw new Error(`ssh_proxy daemon rejected the proxy session: ${prettyJson(started)}`);
       }
       const routeState = createSshProxyRouteState(started, proxy, config.sshProxyConnectMode);
       this.setSnapshot({ routeStart: started, routeState });
-      await this.waitForRouteReadiness(cli, routeState.routeId, control);
+      await this.waitForRouteReadiness(cli, routeState.routeId, undefined);
       this.applyRouteState(proxy, this.snapshot.routeState ?? routeState);
 
       this.statusValue = 'running';

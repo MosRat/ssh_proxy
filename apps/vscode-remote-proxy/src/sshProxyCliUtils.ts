@@ -63,6 +63,33 @@ export function buildSshProxyRoutesArgs(connection: SshProxyControlConnection = 
   return buildSshProxyNodeControlArgs(connection, ['routes']);
 }
 
+export function buildSshProxyVscodeUpArgs(options: {
+  readonly target: string;
+  readonly workspace: string;
+  readonly localProxy: string;
+  readonly remoteBind: string;
+  readonly remotePort: number;
+  readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+}): string[] {
+  return [
+    'vscode',
+    'up',
+    '--target',
+    options.target,
+    '--workspace',
+    options.workspace,
+    '--local-proxy',
+    options.localProxy,
+    '--remote-bind',
+    options.remoteBind,
+    '--remote-port',
+    String(options.remotePort),
+    '--connect-mode',
+    options.connectMode,
+    '--json',
+  ];
+}
+
 export function buildSshProxyNodeDaemonArgs(options: {
   readonly control: string;
   readonly transport: string;

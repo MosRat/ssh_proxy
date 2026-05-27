@@ -95,6 +95,7 @@ export interface AppliedProxy {
   readonly remoteUrl: string;
   readonly remotePort: number;
   readonly remoteBindHost: string;
+  readonly workspaceId?: string;
   readonly routeId?: string;
   readonly routeOwner?: string;
   readonly selectedTransport?: string;

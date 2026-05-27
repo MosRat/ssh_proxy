@@ -9,6 +9,7 @@ import {
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
   buildSshProxyStopRouteArgs,
+  buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
   normalizeSshProxyExecutable,
   parseSshProxyJson,
@@ -100,6 +101,20 @@ export class SshProxyCli {
   public async routeStartJson(args: readonly string[]): Promise<unknown> {
     return this.runJson(['route', ...args, '--json'], undefined, {
       label: 'ssh_proxy route start',
+      timeoutMs: ROUTE_TIMEOUT_MS,
+    });
+  }
+
+  public async vscodeUpJson(options: {
+    readonly target: string;
+    readonly workspace: string;
+    readonly localProxy: string;
+    readonly remoteBind: string;
+    readonly remotePort: number;
+    readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+  }): Promise<unknown> {
+    return this.runJson(buildSshProxyVscodeUpArgs(options), undefined, {
+      label: 'ssh_proxy vscode up',
       timeoutMs: ROUTE_TIMEOUT_MS,
     });
   }
