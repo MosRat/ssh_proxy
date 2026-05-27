@@ -22,6 +22,7 @@ pub(crate) struct ServicePlan {
     pub(crate) tls_key: Option<PathBuf>,
     pub(crate) tls_client_ca: Option<PathBuf>,
     pub(crate) report_to: Vec<String>,
+    #[cfg(windows)]
     pub(crate) elevate: bool,
     pub(crate) config_path: PathBuf,
     pub(crate) route_store_path: PathBuf,
@@ -159,6 +160,7 @@ impl ServicePlan {
             tls_key,
             tls_client_ca,
             report_to,
+            #[cfg(windows)]
             elevate: args.elevate,
             config_path: config::config_path()?,
             route_store_path,
