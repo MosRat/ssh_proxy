@@ -212,7 +212,7 @@ impl Default for DaemonStateRecord {
 pub(super) struct ProductionState {
     daemon_path: std::path::PathBuf,
     sessions_path: std::path::PathBuf,
-    peers_path: std::path::PathBuf,
+    _peers_path: std::path::PathBuf,
     daemon: Mutex<DaemonStateStore>,
     sessions: Mutex<SessionStore>,
     peers: Mutex<PeerStore>,
@@ -229,7 +229,7 @@ impl ProductionState {
             peers: Mutex::new(load_store(&peers_path)?),
             daemon_path,
             sessions_path,
-            peers_path,
+            _peers_path: peers_path,
         })
     }
 
@@ -249,6 +249,25 @@ impl ProductionState {
         store.daemon.started_at_unix = now;
         store.daemon.updated_at_unix = now;
         save_store(&self.daemon_path, &*store)
+    }
+
+    pub(super) async fn record_daemon_update_requested(
+        &self,
+        source: Option<String>,
+    ) -> Result<Value> {
+        let mut store = self.daemon.lock().await;
+        let now = now_unix();
+        store.version = STORE_VERSION;
+        store.daemon.version = env!("CARGO_PKG_VERSION").to_string();
+        store.daemon.health = "healthy".to_string();
+        store.daemon.update_state = "pending".to_string();
+        store.daemon.updated_at_unix = now;
+        save_store(&self.daemon_path, &*store)?;
+        Ok(json!({
+            "state": store.daemon.update_state,
+            "source": source,
+            "updated_at_unix": now,
+        }))
     }
 
     pub(super) async fn daemon_value(&self) -> Value {

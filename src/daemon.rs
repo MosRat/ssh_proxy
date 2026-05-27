@@ -70,23 +70,40 @@ pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<
             )
             .await
         }
-        cli::DaemonCommand::Update { source } => print_json(
-            args.json,
-            json!({
-                "ok": true,
-                "kind": "daemon_update",
-                "daemon_api": "v0.3",
-                "job": job_status(
-                    "self-update:pending",
-                    "self_update",
-                    "accepted",
-                    "queued",
-                    "daemon self-update is represented as an allowlisted job in v0.3",
-                ),
-                "source": source.map(|path| path.display().to_string()),
-                "requires_daemon": true,
-            }),
-        ),
+        cli::DaemonCommand::Update { source } => {
+            let request = node_daemon::NodeRequest::daemon_update(
+                source.as_ref().map(|path| path.display().to_string()),
+            )
+            .to_value()
+            .context("failed to encode daemon update request")?;
+            request_daemon_or_report(
+                &control_socket::default_endpoint_string(),
+                None,
+                &config,
+                request,
+                args.json,
+                || {
+                    json!({
+                        "ok": false,
+                        "kind": "daemon_update",
+                        "daemon_api": "v0.3",
+                        "job": job_status(
+                            "self-update:pending",
+                            "self_update",
+                            "blocked",
+                            "daemon_unavailable",
+                            "daemon self-update requires the running daemon",
+                        ),
+                        "source": source.map(|path| path.display().to_string()),
+                        "requires_daemon": true,
+                        "requires_elevation": true,
+                        "blocker": "daemon_unavailable",
+                        "next_action": "ssh_proxy daemon install --scope system --elevate",
+                    })
+                },
+            )
+            .await
+        }
         cli::DaemonCommand::Serve(node_args) => {
             node_daemon::run(
                 cli::NodeArgs {

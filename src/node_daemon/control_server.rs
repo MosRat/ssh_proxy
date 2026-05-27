@@ -133,6 +133,7 @@ async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Re
             manager.proxy_session_status(request).await
         }
         "proxy_session_down" | "proxy-session-down" => manager.proxy_session_down(request).await,
+        "daemon_update" | "daemon-update" => manager.daemon_update(request).await,
         "apply_remote_settings" | "apply-remote-settings" => Ok(NodeResponse::ok_message(
             "remote settings application is queued for daemon v0.3",
         )

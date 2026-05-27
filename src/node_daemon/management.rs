@@ -4,6 +4,28 @@ use serde_json::json;
 use super::{NodeManager, NodeRequest, NodeResponse, jobs, response_line};
 
 impl NodeManager {
+    pub(super) async fn daemon_update(&self, request: NodeRequest) -> Result<String> {
+        let update = self
+            .state
+            .record_daemon_update_requested(request.update_source.clone())
+            .await?;
+        let job = jobs::JobRecord::new("self-update:pending", "self_update")
+            .transition(jobs::JobState::Queued, jobs::JobPhase::Queued, 0)
+            .with_next_action("stage_new_binary");
+        let job = self
+            .jobs
+            .upsert(job, "daemon self-update requested")
+            .await?;
+        response_line(json!({
+            "ok": true,
+            "kind": "daemon_update",
+            "daemon_api": "v0.3",
+            "job": job.to_value(),
+            "update_state": update,
+            "requires_daemon": true,
+        }))
+    }
+
     pub(super) async fn nodes_json(&self) -> Result<String> {
         let instances = self.instances.lock().await;
         let profiles = instances

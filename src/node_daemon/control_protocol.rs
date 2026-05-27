@@ -118,6 +118,8 @@ pub(crate) struct NodeRequest {
     pub(crate) node_scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) proxy_session: Option<ProxySessionSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) update_source: Option<String>,
 }
 
 impl NodeRequest {
@@ -358,6 +360,15 @@ impl NodeRequest {
             cmd: "ensure_proxy_session".to_string(),
             id: Some(proxy_session.job_id()),
             proxy_session: Some(proxy_session),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn daemon_update(source: Option<String>) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "daemon_update".to_string(),
+            update_source: source,
             ..Self::default()
         }
     }
