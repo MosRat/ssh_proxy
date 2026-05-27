@@ -43,7 +43,11 @@ Auto-start never prompts for UAC or sudo elevation. Interactive commands can gui
 
 Typical phases are `resolve_target`, `ensure_peer`, `start_route`, `wait_route_ready`, `verify_remote_port`, `apply_remote_settings`, and `healthy`. A terminal `failed` or `cancelled` job includes a blocker, last error, and next action for Diagnose output.
 
-When no daemon is reachable, auto-start reports the blocker in the status bar. Interactive commands can guide installation or update; background startup does not open an elevation prompt.
+When no daemon is reachable, auto-start reports the blocker in the status bar.
+Interactive `Remote Proxy: Start` offers an `Install Daemon` action, runs
+`ssh_proxy daemon install --scope system --elevate`, then retries the daemon
+session after installation. Background startup does not open an elevation
+prompt.
 
 ## Quick Start
 

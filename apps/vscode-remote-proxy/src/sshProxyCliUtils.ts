@@ -135,6 +135,17 @@ export function buildSshProxyVscodeApplySettingsArgs(options: {
   ];
 }
 
+export function buildSshProxyDaemonInstallArgs(options: {
+  readonly scope: 'system' | 'user';
+  readonly elevate?: boolean;
+}): string[] {
+  const args = ['daemon', 'install', '--scope', options.scope];
+  if (options.elevate) {
+    args.push('--elevate');
+  }
+  return args;
+}
+
 export function buildSshProxyDownArgs(options: {
   readonly routeId?: string;
   readonly workspace?: string;

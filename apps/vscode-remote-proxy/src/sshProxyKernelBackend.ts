@@ -10,6 +10,42 @@ import {
 import { resolveSshProxyExecutableCandidates, sshProxyUnavailableCandidatesMessage } from './sshProxyDiscovery';
 import { AppliedProxy, RemoteProxyConfig } from './types';
 
+export class SshProxyDaemonRejectedError extends Error {
+  public readonly payload: unknown;
+  public readonly blocker: string | undefined;
+  public readonly nextAction: string | undefined;
+  public readonly requiresDaemon: boolean;
+  public readonly requiresElevation: boolean;
+  public readonly retryAfterMs: number | undefined;
+
+  public constructor(payload: unknown) {
+    const record = asRecord(payload);
+    const job = asRecord(record?.job);
+    const blocker = asString(record?.blocker) ?? asString(job?.phase) ?? 'daemon_rejected';
+    const detail = asString(record?.error) ?? asString(job?.message) ?? asString(record?.last_error);
+    super(`ssh_proxy daemon blocked (${blocker})${detail ? `: ${detail}` : ''}`);
+    this.name = 'SshProxyDaemonRejectedError';
+    this.payload = payload;
+    this.blocker = blocker;
+    this.nextAction = asString(record?.next_action) ?? asString(job?.next_action);
+    this.requiresDaemon = record?.requires_daemon === true;
+    this.requiresElevation = record?.requires_elevation === true;
+    const retryAfterMs = record?.retry_after_ms;
+    this.retryAfterMs = typeof retryAfterMs === 'number' ? retryAfterMs : undefined;
+  }
+
+  public get userMessage(): string {
+    if (this.blocker === 'daemon_unavailable') {
+      return 'ssh_proxy daemon is not installed or not running';
+    }
+    return this.message;
+  }
+}
+
+export function isSshProxyDaemonRejectedError(error: unknown): error is SshProxyDaemonRejectedError {
+  return error instanceof SshProxyDaemonRejectedError;
+}
+
 export class SshProxyKernelBackend implements ForwardingBackend {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   private childRouteId: string | undefined;
@@ -96,7 +132,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       });
       const record = asRecord(started);
       if (record?.ok === false) {
-        throw new Error(`ssh_proxy daemon rejected the proxy session: ${prettyJson(started)}`);
+        throw new SshProxyDaemonRejectedError(started);
       }
       const routeState = createSshProxyRouteState(started, proxy, config.sshProxyConnectMode);
       this.setSnapshot({ sessionStart: started, routeState });

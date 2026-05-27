@@ -20,7 +20,7 @@ import {
   resolveSshProxyExecutableCandidates,
   sshProxyUnavailableCandidatesMessage,
 } from './sshProxyDiscovery';
-import { SshProxyKernelBackend } from './sshProxyKernelBackend';
+import { isSshProxyDaemonRejectedError, SshProxyKernelBackend } from './sshProxyKernelBackend';
 import { SshProxyKernelStatusSnapshot } from './sshProxyKernelStatus';
 import { buildRemoteProxyStatusLines } from './statusDisplay';
 import { describeRemoteProxyMenuPlaceholder, updateRemoteProxyStatusBar } from './statusPresenter';
@@ -174,6 +174,7 @@ class RemoteProxyController implements vscode.Disposable {
 
     this.applying = true;
     this.updateStatusBar('$(sync~spin) Proxy');
+    let retryAfterDaemonInstall = false;
     try {
       const targetKey = this.lastResolvedTargetKey ?? sshHost;
       config = applyHostProfile(config, readHostProfile([sshHost, targetKey]));
@@ -211,13 +212,21 @@ class RemoteProxyController implements vscode.Disposable {
       }
       vscode.window.showInformationMessage(`Remote Proxy active: ${active.remoteUrl}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.output.appendLine(`Start failed: ${message}`);
-      this.forwarder.fail(message);
-      vscode.window.showErrorMessage(`Remote Proxy failed: ${message}`);
+      const failure = await this.handleStartFailure(error, options, config);
+      if (failure === 'retry') {
+        retryAfterDaemonInstall = true;
+      } else if (failure !== 'handled') {
+        const message = error instanceof Error ? error.message : String(error);
+        this.output.appendLine(`Start failed: ${message}`);
+        this.forwarder.fail(message);
+        vscode.window.showErrorMessage(`Remote Proxy failed: ${message}`);
+      }
     } finally {
       this.applying = false;
       this.updateStatusBar();
+    }
+    if (retryAfterDaemonInstall) {
+      await this.start({ interactive: false });
     }
   }
 
@@ -404,6 +413,103 @@ class RemoteProxyController implements vscode.Disposable {
 
   public async openSettings(): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:MosRat-2333.vscode-remote-proxy');
+  }
+
+  private async handleStartFailure(
+    error: unknown,
+    options: { interactive: boolean },
+    config: RemoteProxyConfig,
+  ): Promise<'handled' | 'retry' | 'unhandled'> {
+    if (!isSshProxyDaemonRejectedError(error)) {
+      return 'unhandled';
+    }
+
+    const message = error.userMessage;
+    this.output.appendLine(`Start blocked: ${message}`);
+    if (error.nextAction) {
+      this.output.appendLine(`Daemon repair action: ${error.nextAction}`);
+    }
+    this.forwarder.fail(message);
+
+    if (!options.interactive) {
+      this.updateStatusBar('$(warning) Proxy daemon');
+      return 'handled';
+    }
+
+    const installAction = 'Install Daemon';
+    const diagnoseAction = 'Diagnose';
+    const showOutputAction = 'Show Output';
+    const actions = error.requiresDaemon || error.requiresElevation
+      ? [installAction, diagnoseAction, showOutputAction]
+      : [diagnoseAction, showOutputAction];
+    const picked = await vscode.window.showErrorMessage(
+      `${message}.`,
+      ...actions,
+    );
+
+    if (picked === installAction) {
+      const installed = await this.installDaemonWithElevation(config);
+      return installed ? 'retry' : 'handled';
+    }
+    if (picked === diagnoseAction) {
+      await this.diagnose();
+      return 'handled';
+    }
+    if (picked === showOutputAction) {
+      this.output.show(true);
+      return 'handled';
+    }
+    return 'handled';
+  }
+
+  private async installDaemonWithElevation(config: RemoteProxyConfig): Promise<boolean> {
+    const continueAction = 'Continue';
+    const picked = await vscode.window.showInformationMessage(
+      'Remote Proxy needs the local ssh_proxy system daemon. Windows may show a UAC prompt.',
+      { modal: true },
+      continueAction,
+    );
+    if (picked !== continueAction) {
+      return false;
+    }
+
+    try {
+      const resolved = await findAvailableSshProxyCli(
+        config.sshProxyExecutable,
+        this.output,
+        { extensionPath: this.context.extensionPath },
+      );
+      if (!resolved) {
+        throw new Error(sshProxyUnavailableCandidatesMessage(resolveSshProxyExecutableCandidates(
+          config.sshProxyExecutable,
+          { extensionPath: this.context.extensionPath },
+        )));
+      }
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Installing ssh_proxy daemon',
+          cancellable: false,
+        },
+        async () => {
+          await resolved.cli.installDaemonElevated();
+        },
+      );
+      this.output.appendLine('ssh_proxy daemon install completed; retrying proxy session.');
+      vscode.window.showInformationMessage('ssh_proxy daemon installed. Retrying Remote Proxy.');
+      await delay(1000);
+      return true;
+    } catch (installError) {
+      const message = installError instanceof Error ? installError.message : String(installError);
+      this.output.appendLine(`ssh_proxy daemon install failed: ${message}`);
+      void vscode.window.showErrorMessage(`ssh_proxy daemon install failed: ${message}`, 'Show Output')
+        .then((action) => {
+          if (action === 'Show Output') {
+            this.output.show(true);
+          }
+        });
+      return false;
+    }
   }
 
   public async diagnose(): Promise<void> {
@@ -621,4 +727,8 @@ class RemoteProxyController implements vscode.Disposable {
     }, text);
   }
 
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

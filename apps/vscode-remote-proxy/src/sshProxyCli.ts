@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import {
+  buildSshProxyDaemonInstallArgs,
   buildSshProxyDownArgs,
   buildSshProxyVscodeApplySettingsArgs,
   buildSshProxyVscodeStatusArgs,
@@ -39,6 +40,7 @@ const AVAILABLE_TIMEOUT_MS = 3_000;
 const ROUTE_TIMEOUT_MS = 60_000;
 const STOP_ROUTE_TIMEOUT_MS = 15_000;
 const ROUTES_STATUS_TIMEOUT_MS = 10_000;
+const DAEMON_INSTALL_TIMEOUT_MS = 180_000;
 
 export class SshProxyCli {
   private readonly executable: string;
@@ -115,6 +117,13 @@ export class SshProxyCli {
     return this.runJson(buildSshProxyDownArgs(options), undefined, {
       label: 'ssh_proxy down',
       timeoutMs: STOP_ROUTE_TIMEOUT_MS,
+    });
+  }
+
+  public async installDaemonElevated(): Promise<CommandResult> {
+    return this.run(buildSshProxyDaemonInstallArgs({ scope: 'system', elevate: true }), undefined, {
+      label: 'ssh_proxy daemon install',
+      timeoutMs: DAEMON_INSTALL_TIMEOUT_MS,
     });
   }
 

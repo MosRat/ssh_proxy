@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildSshProxyDaemonInstallArgs,
   buildSshProxyDownArgs,
   buildSshProxyVscodeApplySettingsArgs,
   buildSshProxyVscodeStatusArgs,
@@ -71,6 +72,10 @@ test('builds JSON command shapes consumed by the extension', () => {
   assert.deepEqual(
     buildSshProxyDownArgs({ routeId: 'v3-window-a', workspace: 'window-a', target: '126' }),
     ['down', '--route-id', 'v3-window-a', '--workspace', 'window-a', '--target', '126', '--json'],
+  );
+  assert.deepEqual(
+    buildSshProxyDaemonInstallArgs({ scope: 'system', elevate: true }),
+    ['daemon', 'install', '--scope', 'system', '--elevate'],
   );
 });
 
