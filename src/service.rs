@@ -128,7 +128,7 @@ fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
     };
 
     match action {
-        ServiceNextAction::Reuse => {
+        ServiceNextAction::Reuse if !matches!(plan.command, cli::ServiceCommand::Install) => {
             println!(
                 "selected existing {} service at {}; no install required",
                 service_scope_name(plan.scope),
@@ -136,17 +136,15 @@ fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
             );
             return Ok(());
         }
-        ServiceNextAction::StartOrRepair | ServiceNextAction::Install => {
+        ServiceNextAction::Reuse
+        | ServiceNextAction::StartOrRepair
+        | ServiceNextAction::Install => {
             if let Some(config) = &plan.config_to_save {
                 config.save_default()?;
                 println!("saved daemon defaults to {}", plan.config_path.display());
             }
             plan.install_binary()?;
-            if let Err(err) = if matches!(action, ServiceNextAction::StartOrRepair) {
-                platform::platform_start(plan)
-            } else {
-                platform::platform_install(plan)
-            } {
+            if let Err(err) = platform::platform_install(plan) {
                 if let Some(snapshot) = original_config {
                     restore_config_snapshot(&plan.config_path, snapshot)?;
                     eprintln!(

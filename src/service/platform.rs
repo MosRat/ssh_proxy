@@ -638,39 +638,59 @@ pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary
 pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command(
-            "schtasks",
-            &[
-                "/Create",
-                "/TN",
-                &service_name,
-                "/SC",
-                "ONLOGON",
-                "/RL",
-                "LIMITED",
-                "/F",
-                "/TR",
-                &plan.daemon_command(),
-            ],
-        ),
+        ServiceScope::User => {
+            run_command(
+                "schtasks",
+                &[
+                    "/Create",
+                    "/TN",
+                    &service_name,
+                    "/SC",
+                    "ONLOGON",
+                    "/RL",
+                    "LIMITED",
+                    "/F",
+                    "/TR",
+                    &plan.daemon_command(),
+                ],
+            )?;
+            platform_start(plan)
+        }
         ServiceScope::System => {
             if plan.elevate && !is_elevated_for_platform() {
                 return platform_install_elevated(plan);
             }
             ensure_admin("installing a Windows system service requires administrator privileges")?;
-            run_command(
-                "sc.exe",
-                &[
-                    "create",
-                    &service_name,
-                    "start=",
-                    "auto",
-                    "DisplayName=",
-                    "ssh_proxy daemon",
-                    "binPath=",
-                    &plan.daemon_command(),
-                ],
-            )
+            if windows_service_exists(&service_name) {
+                run_command(
+                    "sc.exe",
+                    &[
+                        "config",
+                        &service_name,
+                        "start=",
+                        "auto",
+                        "DisplayName=",
+                        "ssh_proxy daemon",
+                        "binPath=",
+                        &plan.daemon_command(),
+                    ],
+                )?;
+            } else {
+                run_command(
+                    "sc.exe",
+                    &[
+                        "create",
+                        &service_name,
+                        "start=",
+                        "auto",
+                        "DisplayName=",
+                        "ssh_proxy daemon",
+                        "binPath=",
+                        &plan.daemon_command(),
+                    ],
+                )?;
+            }
+            platform_start(plan)
         }
     }
 }
@@ -733,8 +753,21 @@ pub(super) fn platform_install_elevated(plan: &ServicePlan) -> Result<()> {
 pub(super) fn platform_start(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command("schtasks", &["/Run", "/TN", &service_name]),
-        ServiceScope::System => run_command("sc.exe", &["start", &service_name]),
+        ServiceScope::User => {
+            if windows_task_running(&service_name) {
+                return Ok(());
+            }
+            run_command("schtasks", &["/Run", "/TN", &service_name])
+        }
+        ServiceScope::System => {
+            if plan.elevate && !is_elevated_for_platform() {
+                return platform_install_elevated(plan);
+            }
+            if windows_service_running(&service_name) {
+                return Ok(());
+            }
+            run_command("sc.exe", &["start", &service_name])
+        }
     }
 }
 
@@ -772,6 +805,32 @@ fn windows_schtasks_create(plan: &ServicePlan, service_name: &str) -> String {
         "schtasks /Create /TN {service_name} /SC ONLOGON /RL LIMITED /F /TR {}",
         command_quote(&plan.daemon_command())
     )
+}
+
+#[cfg(windows)]
+fn windows_service_exists(service_name: &str) -> bool {
+    capture_command_output("sc.exe", &["query", service_name])["ok"]
+        .as_bool()
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn windows_service_running(service_name: &str) -> bool {
+    capture_command_output("sc.exe", &["query", service_name])["stdout"]
+        .as_str()
+        .map(|stdout| stdout.to_ascii_uppercase().contains("RUNNING"))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn windows_task_running(service_name: &str) -> bool {
+    capture_command_output(
+        "schtasks",
+        &["/Query", "/TN", service_name, "/FO", "LIST", "/V"],
+    )["stdout"]
+        .as_str()
+        .map(|stdout| stdout.to_ascii_lowercase().contains("running"))
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]

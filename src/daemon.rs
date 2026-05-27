@@ -358,9 +358,18 @@ fn service_args(
     no_copy: bool,
     command: cli::ServiceCommand,
 ) -> cli::ServiceArgs {
+    let control = match command {
+        cli::ServiceCommand::Ensure | cli::ServiceCommand::Install | cli::ServiceCommand::Print => {
+            Some(control_socket::default_endpoint_string())
+        }
+        cli::ServiceCommand::Uninstall
+        | cli::ServiceCommand::Start
+        | cli::ServiceCommand::Stop
+        | cli::ServiceCommand::Status => None,
+    };
     cli::ServiceArgs {
         scope: scope.as_service_scope(),
-        control: None,
+        control,
         transport: None,
         no_transport: false,
         token: None,
@@ -465,5 +474,34 @@ mod tests {
         assert_eq!(spec.connect_mode, cli::RouteConnectMode::ReverseLink);
         assert_eq!(spec.local_proxy, "http://127.0.0.1:10808/");
         assert_eq!(spec.route_id(), "v3-workspace-a");
+    }
+
+    #[test]
+    fn daemon_install_service_args_use_production_control_endpoint() {
+        let args = super::service_args(
+            cli::DaemonScope::System,
+            true,
+            true,
+            false,
+            cli::ServiceCommand::Install,
+        );
+        assert_eq!(
+            args.control,
+            Some(control_socket::default_endpoint_string())
+        );
+        assert!(args.json);
+        assert!(args.elevate);
+    }
+
+    #[test]
+    fn daemon_start_service_args_do_not_rewrite_control_endpoint() {
+        let args = super::service_args(
+            cli::DaemonScope::System,
+            false,
+            false,
+            false,
+            cli::ServiceCommand::Start,
+        );
+        assert_eq!(args.control, None);
     }
 }

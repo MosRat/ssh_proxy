@@ -50,8 +50,9 @@ impl ServicePlan {
         } else {
             source_exe.clone()
         };
-        let endpoint = args
-            .control
+        let explicit_control = args.control.clone();
+        let endpoint = explicit_control
+            .clone()
             .or_else(|| config.daemon.control_endpoint.clone())
             .unwrap_or_else(|| {
                 config
@@ -106,7 +107,12 @@ impl ServicePlan {
             args.report_to
         };
         if should_materialize_config {
-            if config.daemon.control_endpoint.is_none() && config.daemon.control_listen.is_none() {
+            if explicit_control.is_some() {
+                config.daemon.control_endpoint = Some(endpoint.clone());
+                config.daemon.control_listen = None;
+            } else if config.daemon.control_endpoint.is_none()
+                && config.daemon.control_listen.is_none()
+            {
                 config.daemon.control_endpoint = Some(endpoint.clone());
             }
             if config.daemon.transport_listen.is_none() {
