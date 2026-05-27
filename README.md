@@ -141,7 +141,7 @@ For musl cross builds, use `cargo zigbuild` as documented in the release flow.
 
 ## Repository Layout
 
-- `src/`: Rust CLI, daemon, route planning, transports, SSH client, proxy ingress, and service code.
+- `src/`: Rust CLI, daemon, route planning, transports, SSH client, proxy ingress, and daemon install/update code.
 - `tests/`: Rust integration and build-contract tests.
 - `apps/vscode-remote-proxy/`: VS Code Remote SSH proxy extension.
 - `scripts/`: build, package, benchmark, and binary staging helpers.

@@ -88,7 +88,7 @@ When enabled, the extension manages:
 | `remoteProxy.remote.port` | `17890` | Preferred remote listener port. |
 | `remoteProxy.remote.autoPickPort` | `true` | Try nearby ports if the preferred port is busy. |
 | `remoteProxy.sshProxy.executable` | `ssh_proxy` | Explicit binary, bundled binary, or PATH fallback. |
-| `remoteProxy.sshProxy.connectMode` | `reverse-link` | Preserve `ssh -R` style reachability by default. |
+| `remoteProxy.sshProxy.connectMode` | `reverse-link` | Keep the daemon-managed route reachable through SSH by default. |
 | `remoteProxy.forward.verifyAfterStart` | `true` | Verify remote listener readiness after route start. |
 | `remoteProxy.forward.healthCheckEnabled` | `true` | Periodically verify the active listener. |
 | `remoteProxy.apply.gitConfig` | `true` | Apply remote Git proxy config. |
