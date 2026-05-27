@@ -26,6 +26,18 @@ pub fn jobs_path() -> Result<PathBuf> {
     Ok(app_home()?.join("jobs.json"))
 }
 
+pub fn daemon_state_path() -> Result<PathBuf> {
+    Ok(app_home()?.join("daemon_state.json"))
+}
+
+pub fn sessions_path() -> Result<PathBuf> {
+    Ok(app_home()?.join("sessions.json"))
+}
+
+pub fn peers_path() -> Result<PathBuf> {
+    Ok(app_home()?.join("peers.json"))
+}
+
 pub fn certs_dir() -> Result<PathBuf> {
     Ok(app_home()?.join("certs"))
 }

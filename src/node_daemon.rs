@@ -30,10 +30,12 @@ mod peers;
 mod proxy_session;
 mod quic_transport;
 mod routes;
+mod state;
 mod transport;
 
 use jobs::JobRegistry;
 use routes::RouteTask;
+use state::ProductionState;
 
 pub(crate) use args::{proxy_args_from_node_forward, reverse_args_from_node_reverse};
 pub(crate) use control_protocol::{NodeRequest, NodeResponse, attach_auth_token, response_line};
@@ -108,6 +110,11 @@ async fn run_daemon(args: cli::NodeDaemonArgs, config: config::AppConfig) -> Res
     if manager.route_autostart {
         manager.restore_routes().await;
     }
+    manager
+        .state
+        .record_daemon_started(&manager.name, &manager.control_endpoint.to_string())
+        .await?;
+    manager.reconcile_proxy_sessions().await?;
 
     info!(
         name = %manager.name,
@@ -148,6 +155,7 @@ struct NodeManager {
     route_store_path: PathBuf,
     route_autostart: bool,
     jobs: JobRegistry,
+    state: ProductionState,
     peer_reports: Mutex<HashMap<String, Value>>,
 }
 
@@ -171,6 +179,7 @@ impl NodeManager {
         let route_autostart =
             !args.no_route_autostart && config.daemon.route_autostart.unwrap_or(true);
         let jobs = JobRegistry::load(config::jobs_path()?);
+        let state = ProductionState::load()?;
         let transport = args.transport.or(config.daemon.transport_listen);
         let tls_transport = args.tls_transport.or(config.daemon.tls_transport_listen);
         let quic_transport = args.quic_transport.or(config.daemon.quic_transport_listen);
@@ -236,6 +245,7 @@ impl NodeManager {
             route_store_path,
             route_autostart,
             jobs,
+            state,
             peer_reports: Mutex::new(HashMap::new()),
         })
     }
@@ -354,12 +364,16 @@ impl NodeManager {
             }),
             &stored_jobs,
         );
+        let daemon_state = self.state.daemon_value().await;
+        let proxy_sessions = self.state.sessions_value().await;
+        let peer_store = self.state.peers_value().await;
         Ok(json!({
             "api_version": control_protocol::NODE_CONTROL_VERSION,
             "ok": true,
             "kind": "node",
             "daemon_api": "v0.3",
             "daemon": daemon_status,
+            "daemon_state": daemon_state,
             "name": self.name,
             "version": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,
@@ -402,8 +416,10 @@ impl NodeManager {
             "peers": peers,
             "running": running,
             "jobs": daemon_jobs,
+            "proxy_sessions": proxy_sessions,
             "routes": running_routes,
             "route_store": self.route_store_path,
+            "peer_store": peer_store,
             "route_autostart": self.route_autostart,
             "report_to": self.report_to,
             "peer_reports": reports,

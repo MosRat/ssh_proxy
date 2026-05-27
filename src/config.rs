@@ -11,7 +11,8 @@ mod certs;
 mod diagnostics;
 mod io;
 pub use io::{
-    certs_dir, config_path, file_sha256_fingerprint, jobs_path, routes_path, save_text_file_private,
+    certs_dir, config_path, daemon_state_path, file_sha256_fingerprint, jobs_path, peers_path,
+    routes_path, save_text_file_private, sessions_path,
 };
 mod peer;
 mod profile;

@@ -22,6 +22,18 @@ pub fn jobs_path() -> Result<PathBuf> {
     paths::jobs_path()
 }
 
+pub fn daemon_state_path() -> Result<PathBuf> {
+    paths::daemon_state_path()
+}
+
+pub fn sessions_path() -> Result<PathBuf> {
+    paths::sessions_path()
+}
+
+pub fn peers_path() -> Result<PathBuf> {
+    paths::peers_path()
+}
+
 pub fn certs_dir() -> Result<PathBuf> {
     paths::certs_dir()
 }

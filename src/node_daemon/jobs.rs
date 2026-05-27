@@ -37,14 +37,19 @@ impl JobState {
 #[serde(rename_all = "snake_case")]
 pub(super) enum JobPhase {
     Queued,
+    Reconciling,
     ResolveTarget,
+    ValidateLocalProxy,
+    SelectRemotePort,
     EnsureLocalProxy,
     EnsurePeer,
+    EnsureTransport,
     PlanRoute,
     StartRoute,
     WaitRouteReady,
     VerifyRemotePort,
     ApplyRemoteSettings,
+    HealthMonitoring,
     Healthy,
     Failed,
     Cancelled,
@@ -124,6 +129,11 @@ impl JobRecord {
 
     pub(super) fn with_remote_url(mut self, remote_url: Option<String>) -> Self {
         self.remote_url = remote_url;
+        self
+    }
+
+    pub(super) fn with_next_action(mut self, next_action: impl Into<String>) -> Self {
+        self.next_action = Some(next_action.into());
         self
     }
 

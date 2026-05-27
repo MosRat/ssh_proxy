@@ -76,12 +76,20 @@ impl ProxySessionSpec {
         Self::job_id_for_key(self.key())
     }
 
+    pub(crate) fn session_id(&self) -> String {
+        Self::session_id_for_key(self.key())
+    }
+
     pub(crate) fn route_id_for_key(key: &str) -> String {
         format!("v3-{}", sanitize_key(key))
     }
 
     pub(crate) fn job_id_for_key(key: &str) -> String {
         format!("proxy:{}", sanitize_key(key))
+    }
+
+    pub(crate) fn session_id_for_key(key: &str) -> String {
+        format!("session:{}", sanitize_key(key))
     }
 
     pub(crate) fn remote_url(&self) -> String {
@@ -112,6 +120,10 @@ impl NodeManager {
             .with_remote_url(Some(spec.remote_url()))
             .transition(JobState::Queued, JobPhase::Queued, 0);
         let job = self.jobs.upsert(job, "proxy session accepted").await?;
+        let session = self
+            .state
+            .upsert_session_from_job(&spec, &job, None)
+            .await?;
         let manager = self.clone();
         let task_spec = spec.clone();
         let job_id = job.id.clone();
@@ -134,7 +146,9 @@ impl NodeManager {
             "kind": "proxy_session",
             "daemon_api": "v0.3",
             "accepted": true,
+            "session_id": spec.session_id(),
             "job": job.to_value(),
+            "session": session.to_value(),
             "spec": spec.to_value(),
             "route": {
                 "route_id": spec.route_id(),
@@ -158,15 +172,27 @@ impl NodeManager {
             Some(id) => self.jobs.get(id).await,
             None => None,
         };
+        let session = match id.as_deref() {
+            Some(id) => self.state.session_by_job(id).await,
+            None => None,
+        };
+        let ok = job.is_some() || session.is_some();
         response_line(json!({
-            "ok": job.is_some(),
+            "ok": ok,
             "kind": "proxy_session_status",
             "daemon_api": "v0.3",
             "job": job.as_ref().map(JobRecord::to_value),
-            "route": job.as_ref().map(route_status_from_job).unwrap_or(Value::Null),
-            "remote_url": job.as_ref().and_then(|job| job.remote_url.clone()),
-            "health": job.as_ref().map(|job| job_health(job)).unwrap_or("unknown"),
-            "code": if job.is_some() { Value::Null } else { json!("not_found") },
+            "session": session.as_ref().map(|session| session.to_value()),
+            "route": job.as_ref().map(route_status_from_job)
+                .or_else(|| session.as_ref().and_then(|session| session.route.clone()))
+                .unwrap_or(Value::Null),
+            "remote_url": job.as_ref().and_then(|job| job.remote_url.clone())
+                .or_else(|| session.as_ref().map(|session| session.remote_url.clone())),
+            "remote_setup": session.as_ref().map(|session| serde_json::to_value(&session.remote_setup).unwrap_or(Value::Null)),
+            "health": job.as_ref().map(|job| job_health(job))
+                .or_else(|| session.as_ref().map(|session| session.health.as_str()))
+                .unwrap_or("unknown"),
+            "code": if ok { Value::Null } else { json!("not_found") },
         }))
     }
 
@@ -189,14 +215,42 @@ impl NodeManager {
             .with_route(id.clone())
             .transition(JobState::Cancelled, JobPhase::Cancelled, 100);
         let job = self.jobs.upsert(job, "proxy session stopped").await?;
+        let session = self
+            .state
+            .cancel_session(
+                &id,
+                &job.id,
+                route_response.as_ref().err().map(|err| err.to_string()),
+            )
+            .await?;
         response_line(json!({
             "ok": route_response.is_ok(),
             "kind": "proxy_session_down",
             "daemon_api": "v0.3",
             "route_id": id,
             "job": job.to_value(),
+            "session": session.map(|session| session.to_value()),
             "route_stop": route_response.ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()),
         }))
+    }
+
+    pub(super) async fn reconcile_proxy_sessions(&self) -> Result<()> {
+        for session in self.state.unfinished_sessions().await {
+            let job = JobRecord::new(session.job_id.clone(), "ensure_proxy_session")
+                .with_target(session.target.clone())
+                .with_workspace(session.workspace_id.clone())
+                .with_route(session.route_id.clone())
+                .with_remote_url(Some(session.remote_url.clone()))
+                .transition(JobState::WaitingRetry, JobPhase::Reconciling, 5)
+                .with_next_action("rerun_ensure_proxy_session");
+            self.jobs
+                .upsert(
+                    job,
+                    "proxy session requires reconciliation after daemon restart",
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn run_proxy_session_job(
@@ -205,30 +259,54 @@ impl NodeManager {
         job_id: String,
     ) -> Result<()> {
         let route_request = route_request_from_spec(&spec);
-        self.jobs
-            .upsert(
-                job_for_phase(&spec, &job_id, JobPhase::ResolveTarget, 10),
-                "resolved proxy session target",
-            )
-            .await?;
-        self.jobs
-            .upsert(
-                job_for_phase(&spec, &job_id, JobPhase::EnsureLocalProxy, 20),
-                "accepted local proxy egress",
-            )
-            .await?;
-        self.jobs
-            .upsert(
-                job_for_phase(&spec, &job_id, JobPhase::EnsurePeer, 35),
-                "ensuring remote peer through existing route planner",
-            )
-            .await?;
-        self.jobs
-            .upsert(
-                job_for_phase(&spec, &job_id, JobPhase::PlanRoute, 50),
-                "planned daemon-owned route",
-            )
-            .await?;
+        self.proxy_job_phase(
+            &spec,
+            &job_id,
+            JobPhase::ResolveTarget,
+            10,
+            "resolved proxy session target",
+        )
+        .await?;
+        self.proxy_job_phase(
+            &spec,
+            &job_id,
+            JobPhase::ValidateLocalProxy,
+            18,
+            "validated local proxy URL",
+        )
+        .await?;
+        self.proxy_job_phase(
+            &spec,
+            &job_id,
+            JobPhase::SelectRemotePort,
+            24,
+            "selected preferred remote port",
+        )
+        .await?;
+        self.proxy_job_phase(
+            &spec,
+            &job_id,
+            JobPhase::EnsurePeer,
+            35,
+            "ensuring remote peer through existing route planner",
+        )
+        .await?;
+        self.proxy_job_phase(
+            &spec,
+            &job_id,
+            JobPhase::EnsureTransport,
+            45,
+            "selected Rust transport strategy",
+        )
+        .await?;
+        self.proxy_job_phase(
+            &spec,
+            &job_id,
+            JobPhase::PlanRoute,
+            50,
+            "planned daemon-owned route",
+        )
+        .await?;
 
         let response = self.handle_route_intent(route_request).await;
         match response {
@@ -246,16 +324,40 @@ impl NodeManager {
                         "route intent accepted",
                     )
                     .await?;
+                if let Some(job) = self.jobs.get(&job_id).await {
+                    self.state
+                        .upsert_session_from_job(&spec, &job, None)
+                        .await?;
+                }
                 self.wait_for_proxy_route_ready(&spec, &job_id, remote_url)
                     .await?;
             }
             Err(err) => {
                 let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
                     .failed(err.to_string(), Some("route_start_failed".to_string()));
-                self.jobs.upsert(job, "route intent failed").await?;
+                let job = self.jobs.upsert(job, "route intent failed").await?;
+                self.state
+                    .upsert_session_from_job(&spec, &job, None)
+                    .await?;
             }
         }
         Ok(())
+    }
+
+    async fn proxy_job_phase(
+        &self,
+        spec: &ProxySessionSpec,
+        job_id: &str,
+        phase: JobPhase,
+        progress: u8,
+        message: &str,
+    ) -> Result<JobRecord> {
+        let job = self
+            .jobs
+            .upsert(job_for_phase(spec, job_id, phase, progress), message)
+            .await?;
+        self.state.upsert_session_from_job(spec, &job, None).await?;
+        Ok(job)
     }
 
     async fn wait_for_proxy_route_ready(
@@ -279,25 +381,48 @@ impl NodeManager {
                     let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
                         .with_remote_url(remote_url)
                         .failed(error, Some("route_failed".to_string()));
-                    self.jobs.upsert(job, "route failed").await?;
+                    let job = self.jobs.upsert(job, "route failed").await?;
+                    self.state
+                        .upsert_session_from_job(spec, &job, Some(route))
+                        .await?;
                     return Ok(());
                 }
                 if matches!(state.as_deref(), Some("running" | "ready" | "restarting")) {
-                    self.jobs
+                    let job = self
+                        .jobs
                         .upsert(
                             job_for_phase(spec, job_id, JobPhase::VerifyRemotePort, 85)
                                 .with_remote_url(remote_url.clone()),
                             "route is ready for remote verification",
                         )
                         .await?;
-                    self.jobs
+                    self.state
+                        .upsert_session_from_job(spec, &job, Some(route.clone()))
+                        .await?;
+                    let job = self
+                        .jobs
                         .upsert(
                             job_for_phase(spec, job_id, JobPhase::ApplyRemoteSettings, 92)
                                 .with_remote_url(remote_url.clone()),
                             "remote settings application required",
                         )
                         .await?;
-                    self.jobs
+                    self.state
+                        .upsert_session_from_job(spec, &job, Some(route.clone()))
+                        .await?;
+                    let job = self
+                        .jobs
+                        .upsert(
+                            job_for_phase(spec, job_id, JobPhase::HealthMonitoring, 98)
+                                .with_remote_url(remote_url.clone()),
+                            "proxy session entered health monitoring",
+                        )
+                        .await?;
+                    self.state
+                        .upsert_session_from_job(spec, &job, Some(route.clone()))
+                        .await?;
+                    let job = self
+                        .jobs
                         .upsert(
                             job_for_phase(spec, job_id, JobPhase::Healthy, 100)
                                 .transition(JobState::Healthy, JobPhase::Healthy, 100)
@@ -305,11 +430,15 @@ impl NodeManager {
                             "proxy session healthy",
                         )
                         .await?;
+                    self.state
+                        .upsert_session_from_job(spec, &job, Some(route))
+                        .await?;
                     return Ok(());
                 }
             }
             if time::Instant::now() >= deadline {
-                self.jobs
+                let job = self
+                    .jobs
                     .upsert(
                         job_for_phase(spec, job_id, JobPhase::WaitRouteReady, 75)
                             .with_remote_url(remote_url)
@@ -317,6 +446,7 @@ impl NodeManager {
                         "route readiness still pending",
                     )
                     .await?;
+                self.state.upsert_session_from_job(spec, &job, None).await?;
                 return Ok(());
             }
             time::sleep(Duration::from_millis(250)).await;
