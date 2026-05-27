@@ -7,7 +7,6 @@ export function readConfig(): RemoteProxyConfig {
   return {
     enabled: config.get<boolean>('enabled', true),
     autoStart: config.get<boolean>('autoStart', true),
-    backend: config.get<'auto' | 'ssh_proxy' | 'openssh'>('backend', 'auto'),
     localProxyMode: config.get<'auto' | 'env' | 'manual'>('localProxy.mode', 'auto'),
     localProxyUrl: config.get<string>('localProxy.url', ''),
     localProxyHosts: config.get<readonly string[]>('localProxy.hosts', ['127.0.0.1', 'localhost']),

@@ -26,7 +26,6 @@ export interface RemoteContext {
 export interface RemoteProxyConfig {
   readonly enabled: boolean;
   readonly autoStart: boolean;
-  readonly backend: ForwardingBackendKind;
   readonly localProxyMode: LocalProxyMode;
   readonly localProxyUrl: string;
   readonly localProxyHosts: readonly string[];

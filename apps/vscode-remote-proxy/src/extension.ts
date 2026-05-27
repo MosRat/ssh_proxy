@@ -3,32 +3,18 @@ import { detectActiveSshRemoteCommand } from './activeSshRemote';
 import { registerRemoteProxyCommands } from './commandRegistry';
 import { applyHostProfile, clearSshHost, readConfig, readHostProfile, setManualProxyUrl, setSshHost } from './config';
 import {
-  remoteForwardFailureLine,
-  remoteForwardReachableLine,
   REMOTE_PROXY_DIAGNOSTICS_HEADER,
   REMOTE_PROXY_DIAGNOSTICS_SKIP_LINE,
-  shouldVerifyRemoteForward,
 } from './diagnosticsPresenter';
-import {
-  appliedProxyFromRemoteStatus,
-  buildRemotePortCandidates,
-  remoteStatusMatchesCurrentProxy,
-} from './portPersistence';
 import { detectLocalProxy, findProbeCandidates, makeRemoteProxyUrl } from './proxyDetection';
 import { buildLocalProxyPickItems, buildSshHostPickItems, sshHostPickPlaceholder } from './quickPickItems';
 import { ProxyLeaseState } from './proxyLease';
-import { recordHealthCheckFailure, shouldRetryForwardAttempt } from './reliabilityPolicy';
+import { recordHealthCheckFailure } from './reliabilityPolicy';
 import { getRemoteContext } from './remoteContext';
 import { buildRemoteProxyMenuItems } from './remoteProxyMenu';
-import { RemoteSetup } from './remoteSetup';
 import { readSshHostEntries } from './sshConfig';
 import { ForwardingBackend } from './forwardingBackend';
-import {
-  decideRestartBackoff,
-  healthCheckIntervalMs,
-  leaseHeartbeatIntervalMs,
-  shouldRunTimedCheck,
-} from './healthMonitor';
+import { healthCheckIntervalMs, shouldRunTimedCheck } from './healthMonitor';
 import { LeaseCoordinator, LeaseMode } from './leaseCoordinator';
 import { findAvailableSshProxyCli } from './sshProxyCli';
 import {
@@ -45,9 +31,8 @@ import {
   checkCleanupPreflight,
   checkStartPreflight,
   planAutoStart,
-  startLockTimings,
 } from './startupCoordinator';
-import { AppliedProxy, ForwardingBackendKind, LocalProxy, RemoteProxyConfig } from './types';
+import { AppliedProxy, ForwardingBackendKind, RemoteProxyConfig } from './types';
 import { detectSshHostFromVsCodeStorage } from './vscodeStorage';
 
 let controller: RemoteProxyController | undefined;
@@ -79,23 +64,17 @@ export function deactivate(): void {
 class RemoteProxyController implements vscode.Disposable {
   private readonly sshProxyBackend: SshProxyKernelBackend;
   private forwarder: ForwardingBackend;
-  private readonly setup: RemoteSetup;
   private readonly leaseCoordinator: LeaseCoordinator;
   private readonly statusBar: vscode.StatusBarItem;
   private readonly monitorTimer: NodeJS.Timeout;
   private applying = false;
   private lastResolvedTargetKey: string | undefined;
   private lastHealthCheckAt = 0;
-  private restartFailures = 0;
   private healthFailures = 0;
-  private nextRestartAt = 0;
-  private lastPreferredRemotePort: number | undefined;
-  private lastPreferredRemoteBindHost: string | undefined;
 
   public constructor(private readonly output: vscode.OutputChannel, private readonly context: vscode.ExtensionContext) {
     this.sshProxyBackend = new SshProxyKernelBackend(output, context.extensionPath);
     this.forwarder = this.sshProxyBackend;
-    this.setup = new RemoteSetup(output, context.extensionPath);
     this.leaseCoordinator = new LeaseCoordinator(output);
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 30);
     this.statusBar.command = 'remoteProxy.openMenu';
@@ -129,11 +108,8 @@ class RemoteProxyController implements vscode.Disposable {
       { extensionPath: this.context.extensionPath },
     );
     if (resolved) {
-      if (config.backend === 'openssh') {
-        this.output.appendLine('remoteProxy.backend=openssh is ignored in daemon-first mode; using ssh_proxy daemon.');
-      } else {
-        this.output.appendLine(`Using ${describeSshProxyDiscovery(resolved.discovery)} as Remote Proxy daemon client.`);
-      }
+      void config;
+      this.output.appendLine(`Using ${describeSshProxyDiscovery(resolved.discovery)} as Remote Proxy daemon client.`);
       return this.sshProxyBackend;
     }
     const unavailable = sshProxyUnavailableCandidatesMessage(resolveSshProxyExecutableCandidates(
@@ -142,14 +118,6 @@ class RemoteProxyController implements vscode.Disposable {
     ));
     this.output.appendLine(`${unavailable} ssh_proxy daemon client is required in production mode.`);
     return this.sshProxyBackend;
-  }
-
-  private async buildForwardingBackendCandidates(config: RemoteProxyConfig): Promise<ForwardingBackend[]> {
-    return [await this.selectForwardingBackend(config)];
-  }
-
-  private describeForwardingBackend(backend: ForwardingBackend): string {
-    return backend === this.sshProxyBackend ? 'ssh_proxy daemon' : 'unknown backend';
   }
 
   private getBackendName(): ForwardingBackendKind {
@@ -241,16 +209,13 @@ class RemoteProxyController implements vscode.Disposable {
       };
       this.output.appendLine(`Starting daemon-owned proxy session for ${sshHost} (${targetKey}).`);
       await backend.startAndWait(config, sshHost, applied, 900);
-      this.restartFailures = 0;
       this.healthFailures = 0;
-      this.nextRestartAt = 0;
       this.lastHealthCheckAt = 0;
       this.leaseCoordinator.resetHeartbeat();
       const active = backend.appliedProxy ?? applied;
       if (!active) {
         throw new Error('forwarding backend did not produce an applied proxy');
       }
-      this.rememberPreferredPort(active);
       vscode.window.showInformationMessage(`Remote Proxy active: ${active.remoteUrl}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -495,7 +460,7 @@ class RemoteProxyController implements vscode.Disposable {
       forwardSshHost: this.forwarder.currentSshHost,
       leaseMode: this.leaseCoordinator.mode,
       leaseDescription: this.leaseCoordinator.describe(lease),
-      restartBackoff: this.nextRestartAt > Date.now() ? `${Math.ceil((this.nextRestartAt - Date.now()) / 1000)}s` : 'ready',
+      restartBackoff: 'daemon-managed',
       proxy,
       lease,
       kernelStatus,
@@ -529,20 +494,6 @@ class RemoteProxyController implements vscode.Disposable {
     this.statusBar.dispose();
   }
 
-  private async buildAppliedProxy(config: RemoteProxyConfig): Promise<AppliedProxy | undefined> {
-    const local = await detectLocalProxy(config);
-    if (!local) {
-      return undefined;
-    }
-
-    return {
-      local,
-      remoteUrl: makeRemoteProxyUrl(local, config.remoteBindHost, config.remotePort),
-      remotePort: config.remotePort,
-      remoteBindHost: config.remoteBindHost
-    };
-  }
-
   private async resolveSshHost(config: RemoteProxyConfig, interactive: boolean): Promise<string | undefined> {
     const remote = getRemoteContext(config.sshHostOverride);
     if (remote.sshHost) {
@@ -574,146 +525,6 @@ class RemoteProxyController implements vscode.Disposable {
     const picked = await this.pickSshHost();
     this.lastResolvedTargetKey = picked;
     return picked;
-  }
-
-  private async startForwardOnAvailablePort(config: RemoteProxyConfig, sshHost: string, targetKey: string, local: LocalProxy): Promise<AppliedProxy> {
-    const lease = config.singletonReuseEnabled ? await this.leaseCoordinator.read(targetKey) : undefined;
-    const remoteStatus = await this.setup.readRemoteStatus(config, sshHost);
-    const currentProxy = this.forwarder.currentSshHost === sshHost ? this.forwarder.appliedProxy : undefined;
-    const ports = buildRemotePortCandidates({
-      config,
-      local,
-      currentProxy,
-      preferredPort: this.lastPreferredRemotePort,
-      preferredBindHost: this.lastPreferredRemoteBindHost,
-      lease,
-      remoteStatus,
-    });
-    if (remoteStatusMatchesCurrentProxy(remoteStatus, config, local)) {
-      this.output.appendLine(`Remote status suggests prior Remote Proxy port ${remoteStatus?.bindHost ?? config.remoteBindHost}:${remoteStatus?.port}; trying it before new ports.`);
-    }
-    let lastError: unknown;
-
-    for (const port of ports) {
-      const applied: AppliedProxy = {
-        local,
-        remoteUrl: makeRemoteProxyUrl(local, config.remoteBindHost, port),
-        remotePort: port,
-        remoteBindHost: config.remoteBindHost,
-        workspaceId: targetKey
-      };
-
-      if (!config.remoteAutoPickPort && remoteStatus?.port === port) {
-        const free = await this.setup.isRemotePortFree(config, sshHost, config.remoteBindHost, port);
-        if (!free) {
-          const residual = await this.tryReuseRemoteStatusResidual(config, sshHost, targetKey, local, remoteStatus, port);
-          if (residual) {
-            return residual;
-          }
-        }
-      }
-
-      if (config.remoteAutoPickPort) {
-        const free = await this.setup.isRemotePortFree(config, sshHost, config.remoteBindHost, port);
-        if (!free) {
-          const residual = await this.tryReuseRemoteStatusResidual(config, sshHost, targetKey, local, remoteStatus, port);
-          if (residual) {
-            return residual;
-          }
-          this.output.appendLine(`Remote port ${config.remoteBindHost}:${port} is already in use; trying next port.`);
-          continue;
-        }
-      }
-
-      try {
-        await this.forwarder.startAndWait(config, sshHost, applied, 900);
-        const active = this.forwarder.appliedProxy ?? applied;
-        if (config.verifyAfterStart) {
-          await this.setup.verifyForwardReady(config, sshHost, active);
-        }
-        this.leaseCoordinator.markOwner(targetKey);
-        await this.leaseCoordinator.write(targetKey, sshHost, active);
-        return active;
-      } catch (error) {
-        lastError = error;
-        this.forwarder.stop();
-        const message = error instanceof Error ? error.message : String(error);
-        this.output.appendLine(`Forward attempt failed on ${config.remoteBindHost}:${port}: ${message}`);
-        if (!config.remoteAutoPickPort || !shouldRetryForwardAttempt(error)) {
-          throw error;
-        }
-      }
-    }
-
-    throw lastError instanceof Error ? lastError : new Error(`No available remote proxy port in ${ports[0]}-${ports[ports.length - 1]}.`);
-  }
-
-  private async tryReuseLease(config: RemoteProxyConfig, sshHost: string, targetKey: string): Promise<AppliedProxy | undefined> {
-    if (!config.singletonReuseEnabled) {
-      return undefined;
-    }
-
-    const lease = await this.leaseCoordinator.read(targetKey);
-    const ttlMs = config.singletonLeaseTtlSeconds * 1000;
-    if (!lease) {
-      return undefined;
-    }
-    const fresh = this.leaseCoordinator.isFresh(lease, ttlMs);
-    const ownerAlive = this.leaseCoordinator.isOwnerProcessAlive(lease);
-    if (!fresh) {
-      this.output.appendLine(`Shared proxy lease is stale: ${this.leaseCoordinator.describe(lease)} owner_alive=${ownerAlive}`);
-    }
-
-    const backendName = this.getBackendName();
-    if (backendName === 'ssh_proxy') {
-      if (lease.version !== 2 || lease.backend !== 'ssh_proxy') {
-        return undefined;
-      }
-    } else if (lease.version === 2 && lease.backend === 'ssh_proxy') {
-      return undefined;
-    }
-
-    try {
-      await this.setup.verifyForward(config, sshHost, lease.proxy);
-      this.leaseCoordinator.markFromLease(targetKey, lease);
-      this.forwarder.adoptShared(sshHost, lease.proxy);
-      this.output.appendLine(`Reusing shared proxy lease: ${this.leaseCoordinator.describe(lease)}`);
-      return lease.proxy;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const leaseAge = fresh ? 'fresh' : ownerAlive ? 'stale owner-alive' : 'stale owner-dead';
-      this.output.appendLine(`Shared proxy lease (${leaseAge}) is not reachable and will not be reused: ${message}`);
-      return undefined;
-    }
-  }
-
-  private async tryReuseRemoteStatusResidual(
-    config: RemoteProxyConfig,
-    sshHost: string,
-    targetKey: string,
-    local: LocalProxy,
-    remoteStatus: Awaited<ReturnType<RemoteSetup['readRemoteStatus']>>,
-    port: number,
-  ): Promise<AppliedProxy | undefined> {
-    if (!remoteStatus || remoteStatus.port !== port) {
-      return undefined;
-    }
-    const proxy = appliedProxyFromRemoteStatus(remoteStatus, config, local);
-    if (!proxy) {
-      return undefined;
-    }
-    try {
-      await this.setup.verifyForward(config, sshHost, proxy);
-      this.leaseCoordinator.markShared(targetKey);
-      this.forwarder.adoptShared(sshHost, proxy);
-      this.rememberPreferredPort(proxy);
-      this.output.appendLine(`Remote port ${proxy.remoteBindHost}:${proxy.remotePort} matches previous Remote Proxy status; reusing existing listener.`);
-      return proxy;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.output.appendLine(`Previous Remote Proxy status port ${proxy.remoteBindHost}:${proxy.remotePort} is not reusable: ${message}`);
-      return undefined;
-    }
   }
 
   private async monitorHostChange(): Promise<void> {
@@ -781,38 +592,11 @@ class RemoteProxyController implements vscode.Disposable {
     }
   }
 
-  private canRestartNow(config: RemoteProxyConfig): boolean {
-    const decision = decideRestartBackoff(
-      Date.now(),
-      this.nextRestartAt,
-      this.restartFailures,
-      config.restartBackoffMaxSeconds,
-    );
-    this.restartFailures = decision.restartFailures;
-    this.nextRestartAt = decision.nextRestartAt;
-    if (!decision.canRestart) {
-      this.output.appendLine(`Restart is in backoff for ${decision.waitSeconds}s.`);
-      return false;
-    }
-
-    return true;
-  }
-
   private async releaseLeaseAndStopForwarder(options: { rememberPreferredPort?: boolean } = {}): Promise<void> {
-    if (options.rememberPreferredPort) {
-      this.rememberPreferredPort(this.forwarder.appliedProxy);
-    }
+    void options;
     await this.leaseCoordinator.releaseOwned();
     this.leaseCoordinator.clear();
     this.forwarder.stop();
-  }
-
-  private rememberPreferredPort(proxy: AppliedProxy | undefined): void {
-    if (!proxy) {
-      return;
-    }
-    this.lastPreferredRemotePort = proxy.remotePort;
-    this.lastPreferredRemoteBindHost = proxy.remoteBindHost;
   }
 
   private getEffectiveStatus(): string {
@@ -839,8 +623,4 @@ class RemoteProxyController implements vscode.Disposable {
     }, text);
   }
 
-  private configForBackend(config: RemoteProxyConfig, backend: ForwardingBackend): RemoteProxyConfig {
-    void backend;
-    return config;
-  }
 }

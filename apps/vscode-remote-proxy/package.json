@@ -118,16 +118,6 @@
           "default": true,
           "description": "Automatically start forwarding when a supported remote window opens."
         },
-        "remoteProxy.backend": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "ssh_proxy",
-            "openssh"
-          ],
-          "default": "auto",
-          "description": "Choose the forwarding backend. auto uses the ssh_proxy daemon; OpenSSH is an explicit legacy backend."
-        },
         "remoteProxy.localProxy.mode": {
           "type": "string",
           "enum": [
@@ -255,11 +245,6 @@
             }
           }
         },
-        "remoteProxy.ssh.executable": {
-          "type": "string",
-          "default": "ssh",
-          "description": "SSH executable used for reverse forwarding and remote setup."
-        },
         "remoteProxy.ssh.host": {
           "type": "string",
           "default": "",
@@ -270,84 +255,10 @@
           "default": false,
           "description": "Allow automatic SSH host detection from VS Code globalStorage when no current-window signal is available. Disabled by default because this storage can be stale in Extension Development Host windows."
         },
-        "remoteProxy.ssh.args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Extra arguments passed to ssh before the host."
-        },
-        "remoteProxy.ssh.batchMode": {
-          "type": "boolean",
-          "default": true,
-          "description": "Pass BatchMode=yes to ssh so background commands fail instead of waiting for an interactive password prompt."
-        },
-        "remoteProxy.ssh.connectTimeout": {
-          "type": "number",
-          "default": 12,
-          "minimum": 1,
-          "description": "SSH ConnectTimeout in seconds."
-        },
-        "remoteProxy.ssh.serverAliveInterval": {
-          "type": "number",
-          "default": 60,
-          "minimum": 1,
-          "maximum": 3600,
-          "description": "SSH ServerAliveInterval in seconds for the background reverse tunnel."
-        },
-        "remoteProxy.ssh.serverAliveCountMax": {
-          "type": "number",
-          "default": 3,
-          "minimum": 1,
-          "maximum": 30,
-          "description": "SSH ServerAliveCountMax for the background reverse tunnel."
-        },
-        "remoteProxy.ssh.tcpKeepAlive": {
-          "type": "boolean",
-          "default": true,
-          "description": "Pass TCPKeepAlive=yes to the background SSH reverse tunnel."
-        },
         "remoteProxy.sshProxy.executable": {
           "type": "string",
           "default": "ssh_proxy",
           "description": "ssh_proxy executable used by the kernel backend."
-        },
-        "remoteProxy.sshProxy.autoInstallLocalService": {
-          "type": "boolean",
-          "default": true,
-          "description": "Probe existing service scopes first, then repair or install the local ssh_proxy service before creating a kernel route."
-        },
-        "remoteProxy.sshProxy.allowElevationPrompt": {
-          "type": "boolean",
-          "default": true,
-          "description": "Allow interactive Remote Proxy commands to prompt for elevated service install or update when required. Auto-start never prompts for elevation."
-        },
-        "remoteProxy.sshProxy.preferPersistentService": {
-          "type": "boolean",
-          "default": true,
-          "description": "Prefer an existing or repairable persistent ssh_proxy service before starting a session-owned daemon."
-        },
-        "remoteProxy.sshProxy.openSshFallbackPolicy": {
-          "type": "string",
-          "enum": [
-            "final",
-            "disabled",
-            "legacy-auto"
-          ],
-          "default": "disabled",
-          "description": "Controls when OpenSSH can be used after the Rust daemon path. The default keeps OpenSSH disabled; legacy-auto restores the older fallback chain."
-        },
-        "remoteProxy.sshProxy.brokerMode": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "persistent",
-            "session-only",
-            "disabled"
-          ],
-          "default": "auto",
-          "description": "Controls how the kernel backend selects persistent broker service, session daemon, or direct control endpoints."
         },
         "remoteProxy.sshProxy.connectMode": {
           "type": "string",
@@ -358,33 +269,6 @@
           ],
           "default": "reverse-link",
           "description": "Route connect mode used by the ssh_proxy kernel backend."
-        },
-        "remoteProxy.sshProxy.routeVolatile": {
-          "type": "boolean",
-          "default": true,
-          "description": "Create kernel routes as volatile by default."
-        },
-        "remoteProxy.sshProxy.remoteSetup": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "ssh_proxy",
-            "openssh"
-          ],
-          "default": "auto",
-          "description": "Choose the remote setup command runner used after a kernel route starts."
-        },
-        "remoteProxy.forward.retryOnExit": {
-          "type": "boolean",
-          "default": true,
-          "description": "Restart the SSH reverse-forward process if it exits unexpectedly."
-        },
-        "remoteProxy.forward.retryDelaySeconds": {
-          "type": "number",
-          "default": 5,
-          "minimum": 1,
-          "maximum": 300,
-          "description": "Delay before restarting the SSH reverse-forward process after an unexpected exit."
         },
         "remoteProxy.forward.restartOnHostChange": {
           "type": "boolean",
@@ -421,25 +305,6 @@
           "minimum": 5,
           "maximum": 600,
           "description": "Maximum exponential backoff delay before restarting after repeated health check failures."
-        },
-        "remoteProxy.singleton.reuseEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Reuse one local ssh -R proxy tunnel across multiple VS Code windows connected to the same SSH user and server."
-        },
-        "remoteProxy.singleton.leaseTtlSeconds": {
-          "type": "number",
-          "default": 20,
-          "minimum": 5,
-          "maximum": 300,
-          "description": "How long a tunnel lease heartbeat remains fresh before another window may take over."
-        },
-        "remoteProxy.singleton.startLockTimeoutSeconds": {
-          "type": "number",
-          "default": 15,
-          "minimum": 1,
-          "maximum": 120,
-          "description": "How long a window waits for another window's in-progress proxy start before taking over a stale start lock."
         },
         "remoteProxy.apply.vscodeSettings": {
           "type": "boolean",

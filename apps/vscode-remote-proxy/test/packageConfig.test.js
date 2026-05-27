@@ -8,50 +8,11 @@ const manifest = require('../package.json');
 const ROOT = path.resolve(__dirname, '..');
 
 const requiredSettings = {
-  'remoteProxy.backend': {
-    type: 'string',
-    default: 'auto',
-    enum: ['auto', 'ssh_proxy', 'openssh'],
-    configRead: "config.get<'auto' | 'ssh_proxy' | 'openssh'>('backend', 'auto')",
-    typeField: 'readonly backend: ForwardingBackendKind;',
-  },
   'remoteProxy.sshProxy.executable': {
     type: 'string',
     default: 'ssh_proxy',
     configRead: "config.get<string>('sshProxy.executable', 'ssh_proxy')",
     typeField: 'readonly sshProxyExecutable: string;',
-  },
-  'remoteProxy.sshProxy.autoInstallLocalService': {
-    type: 'boolean',
-    default: true,
-    configRead: "config.get<boolean>('sshProxy.autoInstallLocalService', true)",
-    typeField: 'readonly sshProxyAutoInstallLocalService: boolean;',
-  },
-  'remoteProxy.sshProxy.allowElevationPrompt': {
-    type: 'boolean',
-    default: true,
-    configRead: "config.get<boolean>('sshProxy.allowElevationPrompt', true)",
-    typeField: 'readonly sshProxyAllowElevationPrompt: boolean;',
-  },
-  'remoteProxy.sshProxy.preferPersistentService': {
-    type: 'boolean',
-    default: true,
-    configRead: "config.get<boolean>('sshProxy.preferPersistentService', true)",
-    typeField: 'readonly sshProxyPreferPersistentService: boolean;',
-  },
-  'remoteProxy.sshProxy.openSshFallbackPolicy': {
-    type: 'string',
-    default: 'disabled',
-    enum: ['final', 'disabled', 'legacy-auto'],
-    configRead: "config.get<'final' | 'disabled' | 'legacy-auto'>('sshProxy.openSshFallbackPolicy', 'disabled')",
-    typeField: 'readonly sshProxyOpenSshFallbackPolicy: SshProxyOpenSshFallbackPolicy;',
-  },
-  'remoteProxy.sshProxy.brokerMode': {
-    type: 'string',
-    default: 'auto',
-    enum: ['auto', 'persistent', 'session-only', 'disabled'],
-    configRead: "config.get<'auto' | 'persistent' | 'session-only' | 'disabled'>('sshProxy.brokerMode', 'auto')",
-    typeField: 'readonly sshProxyBrokerMode: SshProxyBrokerMode;',
   },
   'remoteProxy.sshProxy.connectMode': {
     type: 'string',
@@ -60,32 +21,36 @@ const requiredSettings = {
     configRead: "config.get<'auto' | 'reverse-link' | 'direct'>('sshProxy.connectMode', 'reverse-link')",
     typeField: 'readonly sshProxyConnectMode: SshProxyConnectMode;',
   },
-  'remoteProxy.sshProxy.routeVolatile': {
-    type: 'boolean',
-    default: true,
-    configRead: "config.get<boolean>('sshProxy.routeVolatile', true)",
-    typeField: 'readonly sshProxyRouteVolatile: boolean;',
-  },
-  'remoteProxy.sshProxy.remoteSetup': {
-    type: 'string',
-    default: 'auto',
-    enum: ['auto', 'ssh_proxy', 'openssh'],
-    configRead: "config.get<'auto' | 'ssh_proxy' | 'openssh'>('sshProxy.remoteSetup', 'auto')",
-    typeField: 'readonly sshProxyRemoteSetup: RemoteSetupMode;',
-  },
   'remoteProxy.forward.healthCheckFailureThreshold': {
     type: 'number',
     default: 2,
     configRead: "config.get<number>('forward.healthCheckFailureThreshold', 2)",
     typeField: 'readonly healthCheckFailureThreshold: number;',
   },
-  'remoteProxy.singleton.startLockTimeoutSeconds': {
-    type: 'number',
-    default: 15,
-    configRead: "config.get<number>('singleton.startLockTimeoutSeconds', 15)",
-    typeField: 'readonly singletonStartLockTimeoutSeconds: number;',
-  },
 };
+
+const hiddenCompatibilitySettings = [
+  'remoteProxy.backend',
+  'remoteProxy.ssh.executable',
+  'remoteProxy.ssh.args',
+  'remoteProxy.ssh.batchMode',
+  'remoteProxy.ssh.connectTimeout',
+  'remoteProxy.ssh.serverAliveInterval',
+  'remoteProxy.ssh.serverAliveCountMax',
+  'remoteProxy.ssh.tcpKeepAlive',
+  'remoteProxy.sshProxy.autoInstallLocalService',
+  'remoteProxy.sshProxy.allowElevationPrompt',
+  'remoteProxy.sshProxy.preferPersistentService',
+  'remoteProxy.sshProxy.openSshFallbackPolicy',
+  'remoteProxy.sshProxy.brokerMode',
+  'remoteProxy.sshProxy.routeVolatile',
+  'remoteProxy.sshProxy.remoteSetup',
+  'remoteProxy.forward.retryOnExit',
+  'remoteProxy.forward.retryDelaySeconds',
+  'remoteProxy.singleton.reuseEnabled',
+  'remoteProxy.singleton.leaseTtlSeconds',
+  'remoteProxy.singleton.startLockTimeoutSeconds',
+];
 
 test('contributes ssh_proxy kernel settings with stable defaults', () => {
   const properties = manifest.contributes.configuration.properties;
@@ -110,11 +75,14 @@ test('reads ssh_proxy kernel settings into the typed config object', () => {
     assert.ok(typesSource.includes(expected.typeField), `${key} should be represented in RemoteProxyConfig`);
   }
 
-  assert.ok(typesSource.includes("export type ForwardingBackendKind = 'auto' | 'ssh_proxy' | 'openssh';"));
-  assert.ok(typesSource.includes("export type RemoteSetupMode = 'auto' | 'ssh_proxy' | 'openssh';"));
   assert.ok(typesSource.includes("export type SshProxyConnectMode = 'auto' | 'reverse-link' | 'direct';"));
-  assert.ok(typesSource.includes("export type SshProxyOpenSshFallbackPolicy = 'final' | 'disabled' | 'legacy-auto';"));
-  assert.ok(typesSource.includes("export type SshProxyBrokerMode = 'auto' | 'persistent' | 'session-only' | 'disabled';"));
+});
+
+test('hides legacy fallback settings from the production configuration surface', () => {
+  const properties = manifest.contributes.configuration.properties;
+  for (const key of hiddenCompatibilitySettings) {
+    assert.equal(properties[key], undefined, `${key} should not be user-facing`);
+  }
 });
 
 test('keeps explicit scripts for staging bundled ssh_proxy binaries', () => {
