@@ -4,15 +4,15 @@ This document is for maintainers and contributors. It explains how the code is o
 
 ## Runtime Shape
 
-One binary has four main personalities:
+One binary has these main personalities:
 
 - `proxy`: local unified SOCKS5H/HTTP proxy listener plus bridge manager.
 - `reverse`: remote SOCKS5H listener; this machine is the TCP/UDP egress side.
-- `node daemon`: symmetric service daemon. It can expose a framed transport, own proxy profile tasks, accept control commands, and report state to peers.
+- `daemon`: the production control plane. It owns proxy sessions, peer state,
+  routes, jobs, updates, and health.
 - `remote`: compatibility framed helper; executes TCP/UDP opens from the target host.
-- `daemon`: legacy local control kernel that owns multiple proxy profile tasks.
-- `host` / `service` / `control`: CLI management commands for remote helpers, local services, and daemon IPC.
-- `route`: high-level route intent command. The CLI submits intent to the local node daemon; the daemon owns peer bootstrap, route planning, and route persistence.
+- `host` / `daemon` / `route` / `vscode`: thin CLI entrypoints that submit intent
+  to the daemon or to remote peers.
 
 The normal data path is:
 
@@ -116,9 +116,9 @@ remote SOCKS client
   - Keeps private key material outside `~/.ssh_proxy/config.toml`; profiles store only paths and policy references.
 
 - `src/node_daemon.rs`
-  - Symmetric node service shell.
-  - Owns daemon startup/shutdown, shared `NodeManager` state, status/link JSON, and legacy profile
-    connect/disconnect.
+  - Daemon control shell.
+  - Owns daemon startup/shutdown, shared `NodeManager` state, status/link JSON, proxy session
+    orchestration, and peer/route/session reconciliation.
   - Delegates node behavior to focused submodules:
     - `src/node_daemon/control_client.rs`: CLI-side `node control` request construction.
     - `src/node_daemon/control_protocol.rs`: typed node control request model and JSON line
@@ -135,17 +135,9 @@ remote SOCKS client
       route-intent planning, and bootstrap-before-route behavior.
 
 - `src/service.rs`
-  - Local service command orchestration.
-  - `service print/install/uninstall/start/stop/status` now delegates shared planning and
-    platform execution to focused submodules.
-  - `service install` copies the current executable into a stable user install directory by
-    default, writes missing daemon defaults to `~/.ssh_proxy/config.toml`, generates a secure
-    transport token, auto-selects an available user transport port, then points the service at
-    `ssh_proxy node daemon`.
-  - `service status` now prints a redacted project-level JSON summary before delegating to the
-    platform status command. It includes config/route-store/binary paths, selected endpoints,
-    token/cert presence, report targets, config schema health, route-store version/duplicate-ID
-    checks, saved peer endpoint diagnostics, and a best-effort daemon status query.
+  - Local install helper for the daemon binary.
+  - `service` exists to support legacy install/update plumbing and should not be
+    treated as the public production control surface.
 
 - `src/service/plan.rs`
   - Service install plan and daemon command materialization.
@@ -153,10 +145,7 @@ remote SOCKS client
     listeners, token/config materialization, TLS/mTLS paths, and binary copy behavior.
 
 - `src/service/platform.rs`
-  - OS-specific service execution.
-  - Linux: systemd user/system.
-  - macOS: launchd user/system.
-  - Windows: schtasks for user scope, sc.exe for system scope.
+  - OS-specific privileged service execution for daemon installation and update.
 
 - `src/sidecar.rs`
   - Embedded Linux musl helper extraction.

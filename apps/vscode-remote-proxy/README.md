@@ -43,7 +43,7 @@ ssh -R remote:port:local-proxy-host:local-proxy-port
 
 Kernel mode is preferred because the daemon owns route ids, job progress, readiness, peer state, update state, and health repair. The extension no longer runs the old service/session/OpenSSH fallback chain in the normal path.
 
-Auto-start never prompts for UAC or sudo elevation. Interactive commands can guide the user to install or update the local daemon. OpenSSH only participates when `remoteProxy.sshProxy.openSshFallbackPolicy=legacy-auto`.
+Auto-start never prompts for UAC or sudo elevation. Interactive commands can guide the user to install or update the local daemon. OpenSSH is not part of the normal path; it is reserved for explicit compatibility workflows only.
 
 ## Daemon Job Readiness
 
@@ -109,7 +109,7 @@ Remote port selection is sticky. The extension tries the current route, remember
 | `remoteProxy.sshProxy.preferPersistentService` | `true` | Kept for older configs; normal mode uses the local daemon. |
 | `remoteProxy.sshProxy.allowElevationPrompt` | `true` | Allow elevation prompts only from interactive commands. |
 | `remoteProxy.sshProxy.connectMode` | `reverse-link` | Preserve `ssh -R` style reachability by default. |
-| `remoteProxy.sshProxy.openSshFallbackPolicy` | `disabled` | Keep OpenSSH out of the normal path; use `legacy-auto` only for emergency compatibility. |
+| `remoteProxy.sshProxy.openSshFallbackPolicy` | `disabled` | Keep OpenSSH out of the normal path; use `legacy-auto` only when you explicitly need compatibility fallback. |
 | `remoteProxy.sshProxy.remoteSetup` | `auto` | Prefer Rust `ssh_proxy host exec`; legacy OpenSSH fallback is explicit. |
 | `remoteProxy.forward.verifyAfterStart` | `true` | Verify remote listener readiness after route start. |
 | `remoteProxy.forward.healthCheckEnabled` | `true` | Periodically verify the active listener. |
@@ -142,7 +142,7 @@ Common failures:
 - Remote port already in use: keep `remoteProxy.remote.autoPickPort=true`, or pick a different `remoteProxy.remote.port`.
 - Host unresolved in Extension Development Host: run `Remote Proxy: Pick SSH Host`, or enable storage fallback only if you understand it can be stale.
 - Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy vscode status --workspace <id> --json` and `ssh_proxy events --job <job-id> --json`, and verify remote `127.0.0.1:<port>` reachability.
-- Unexpected OpenSSH usage: confirm `remoteProxy.sshProxy.openSshFallbackPolicy` is still `disabled`; `legacy-auto` intentionally restores the older fallback chain.
+- Unexpected OpenSSH usage: confirm `remoteProxy.sshProxy.openSshFallbackPolicy` is still `disabled`; `legacy-auto` intentionally re-enables compatibility fallback.
 
 Remote shell smoke test:
 

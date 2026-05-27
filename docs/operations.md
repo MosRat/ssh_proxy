@@ -7,64 +7,56 @@ test records, host aliases, ports, or private network details.
 
 `ssh_proxy` is one executable with several roles:
 
-- CLI for service, host, route, and config operations.
-- Local daemon for control, route supervision, and peer transports.
-- Remote daemon installed through SSH bootstrap.
+- CLI for daemon, host, route, and config operations.
+- Local daemon for control, route supervision, peer registry, and proxy sessions.
+- Remote daemon installed through SSH bootstrap or descriptor adoption.
 - Proxy ingress for SOCKS5H, HTTP CONNECT, and fixed TCP tunnel listeners.
 
 Typical setup:
 
 ```powershell
-ssh_proxy service --scope user install
+ssh_proxy daemon install --scope system --elevate
 ssh_proxy host <remote-host> --accept-new --persist auto start
-ssh_proxy route <remote-host> --direction local-uses-remote --port <local-proxy-port>
+ssh_proxy up --target <remote-host> --local-proxy http://127.0.0.1:10808/ --json
 ```
 
-For the opposite direction:
+For the opposite direction or a remote listener:
 
 ```powershell
-ssh_proxy route <remote-host> `
-  --direction remote-uses-local `
-  --port <remote-proxy-port> `
-  --connect-mode reverse-link
+ssh_proxy up `
+  --target <remote-host> `
+  --local-proxy http://127.0.0.1:10808/ `
+  --remote-port <remote-proxy-port> `
+  --json
 ```
 
-The `route` command sends an intent to the local daemon. The daemon checks peer
-records, refreshes or bootstraps the remote daemon when needed, selects a
-transport, starts the route owner, and records persistent routes unless
-`--volatile` is used.
+The `up` command submits intent to the local daemon. The daemon checks the session job, adopts or boots the peer when needed, selects a transport, starts the route owner, applies remote settings, and records persistent session state unless `--volatile` is used.
 
-## Installing Services
+## Installing Daemons
 
-Install the local user daemon:
+Install the local system daemon:
 
 ```powershell
-ssh_proxy service --scope user install
-ssh_proxy service status
+ssh_proxy daemon install --scope system --elevate
+ssh_proxy daemon status
 ```
 
-Install or refresh a remote daemon:
+Install or refresh a remote peer:
 
 ```powershell
 ssh_proxy host <remote-host> --accept-new --persist auto start
 ssh_proxy host <remote-host> node-status
 ```
 
-`--persist auto` tries a user service manager first and falls back to a user
-supervisor when the platform lacks a service manager. Installs prefer user-level
-locations and avoid requiring root privileges.
-
 ## Route Directions
 
-`local-uses-remote` binds a listener on this machine and opens outbound targets
-from the remote node:
+`local-uses-remote` binds a listener on this machine and opens outbound targets from the remote node:
 
 ```text
 local application -> local listener -> remote node -> target
 ```
 
-`remote-uses-local` binds a listener on the remote node and opens outbound
-targets from this machine:
+`remote-uses-local` binds a listener on the remote node and opens outbound targets from this machine:
 
 ```text
 remote application -> remote listener -> local node -> target
@@ -72,8 +64,8 @@ remote application -> remote listener -> local node -> target
 
 When the remote node can connect back to a local peer transport, use
 `--connect-mode direct --local-peer <host>:<port>`. When it cannot, use
-`--connect-mode reverse-link`; the local daemon keeps a long-lived connection to
-the remote side and carries remote flows back through that connection.
+`--connect-mode reverse-link`; the daemon keeps a long-lived connection to the
+remote side and carries remote flows back through that connection.
 
 ## Transport Selection
 
@@ -84,6 +76,15 @@ the remote side and carries remote flows back through that connection.
 3. Explicitly allowed plain TCP for trusted or lab networks.
 4. SSH `direct-tcpip` to a remote daemon transport.
 5. SSH exec helper fallback.
+
+Route planning explains the decision chain:
+
+```powershell
+ssh_proxy route <remote-host> `
+  --direction remote-uses-local `
+  --port <remote-proxy-port> `
+  --explain
+```
 
 Route planning explains the decision chain:
 
