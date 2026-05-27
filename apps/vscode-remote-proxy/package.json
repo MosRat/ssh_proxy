@@ -2,7 +2,7 @@
   "name": "vscode-remote-proxy",
   "displayName": "Remote Proxy Auto Forward",
   "description": "Automatically reverse-forward a local proxy into VS Code Remote SSH and apply proxy settings for terminals, extensions, and Git.",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "publisher": "MosRat-2333",
   "license": "MIT",
   "icon": "assets/icon.png",
