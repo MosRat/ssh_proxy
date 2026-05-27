@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::{cli, route};
+use crate::cli;
 
 use super::{
     NodeManager, NodeRequest,

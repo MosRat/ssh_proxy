@@ -259,12 +259,6 @@ impl DaemonScope {
     }
 }
 
-impl UpArgs {
-    pub fn route_key(&self) -> &str {
-        self.workspace.as_deref().unwrap_or(&self.target)
-    }
-}
-
 impl VscodeUpArgs {
     pub fn into_up_args(self) -> UpArgs {
         UpArgs {

@@ -388,15 +388,6 @@ impl NodeRequest {
         }
     }
 
-    pub(crate) fn job_status(id: String) -> Self {
-        Self {
-            api_version: Some(NODE_CONTROL_VERSION),
-            cmd: "job_status".to_string(),
-            id: Some(id),
-            ..Self::default()
-        }
-    }
-
     pub(crate) fn job_events(id: Option<String>) -> Self {
         Self {
             api_version: Some(NODE_CONTROL_VERSION),
