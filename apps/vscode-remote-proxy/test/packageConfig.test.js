@@ -27,6 +27,18 @@ const requiredSettings = {
     configRead: "config.get<boolean>('sshProxy.autoInstallLocalService', true)",
     typeField: 'readonly sshProxyAutoInstallLocalService: boolean;',
   },
+  'remoteProxy.sshProxy.allowElevationPrompt': {
+    type: 'boolean',
+    default: true,
+    configRead: "config.get<boolean>('sshProxy.allowElevationPrompt', true)",
+    typeField: 'readonly sshProxyAllowElevationPrompt: boolean;',
+  },
+  'remoteProxy.sshProxy.preferPersistentService': {
+    type: 'boolean',
+    default: true,
+    configRead: "config.get<boolean>('sshProxy.preferPersistentService', true)",
+    typeField: 'readonly sshProxyPreferPersistentService: boolean;',
+  },
   'remoteProxy.sshProxy.connectMode': {
     type: 'string',
     default: 'reverse-link',

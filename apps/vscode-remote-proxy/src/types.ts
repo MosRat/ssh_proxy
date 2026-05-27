@@ -41,6 +41,8 @@ export interface RemoteProxyConfig {
   readonly sshArgs: readonly string[];
   readonly sshProxyExecutable: string;
   readonly sshProxyAutoInstallLocalService: boolean;
+  readonly sshProxyAllowElevationPrompt: boolean;
+  readonly sshProxyPreferPersistentService: boolean;
   readonly sshProxyConnectMode: SshProxyConnectMode;
   readonly sshProxyRouteVolatile: boolean;
   readonly sshProxyRemoteSetup: RemoteSetupMode;

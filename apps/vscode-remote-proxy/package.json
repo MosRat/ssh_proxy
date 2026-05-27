@@ -318,6 +318,16 @@
           "default": true,
           "description": "Probe existing service scopes first, then repair or install the local ssh_proxy service before creating a kernel route."
         },
+        "remoteProxy.sshProxy.allowElevationPrompt": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow interactive Remote Proxy commands to prompt for elevated service install or update when required. Auto-start never prompts for elevation."
+        },
+        "remoteProxy.sshProxy.preferPersistentService": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prefer an existing or repairable persistent ssh_proxy service before starting a session-owned daemon."
+        },
         "remoteProxy.sshProxy.connectMode": {
           "type": "string",
           "enum": [
@@ -472,7 +482,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "kernel:stage": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/stage-vscode-extension-binaries.ps1",
-    "test": "npm run compile && node --test test/sshProxyRouteArgs.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/commandDefinitions.test.js test/proxyLeaseRecord.test.js test/proxyLease.test.js test/portPersistence.test.js test/reliabilityPolicy.test.js test/healthMonitor.test.js test/startupCoordinator.test.js test/remoteProxyMenu.test.js test/quickPickItems.test.js test/diagnosticsPresenter.test.js test/statusDisplay.test.js test/remoteSetupScripts.test.js test/remoteSetupReady.test.js test/remoteCommandRunnerUtils.test.js test/remoteSetupRunnerPolicy.test.js test/routeOwnership.test.js test/sshProxyDiscovery.test.js",
+    "test": "npm run compile && node --test test/sshProxyRouteArgs.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/kernelRecoveryCoordinator.test.js test/packageConfig.test.js test/commandDefinitions.test.js test/proxyLeaseRecord.test.js test/proxyLease.test.js test/portPersistence.test.js test/reliabilityPolicy.test.js test/healthMonitor.test.js test/startupCoordinator.test.js test/remoteProxyMenu.test.js test/quickPickItems.test.js test/diagnosticsPresenter.test.js test/statusDisplay.test.js test/remoteSetupScripts.test.js test/remoteSetupReady.test.js test/remoteCommandRunnerUtils.test.js test/remoteSetupRunnerPolicy.test.js test/routeOwnership.test.js test/sshProxyDiscovery.test.js",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "package:with-kernel": "npm run kernel:stage && vsce package",

@@ -35,6 +35,18 @@ export function buildSshProxyServiceInstallArgs(scope: 'auto' | 'user' | 'system
   return ['service', '--scope', scope, 'install'];
 }
 
+export function buildSshProxyServiceEnsureArgs(
+  scope: 'auto' | 'user' | 'system' = 'auto',
+  options: { readonly elevate?: boolean } = {},
+): string[] {
+  const args = ['service', '--scope', scope, '--json'];
+  if (options.elevate) {
+    args.push('--elevate');
+  }
+  args.push('ensure');
+  return args;
+}
+
 export function buildSshProxyNodeControlStatusArgs(connection: SshProxyControlConnection = {}): string[] {
   return buildSshProxyNodeControlArgs(connection, ['status']);
 }

@@ -12,6 +12,7 @@ import {
 import { buildSshProxyRouteArgs } from './sshProxyRouteArgs';
 import { resolveSshProxyExecutableCandidates, sshProxyUnavailableCandidatesMessage } from './sshProxyDiscovery';
 import { SshProxyControlConnection } from './sshProxyCliUtils';
+import { isPermissionDeniedMessage, KernelRecoveryCoordinator } from './kernelRecoveryCoordinator';
 import { shouldStopSshProxyRoute } from './routeOwnership';
 import {
   shutdownSshProxySessionDaemon,
@@ -36,8 +37,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
   private currentCli: SshProxyCli | undefined;
   private currentControl: SshProxyControlConnection | undefined;
   private sessionDaemon: SshProxySessionDaemon | undefined;
-  private localServiceInstallBlocked = false;
-  private localServiceInstallBlockedReason: string | undefined;
+  private readonly recovery = new KernelRecoveryCoordinator();
 
   public readonly onDidChange = this.changeEmitter.event;
 
@@ -133,7 +133,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       }
       const routeState = createSshProxyRouteState(started, proxy, config.sshProxyConnectMode);
       this.setSnapshot({ routeStart: started, routeState });
-      await this.refreshRouteStatus(cli, routeState.routeId, control);
+      await this.waitForRouteReadiness(cli, routeState.routeId, control);
       this.applyRouteState(proxy, this.snapshot.routeState ?? routeState);
 
       this.statusValue = 'running';
@@ -142,7 +142,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
         this.output.appendLine(`ssh_proxy route health: ${prettyJson(record.health)}`);
       }
     } catch (error) {
-      await this.stopSessionDaemon();
+      await this.stopSessionDaemonIfUnhealthy();
       this.lastErrorValue = error instanceof Error ? error.message : String(error);
       this.statusValue = 'failed';
       this.changeEmitter.fire();
@@ -218,42 +218,48 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       return reusedSession;
     }
 
+    if (!config.sshProxyPreferPersistentService) {
+      return this.startSessionDaemon(cli, 'persistent service preference is disabled for this window');
+    }
+
     const initialStatus = await this.readLocalServiceStatus(cli);
     this.setSnapshot({ serviceStatus: initialStatus });
     if (isSshProxyOk(initialStatus) === true) {
       this.output.appendLine('ssh_proxy local service is healthy; reusing default control endpoint');
-      return undefined;
+      return controlFromServiceStatus(initialStatus);
     }
 
     if (!config.sshProxyAutoInstallLocalService) {
       return this.startSessionDaemon(cli, `local service is not healthy and auto-install is disabled: ${prettyJson(initialStatus)}`);
     }
 
-    if (this.localServiceInstallBlocked) {
+    if (this.recovery.isBlocked('persistent-service-install')) {
       return this.startSessionDaemon(
         cli,
-        `local service install is blocked for this session: ${this.localServiceInstallBlockedReason ?? 'previous permission failure'}; status=${prettyJson(initialStatus)}`,
+        `local service install is blocked for this session: ${this.recovery.reason('persistent-service-install') ?? 'previous permission failure'}; status=${prettyJson(initialStatus)}`,
       );
     }
 
-    this.output.appendLine('ssh_proxy local service is not healthy; attempting auto repair/install');
+    this.output.appendLine('ssh_proxy local service is not healthy; attempting resolver-driven ensure');
     try {
-      await cli.serviceInstall('auto');
+      const ensured = await cli.serviceEnsureJson('auto', { elevate: false });
+      this.setSnapshot({ serviceStatus: ensured });
+      if (isSshProxyOk(ensured) === true) {
+        this.output.appendLine('ssh_proxy local service is healthy after ensure; reusing selected control endpoint');
+        return controlFromServiceStatus(ensured);
+      }
+      const nextAction = asString(asRecord(ensured)?.next_action);
+      if (nextAction === 'session_daemon' || nextAction === 'install_system_elevated') {
+        return this.startSessionDaemon(cli, `service ensure selected ${nextAction}: ${prettyJson(ensured)}`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isPermissionDeniedMessage(message)) {
-        this.localServiceInstallBlocked = true;
-        this.localServiceInstallBlockedReason = message;
+        this.recovery.recordServiceFailure(message);
       }
       return this.startSessionDaemon(cli, `auto service ensure failed: ${message}`);
     }
-    const repairedStatus = await this.readLocalServiceStatus(cli);
-    this.setSnapshot({ serviceStatus: repairedStatus });
-    if (isSshProxyOk(repairedStatus) !== true) {
-      return this.startSessionDaemon(cli, `local service is still not healthy after install: ${prettyJson(repairedStatus)}`);
-    }
-    this.output.appendLine('ssh_proxy local service is healthy after repair; reusing default control endpoint');
-    return undefined;
+    return this.startSessionDaemon(cli, 'service ensure did not produce a reusable control endpoint');
   }
 
   private async reuseSessionDaemonIfHealthy(cli: SshProxyCli): Promise<SshProxyControlConnection | undefined> {
@@ -332,6 +338,25 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     }
   }
 
+  private async stopSessionDaemonIfUnhealthy(): Promise<void> {
+    const daemon = this.sessionDaemon;
+    if (!daemon || !this.currentCli) {
+      return;
+    }
+    if (daemon.child.exitCode !== null || daemon.child.signalCode !== null) {
+      await this.stopSessionDaemon();
+      return;
+    }
+    try {
+      const status = await this.currentCli.nodeControlStatusJson(daemon);
+      if (isSshProxyOk(status) !== true) {
+        await this.stopSessionDaemon();
+      }
+    } catch {
+      await this.stopSessionDaemon();
+    }
+  }
+
   private async refreshRouteStatus(cli: SshProxyCli, routeId: string, control: SshProxyControlConnection | undefined): Promise<void> {
     try {
       const routes = await cli.routesJson(control);
@@ -374,10 +399,29 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       ...update,
     };
   }
-}
 
-function isPermissionDeniedMessage(message: string): boolean {
-  return /access is denied|permission denied|not permitted|operation not permitted/i.test(message);
+  private async waitForRouteReadiness(cli: SshProxyCli, routeId: string, control: SshProxyControlConnection | undefined): Promise<void> {
+    const deadline = Date.now() + 12_000;
+    let lastState = 'unknown';
+    let lastError: string | undefined;
+    while (Date.now() <= deadline) {
+      await this.refreshRouteStatus(cli, routeId, control);
+      const liveRoute = this.snapshot.routeState?.liveRoute;
+      const state = routeLiveState(liveRoute);
+      lastState = state ?? lastState;
+      lastError = asString(asRecord(liveRoute)?.last_error)
+        ?? asString(asRecord(asRecord(liveRoute)?.stats)?.last_error)
+        ?? lastError;
+      if (state === 'error' || state === 'failed') {
+        throw new Error(`ssh_proxy route ${routeId} failed while starting: ${lastError ?? 'unknown error'}`);
+      }
+      if (state === 'running' || state === 'ready' || state === 'restarting') {
+        return;
+      }
+      await sleep(300);
+    }
+    this.output.appendLine(`ssh_proxy route ${routeId} readiness still ${lastState}; continuing to remote port verification`);
+  }
 }
 
 function prettyJson(value: unknown): string {
@@ -390,4 +434,50 @@ function prettyJson(value: unknown): string {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function controlFromServiceStatus(status: unknown): SshProxyControlConnection | undefined {
+  const record = asRecord(status);
+  const selected = asRecord(record?.selected_control);
+  const selectedEndpoint = asString(selected?.endpoint)
+    ?? asString(asRecord(selected?.selected)?.endpoint)
+    ?? asString(asRecord(selected?.control)?.endpoint);
+  if (selectedEndpoint) {
+    return {
+      endpoint: selectedEndpoint,
+      token: asString(selected?.token),
+    };
+  }
+
+  const control = asRecord(record?.control);
+  const endpoint = asString(record?.endpoint)
+    ?? asString(control?.endpoint)
+    ?? asString(asRecord(record?.service)?.endpoint);
+  if (endpoint) {
+    return {
+      endpoint,
+      token: asString(record?.token) ?? asString(control?.token),
+    };
+  }
+
+  return undefined;
+}
+
+function routeLiveState(liveRoute: unknown): string | undefined {
+  const record = asRecord(liveRoute);
+  const stats = asRecord(record?.stats);
+  const runtime = asRecord(record?.runtime);
+  const health = asRecord(record?.health);
+  return asString(record?.state)
+    ?? asString(stats?.state)
+    ?? asString(runtime?.state)
+    ?? asString(health?.state);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

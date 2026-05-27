@@ -261,10 +261,11 @@ class RemoteProxyController implements vscode.Disposable {
             this.forwarder = backend;
           }
 
+          const backendConfig = this.configForBackend(config, backend);
           try {
-            reused = await this.tryReuseLease(config, sshHost, targetKey);
-            applied = reused ?? await this.startForwardOnAvailablePort(config, sshHost, targetKey, local);
-            await this.setup.applyAll(config, sshHost, applied);
+            reused = await this.tryReuseLease(backendConfig, sshHost, targetKey);
+            applied = reused ?? await this.startForwardOnAvailablePort(backendConfig, sshHost, targetKey, local);
+            await this.setup.applyAll(backendConfig, sshHost, applied);
             break;
           } catch (error) {
             lastError = error;
@@ -485,10 +486,11 @@ class RemoteProxyController implements vscode.Disposable {
     this.output.appendLine(snapshot.lines.join('\n'));
 
     const config = readConfig();
+    const setupConfig = this.configForBackend(config, this.forwarder);
     const sshHost = this.forwarder.currentSshHost;
     if (sshHost && snapshot.proxy && shouldVerifyRemoteForward(this.forwarder.status, snapshot.proxy, sshHost)) {
       try {
-        await this.setup.verifyForward(config, sshHost, snapshot.proxy);
+        await this.setup.verifyForward(setupConfig, sshHost, snapshot.proxy);
         this.output.appendLine(remoteForwardReachableLine(snapshot.proxy));
       } catch (error) {
         this.output.appendLine(remoteForwardFailureLine(error));
@@ -821,7 +823,8 @@ class RemoteProxyController implements vscode.Disposable {
     this.lastHealthCheckAt = now;
 
     try {
-      await this.setup.verifyForward(config, this.forwarder.currentSshHost, this.forwarder.appliedProxy);
+      const setupConfig = this.configForBackend(config, this.forwarder);
+      await this.setup.verifyForward(setupConfig, this.forwarder.currentSshHost, this.forwarder.appliedProxy);
       if (this.healthFailures > 0) {
         this.output.appendLine(`Proxy health check recovered after ${this.healthFailures} failed attempt(s).`);
       }
@@ -901,5 +904,15 @@ class RemoteProxyController implements vscode.Disposable {
       kernelStatus: this.getKernelStatus(),
       lastError: this.forwarder.lastError,
     }, text);
+  }
+
+  private configForBackend(config: RemoteProxyConfig, backend: ForwardingBackend): RemoteProxyConfig {
+    if (backend !== this.openSshBackend || config.sshProxyRemoteSetup === 'openssh') {
+      return config;
+    }
+    return {
+      ...config,
+      sshProxyRemoteSetup: 'openssh',
+    };
   }
 }

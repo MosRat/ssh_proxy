@@ -4,6 +4,7 @@ import {
   buildSshProxyNodeControlShutdownArgs,
   buildSshProxyNodeControlStatusArgs,
   buildSshProxyNodeDaemonArgs,
+  buildSshProxyServiceEnsureArgs,
   buildSshProxyServiceInstallArgs,
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
@@ -75,6 +76,16 @@ export class SshProxyCli {
   public async serviceInstall(scope: 'auto' | 'user' | 'system' = 'auto'): Promise<void> {
     await this.run(buildSshProxyServiceInstallArgs(scope), undefined, {
       label: 'ssh_proxy service install',
+      timeoutMs: SERVICE_INSTALL_TIMEOUT_MS,
+    });
+  }
+
+  public async serviceEnsureJson(
+    scope: 'auto' | 'user' | 'system' = 'auto',
+    options: { readonly elevate?: boolean } = {},
+  ): Promise<unknown> {
+    return this.runJson(buildSshProxyServiceEnsureArgs(scope, options), undefined, {
+      label: 'ssh_proxy service ensure',
       timeoutMs: SERVICE_INSTALL_TIMEOUT_MS,
     });
   }
