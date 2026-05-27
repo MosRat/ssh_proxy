@@ -4,6 +4,8 @@ export type SupportedRemoteKind = 'ssh' | 'wsl' | 'dev-container' | 'none' | 'ot
 export type ForwardingBackendKind = 'auto' | 'ssh_proxy' | 'openssh';
 export type RemoteSetupMode = 'auto' | 'ssh_proxy' | 'openssh';
 export type SshProxyConnectMode = 'auto' | 'reverse-link' | 'direct';
+export type SshProxyOpenSshFallbackPolicy = 'final' | 'disabled' | 'legacy-auto';
+export type SshProxyBrokerMode = 'auto' | 'persistent' | 'session-only' | 'disabled';
 
 export interface LocalProxy {
   readonly url: string;
@@ -43,6 +45,8 @@ export interface RemoteProxyConfig {
   readonly sshProxyAutoInstallLocalService: boolean;
   readonly sshProxyAllowElevationPrompt: boolean;
   readonly sshProxyPreferPersistentService: boolean;
+  readonly sshProxyOpenSshFallbackPolicy: SshProxyOpenSshFallbackPolicy;
+  readonly sshProxyBrokerMode: SshProxyBrokerMode;
   readonly sshProxyConnectMode: SshProxyConnectMode;
   readonly sshProxyRouteVolatile: boolean;
   readonly sshProxyRemoteSetup: RemoteSetupMode;

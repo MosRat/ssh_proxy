@@ -328,6 +328,27 @@
           "default": true,
           "description": "Prefer an existing or repairable persistent ssh_proxy service before starting a session-owned daemon."
         },
+        "remoteProxy.sshProxy.openSshFallbackPolicy": {
+          "type": "string",
+          "enum": [
+            "final",
+            "disabled",
+            "legacy-auto"
+          ],
+          "default": "final",
+          "description": "Controls when OpenSSH can be used after the Rust kernel path. The default uses OpenSSH only as the final fallback."
+        },
+        "remoteProxy.sshProxy.brokerMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "persistent",
+            "session-only",
+            "disabled"
+          ],
+          "default": "auto",
+          "description": "Controls how the kernel backend selects persistent broker service, session daemon, or direct control endpoints."
+        },
         "remoteProxy.sshProxy.connectMode": {
           "type": "string",
           "enum": [

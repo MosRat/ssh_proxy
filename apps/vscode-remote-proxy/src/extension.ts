@@ -154,6 +154,9 @@ class RemoteProxyController implements vscode.Disposable {
   private async buildForwardingBackendCandidates(config: RemoteProxyConfig): Promise<ForwardingBackend[]> {
     const preferred = await this.selectForwardingBackend(config);
     if (preferred === this.sshProxyBackend) {
+      if (config.sshProxyOpenSshFallbackPolicy === 'disabled') {
+        return [this.sshProxyBackend];
+      }
       return [this.sshProxyBackend, this.openSshBackend];
     }
     return [this.openSshBackend];

@@ -39,6 +39,20 @@ const requiredSettings = {
     configRead: "config.get<boolean>('sshProxy.preferPersistentService', true)",
     typeField: 'readonly sshProxyPreferPersistentService: boolean;',
   },
+  'remoteProxy.sshProxy.openSshFallbackPolicy': {
+    type: 'string',
+    default: 'final',
+    enum: ['final', 'disabled', 'legacy-auto'],
+    configRead: "config.get<'final' | 'disabled' | 'legacy-auto'>('sshProxy.openSshFallbackPolicy', 'final')",
+    typeField: 'readonly sshProxyOpenSshFallbackPolicy: SshProxyOpenSshFallbackPolicy;',
+  },
+  'remoteProxy.sshProxy.brokerMode': {
+    type: 'string',
+    default: 'auto',
+    enum: ['auto', 'persistent', 'session-only', 'disabled'],
+    configRead: "config.get<'auto' | 'persistent' | 'session-only' | 'disabled'>('sshProxy.brokerMode', 'auto')",
+    typeField: 'readonly sshProxyBrokerMode: SshProxyBrokerMode;',
+  },
   'remoteProxy.sshProxy.connectMode': {
     type: 'string',
     default: 'reverse-link',
@@ -99,6 +113,8 @@ test('reads ssh_proxy kernel settings into the typed config object', () => {
   assert.ok(typesSource.includes("export type ForwardingBackendKind = 'auto' | 'ssh_proxy' | 'openssh';"));
   assert.ok(typesSource.includes("export type RemoteSetupMode = 'auto' | 'ssh_proxy' | 'openssh';"));
   assert.ok(typesSource.includes("export type SshProxyConnectMode = 'auto' | 'reverse-link' | 'direct';"));
+  assert.ok(typesSource.includes("export type SshProxyOpenSshFallbackPolicy = 'final' | 'disabled' | 'legacy-auto';"));
+  assert.ok(typesSource.includes("export type SshProxyBrokerMode = 'auto' | 'persistent' | 'session-only' | 'disabled';"));
 });
 
 test('keeps explicit scripts for staging bundled ssh_proxy binaries', () => {

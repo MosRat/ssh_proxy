@@ -26,6 +26,8 @@ export function readConfig(): RemoteProxyConfig {
     sshProxyAutoInstallLocalService: config.get<boolean>('sshProxy.autoInstallLocalService', true),
     sshProxyAllowElevationPrompt: config.get<boolean>('sshProxy.allowElevationPrompt', true),
     sshProxyPreferPersistentService: config.get<boolean>('sshProxy.preferPersistentService', true),
+    sshProxyOpenSshFallbackPolicy: config.get<'final' | 'disabled' | 'legacy-auto'>('sshProxy.openSshFallbackPolicy', 'final'),
+    sshProxyBrokerMode: config.get<'auto' | 'persistent' | 'session-only' | 'disabled'>('sshProxy.brokerMode', 'auto'),
     sshProxyConnectMode: config.get<'auto' | 'reverse-link' | 'direct'>('sshProxy.connectMode', 'reverse-link'),
     sshProxyRouteVolatile: config.get<boolean>('sshProxy.routeVolatile', true),
     sshProxyRemoteSetup: config.get<'auto' | 'ssh_proxy' | 'openssh'>('sshProxy.remoteSetup', 'auto'),

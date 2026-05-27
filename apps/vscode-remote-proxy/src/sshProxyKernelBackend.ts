@@ -218,7 +218,16 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       return reusedSession;
     }
 
-    if (!config.sshProxyPreferPersistentService) {
+    if (config.sshProxyBrokerMode === 'session-only') {
+      return this.startSessionDaemon(cli, 'broker mode is session-only for this window');
+    }
+
+    if (config.sshProxyBrokerMode === 'disabled') {
+      this.output.appendLine('ssh_proxy broker mode is disabled; using the CLI default control endpoint');
+      return undefined;
+    }
+
+    if (!config.sshProxyPreferPersistentService && config.sshProxyBrokerMode !== 'persistent') {
       return this.startSessionDaemon(cli, 'persistent service preference is disabled for this window');
     }
 
