@@ -1,4 +1,32 @@
 use super::*;
+use clap::CommandFactory;
+
+#[test]
+fn production_help_hides_legacy_entrypoints() {
+    let help = Cli::command().render_long_help().to_string();
+
+    for visible in ["daemon", "up", "down", "status", "events", "doctor", "vscode"] {
+        assert!(help.contains(visible), "{visible} should stay visible in help");
+    }
+
+    for hidden in [
+        "proxy",
+        "route",
+        "reverse",
+        "remote",
+        "node",
+        "install-remote",
+        "config",
+        "control",
+        "host",
+        "service",
+    ] {
+        assert!(
+            !help.contains(&format!("  {hidden}")),
+            "{hidden} should be hidden from production help"
+        );
+    }
+}
 
 #[test]
 fn host_exec_accepts_stdin_json_shape() {

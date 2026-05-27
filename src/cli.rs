@@ -55,23 +55,24 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    #[command(about = "Run local SOCKS5H/HTTP proxy and connect a remote peer")]
+    #[command(hide = true, about = "Internal compatibility proxy entrypoint")]
     Proxy(ProxyArgs),
-    #[command(about = "Create a daemon-owned proxy route with automatic defaults")]
+    #[command(hide = true, about = "Internal route compatibility entrypoint")]
     Route(RouteArgs),
-    #[command(about = "Run a SOCKS5H listener on the SSH host and use this machine as egress")]
+    #[command(hide = true, about = "Internal reverse compatibility entrypoint")]
     Reverse(ReverseArgs),
-    #[command(about = "Run the remote helper. Usually started by the local proxy over SSH")]
+    #[command(hide = true, about = "Internal remote helper entrypoint")]
     Remote(RemoteArgs),
-    #[command(about = "Run or control the symmetric ssh_proxy node daemon")]
+    #[command(hide = true, about = "Internal node daemon compatibility entrypoint")]
     Node(NodeArgs),
     #[command(
+        hide = true,
         about = "Copy this executable to the target host and optionally install a daemon command"
     )]
     InstallRemote(InstallRemoteArgs),
-    #[command(about = "Show local TOML configuration path or sample")]
+    #[command(hide = true, about = "Internal configuration compatibility entrypoint")]
     Config(ConfigArgs),
-    #[command(about = "Talk to a running local ssh_proxy controller")]
+    #[command(hide = true, about = "Internal controller compatibility entrypoint")]
     Control(ControlArgs),
     #[command(about = "Manage or run the Docker-like local ssh_proxy daemon")]
     Daemon(DaemonArgs),
@@ -87,9 +88,9 @@ pub enum Commands {
     Doctor(DoctorArgs),
     #[command(about = "VS Code Remote SSH integration commands")]
     Vscode(VscodeArgs),
-    #[command(about = "Manage the remote host helper service through SSH")]
+    #[command(hide = true, about = "Internal remote host helper compatibility entrypoint")]
     Host(HostArgs),
-    #[command(about = "Install or print local service integration commands")]
+    #[command(hide = true, about = "Internal service compatibility entrypoint")]
     Service(ServiceArgs),
 }
 

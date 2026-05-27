@@ -102,18 +102,33 @@ fn route_explain_prints_expanded_plan() {
 }
 
 #[test]
-fn cli_exposes_daemon_host_and_service_commands() {
+fn cli_help_exposes_only_production_daemon_commands() {
     let output = Command::new(env!("CARGO_BIN_EXE_ssh_proxy"))
         .arg("--help")
         .output()
         .expect("failed to run ssh_proxy");
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("help should be utf-8");
-    assert!(help.contains("daemon"));
-    assert!(help.contains("node"));
-    assert!(help.contains("reverse"));
-    assert!(help.contains("host"));
-    assert!(help.contains("service"));
+    for visible in ["daemon", "up", "down", "status", "events", "doctor", "vscode"] {
+        assert!(help.contains(visible), "{visible} should be visible");
+    }
+    for hidden in [
+        "proxy",
+        "route",
+        "reverse",
+        "remote",
+        "node",
+        "install-remote",
+        "config",
+        "control",
+        "host",
+        "service",
+    ] {
+        assert!(
+            !help.contains(&format!("  {hidden}")),
+            "{hidden} should be hidden from production help"
+        );
+    }
 }
 
 #[test]
