@@ -9,6 +9,7 @@ import {
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
   buildSshProxyStopRouteArgs,
+  buildSshProxyVscodeStatusArgs,
   buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
   normalizeSshProxyExecutable,
@@ -116,6 +117,16 @@ export class SshProxyCli {
     return this.runJson(buildSshProxyVscodeUpArgs(options), undefined, {
       label: 'ssh_proxy vscode up',
       timeoutMs: ROUTE_TIMEOUT_MS,
+    });
+  }
+
+  public async vscodeStatusJson(options: {
+    readonly workspace?: string;
+    readonly target?: string;
+  }): Promise<unknown> {
+    return this.runJson(buildSshProxyVscodeStatusArgs(options), undefined, {
+      label: 'ssh_proxy vscode status',
+      timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
     });
   }
 

@@ -90,6 +90,21 @@ export function buildSshProxyVscodeUpArgs(options: {
   ];
 }
 
+export function buildSshProxyVscodeStatusArgs(options: {
+  readonly workspace?: string;
+  readonly target?: string;
+}): string[] {
+  const args = ['vscode', 'status'];
+  if (options.workspace) {
+    args.push('--workspace', options.workspace);
+  }
+  if (options.target) {
+    args.push('--target', options.target);
+  }
+  args.push('--json');
+  return args;
+}
+
 export function buildSshProxyNodeDaemonArgs(options: {
   readonly control: string;
   readonly transport: string;

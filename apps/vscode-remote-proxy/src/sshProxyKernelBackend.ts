@@ -130,7 +130,12 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       }
       const routeState = createSshProxyRouteState(started, proxy, config.sshProxyConnectMode);
       this.setSnapshot({ routeStart: started, routeState });
-      await this.waitForRouteReadiness(cli, routeState.routeId, undefined);
+      await this.waitForProxySessionReadiness(
+        cli,
+        proxy.workspaceId ?? sshHost,
+        sshHost,
+        routeState,
+      );
       this.applyRouteState(proxy, this.snapshot.routeState ?? routeState);
 
       this.statusValue = 'running';
@@ -427,6 +432,45 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       await sleep(300);
     }
     this.output.appendLine(`ssh_proxy route ${routeId} readiness still ${lastState}; continuing to remote port verification`);
+  }
+
+  private async waitForProxySessionReadiness(
+    cli: SshProxyCli,
+    workspace: string,
+    target: string,
+    initialRouteState: SshProxyRouteState,
+  ): Promise<void> {
+    const deadline = Date.now() + 60_000;
+    let lastPhase = 'queued';
+    let lastError: string | undefined;
+    while (Date.now() <= deadline) {
+      const status = await cli.vscodeStatusJson({ workspace, target });
+      this.setSnapshot({ serviceStatus: status, lastRefreshAt: Date.now() });
+      const record = asRecord(status);
+      const job = asRecord(record?.job);
+      const route = asRecord(record?.route);
+      const state = asString(job?.state) ?? asString(record?.health) ?? 'unknown';
+      lastPhase = asString(job?.phase) ?? lastPhase;
+      lastError = asString(job?.last_error) ?? asString(record?.last_error) ?? lastError;
+      if (route || record?.remote_url) {
+        this.setSnapshot({
+          routeState: {
+            ...initialRouteState,
+            remoteUrl: asString(record?.remote_url) ?? asString(route?.remote_url) ?? initialRouteState.remoteUrl,
+            health: job ?? route ?? initialRouteState.health,
+            liveRoute: route,
+          },
+        });
+      }
+      if (state === 'failed' || state === 'cancelled') {
+        throw new Error(`ssh_proxy daemon job failed in ${lastPhase}: ${lastError ?? 'unknown error'}`);
+      }
+      if (state === 'healthy' || record?.health === 'healthy') {
+        return;
+      }
+      await sleep(500);
+    }
+    throw new Error(`ssh_proxy daemon job did not become healthy; last phase=${lastPhase}${lastError ? ` error=${lastError}` : ''}`);
   }
 }
 

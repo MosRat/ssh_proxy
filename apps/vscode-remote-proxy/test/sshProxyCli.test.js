@@ -10,6 +10,7 @@ const {
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
   buildSshProxyStopRouteArgs,
+  buildSshProxyVscodeStatusArgs,
   buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
   normalizeSshProxyExecutable,
@@ -57,6 +58,10 @@ test('builds JSON command shapes consumed by the extension', () => {
       'reverse-link',
       '--json',
     ],
+  );
+  assert.deepEqual(
+    buildSshProxyVscodeStatusArgs({ workspace: 'window-a', target: '126' }),
+    ['vscode', 'status', '--workspace', 'window-a', '--target', '126', '--json'],
   );
 });
 
