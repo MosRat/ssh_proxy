@@ -287,6 +287,10 @@ impl NodeManager {
                 "fallback_reason": task.fallback_reason.clone(),
                 "task_finished": task.handle.is_finished(),
                 "runtime": task.spec.runtime_metadata(),
+                "state": stats.state.clone(),
+                "last_error": stats.last_error.clone(),
+                "started_at": stats.started_at_unix,
+                "updated_at": stats.updated_at_unix,
                 "stats": stats,
                 "link": link,
             }));

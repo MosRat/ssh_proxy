@@ -58,7 +58,7 @@ pub(super) fn route_response_with_plan(response: &str, plan: Value) -> Result<St
         object.insert(
             "health".to_string(),
             json!({
-                "state": "starting",
+                "state": "accepted",
                 "message": "route accepted; query `ssh_proxy node control routes` for live health"
             }),
         );

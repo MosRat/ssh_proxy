@@ -125,7 +125,6 @@ impl NodeManager {
                 route_intent::route_response_with_plan(&response, plan)
             }
             cli::RouteDirection::RemoteUsesLocal => {
-                self.ensure_peer_for_route(&args).await?;
                 let config = self.config.lock().await.clone();
                 let decision = route::remote_use_decision(&args, &config)?;
                 match decision.plan {
@@ -146,6 +145,7 @@ impl NodeManager {
                         route_intent::route_response_with_plan(&response, plan)
                     }
                     route::RemoteUsePlan::Direct(local_peer) => {
+                        self.ensure_peer_for_route(&args).await?;
                         let token = self.ensure_local_transport_token().await?;
                         let config = self.config.lock().await.clone();
                         let host_args =
@@ -603,7 +603,7 @@ mod tests {
             value["cleanup_command"],
             "ssh_proxy node control stop-route vscode-remote-proxy-edge"
         );
-        assert_eq!(value["health"]["state"], "starting");
+        assert_eq!(value["health"]["state"], "accepted");
     }
 
     #[test]

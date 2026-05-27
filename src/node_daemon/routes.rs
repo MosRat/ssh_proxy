@@ -74,13 +74,13 @@ struct RouteStore {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RouteStats {
-    state: String,
-    attempts: u64,
-    restart_count: u64,
-    last_error: Option<String>,
-    last_event: Option<String>,
-    started_at_unix: u64,
-    updated_at_unix: u64,
+    pub(super) state: String,
+    pub(super) attempts: u64,
+    pub(super) restart_count: u64,
+    pub(super) last_error: Option<String>,
+    pub(super) last_event: Option<String>,
+    pub(super) started_at_unix: u64,
+    pub(super) updated_at_unix: u64,
 }
 
 impl Default for RouteStats {
