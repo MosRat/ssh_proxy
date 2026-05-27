@@ -22,6 +22,10 @@ pub fn routes_path() -> Result<PathBuf> {
     Ok(app_home()?.join("routes.json"))
 }
 
+pub fn jobs_path() -> Result<PathBuf> {
+    Ok(app_home()?.join("jobs.json"))
+}
+
 pub fn certs_dir() -> Result<PathBuf> {
     Ok(app_home()?.join("certs"))
 }

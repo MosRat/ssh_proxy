@@ -124,6 +124,8 @@ async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Re
         "shutdown" => manager.shutdown().await,
         "nodes" | "node_list" | "node-list" => manager.nodes_json().await,
         "jobs" | "job_list" | "job-list" => manager.jobs_json().await,
+        "job_status" | "job-status" => manager.job_status_json(request).await,
+        "job_events" | "job-events" => manager.job_events_json(request).await,
         "node_ensure" | "node-ensure" => manager.node_ensure(request).await,
         "node_start" | "node-start" => manager.node_start(request).await,
         "node_stop" | "node-stop" => manager.node_stop(request).await,

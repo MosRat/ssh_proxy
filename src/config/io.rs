@@ -18,6 +18,10 @@ pub fn routes_path() -> Result<PathBuf> {
     paths::routes_path()
 }
 
+pub fn jobs_path() -> Result<PathBuf> {
+    paths::jobs_path()
+}
+
 pub fn certs_dir() -> Result<PathBuf> {
     paths::certs_dir()
 }

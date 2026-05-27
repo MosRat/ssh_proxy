@@ -49,12 +49,52 @@ impl NodeManager {
 
     pub(super) async fn jobs_json(&self) -> Result<String> {
         let status = self.status_value().await?;
+        let job_values = self.jobs.jobs_value().await;
+        let mut daemon_jobs = job_values.as_array().cloned().unwrap_or_default();
+        daemon_jobs.extend(jobs::route_jobs_from_status(&status));
         response_line(json!({
             "ok": true,
             "kind": "jobs",
             "daemon_api": "v0.3",
-            "jobs": jobs::route_jobs_from_status(&status),
+            "jobs": daemon_jobs,
             "message": "daemon jobs are the stable v0.3 progress surface",
+        }))
+    }
+
+    pub(super) async fn job_events_json(&self, request: NodeRequest) -> Result<String> {
+        let events = self
+            .jobs
+            .events(request.id.as_deref())
+            .await
+            .into_iter()
+            .map(|event| serde_json::to_value(event).unwrap_or_else(|_| json!({})))
+            .collect::<Vec<_>>();
+        response_line(json!({
+            "ok": true,
+            "kind": "job_events",
+            "daemon_api": "v0.3",
+            "job_id": request.id,
+            "events": events,
+        }))
+    }
+
+    pub(super) async fn job_status_json(&self, request: NodeRequest) -> Result<String> {
+        let id = request
+            .id
+            .ok_or_else(|| anyhow!("job_status requires id"))?;
+        let job = self.jobs.get(&id).await;
+        let ok = job.is_some();
+        let code = if ok {
+            serde_json::Value::Null
+        } else {
+            json!("not_found")
+        };
+        response_line(json!({
+            "ok": ok,
+            "kind": "job_status",
+            "daemon_api": "v0.3",
+            "job": job.map(|job| job.to_value()),
+            "code": code,
         }))
     }
 

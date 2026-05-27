@@ -31,6 +31,7 @@ mod quic_transport;
 mod routes;
 mod transport;
 
+use jobs::JobRegistry;
 use routes::RouteTask;
 
 pub(crate) use args::{proxy_args_from_node_forward, reverse_args_from_node_reverse};
@@ -144,6 +145,7 @@ struct NodeManager {
     routes: Mutex<HashMap<String, RouteTask>>,
     route_store_path: PathBuf,
     route_autostart: bool,
+    jobs: JobRegistry,
     peer_reports: Mutex<HashMap<String, Value>>,
 }
 
@@ -166,6 +168,7 @@ impl NodeManager {
             .unwrap_or(config::routes_path()?);
         let route_autostart =
             !args.no_route_autostart && config.daemon.route_autostart.unwrap_or(true);
+        let jobs = JobRegistry::load(config::jobs_path()?);
         let transport = args.transport.or(config.daemon.transport_listen);
         let tls_transport = args.tls_transport.or(config.daemon.tls_transport_listen);
         let quic_transport = args.quic_transport.or(config.daemon.quic_transport_listen);
@@ -230,6 +233,7 @@ impl NodeManager {
             routes: Mutex::new(HashMap::new()),
             route_store_path,
             route_autostart,
+            jobs,
             peer_reports: Mutex::new(HashMap::new()),
         })
     }
@@ -302,7 +306,13 @@ impl NodeManager {
             }));
         }
         drop(routes);
+        let stored_jobs = self.jobs.list().await;
         let route_jobs = jobs::route_jobs_from_status(&json!({ "routes": running_routes.clone() }));
+        let mut daemon_jobs = stored_jobs
+            .iter()
+            .map(jobs::JobRecord::to_value)
+            .collect::<Vec<_>>();
+        daemon_jobs.extend(route_jobs.clone());
         let reports = self.peer_reports.lock().await.clone();
         let (node_id, node_name, profiles, peers, token_metadata) = {
             let config = self.config.lock().await;
@@ -335,10 +345,13 @@ impl NodeManager {
             .as_ref()
             .and_then(|path| config::file_sha256_fingerprint(path));
         let has_token = self.token_value().is_some();
-        let daemon_status = jobs::daemon_status_block(&json!({
-            "ok": true,
-            "control": self.control_endpoint.to_string(),
-        }));
+        let daemon_status = jobs::daemon_status_block(
+            &json!({
+                "ok": true,
+                "control": self.control_endpoint.to_string(),
+            }),
+            &stored_jobs,
+        );
         Ok(json!({
             "api_version": control_protocol::NODE_CONTROL_VERSION,
             "ok": true,
@@ -386,7 +399,7 @@ impl NodeManager {
             "profiles": profiles,
             "peers": peers,
             "running": running,
-            "jobs": route_jobs,
+            "jobs": daemon_jobs,
             "routes": running_routes,
             "route_store": self.route_store_path,
             "route_autostart": self.route_autostart,
