@@ -122,6 +122,12 @@ async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Re
         "descriptor" | "describe" => manager.descriptor_json().await,
         "links" => manager.links_json().await,
         "shutdown" => manager.shutdown().await,
+        "nodes" | "node_list" | "node-list" => manager.nodes_json().await,
+        "jobs" | "job_list" | "job-list" => manager.jobs_json().await,
+        "node_ensure" | "node-ensure" => manager.node_ensure(request).await,
+        "node_start" | "node-start" => manager.node_start(request).await,
+        "node_stop" | "node-stop" => manager.node_stop(request).await,
+        "node_restart" | "node-restart" => manager.node_restart(request).await,
         "connect" => {
             let profile = request
                 .profile
@@ -145,6 +151,8 @@ async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Re
         "peer_list" | "peers" => manager.peers_json().await,
         "token_rotate" | "token-rotate" => manager.rotate_token().await,
         "peer_bootstrap" => manager.bootstrap_peer(request).await,
+        "peer_ensure" | "peer-ensure" => manager.ensure_peer(request).await,
+        "peer_update" | "peer-update" => manager.update_peer(request).await,
         "peer_refresh" => manager.refresh_peer(request).await,
         "peer_diff" | "peer-diff" => manager.diff_peer(request).await,
         "peer_reconcile" | "peer-reconcile" => manager.reconcile_peer(request).await,

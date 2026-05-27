@@ -579,6 +579,34 @@ fn node_daemon_materializes_identity_in_memory_and_lists_peers() {
     assert_eq!(peers_json["ok"], true);
     assert_eq!(peers_json["peers"].as_array().expect("peer array").len(), 0);
 
+    let nodes = run_control(&endpoint, &["nodes"]);
+    assert!(nodes.status.success());
+    let nodes_json: serde_json::Value = serde_json::from_slice(&nodes.stdout).expect("nodes json");
+    assert_eq!(nodes_json["ok"], true);
+    assert_eq!(nodes_json["kind"], "nodes");
+    assert_eq!(nodes_json["nodes"][0]["id"], "current");
+    assert_eq!(nodes_json["nodes"][0]["state"], "running");
+    assert!(
+        nodes_json["nodes"][0]["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .contains(&serde_json::json!("peer_ensure"))
+    );
+
+    let jobs = run_control(&endpoint, &["jobs"]);
+    assert!(jobs.status.success());
+    let jobs_json: serde_json::Value = serde_json::from_slice(&jobs.stdout).expect("jobs json");
+    assert_eq!(jobs_json["ok"], true);
+    assert_eq!(jobs_json["jobs"].as_array().expect("jobs array").len(), 0);
+
+    let ensured = run_control(&endpoint, &["node-ensure", "--scope", "session"]);
+    assert!(ensured.status.success());
+    let ensured_json: serde_json::Value =
+        serde_json::from_slice(&ensured.stdout).expect("node ensure json");
+    assert_eq!(ensured_json["ok"], true);
+    assert_eq!(ensured_json["requested_scope"], "session");
+    assert_eq!(ensured_json["next_action"], "reuse_current_daemon");
+
     stop_child(child, &endpoint);
     let _ = fs::remove_file(routes_path);
     let _ = fs::remove_dir_all(home);

@@ -235,7 +235,10 @@ impl NodeManager {
         Ok(())
     }
 
-    async fn bootstrap_peer_from_args(&self, args: cli::PeerBootstrapArgs) -> Result<String> {
+    pub(super) async fn bootstrap_peer_from_args(
+        &self,
+        args: cli::PeerBootstrapArgs,
+    ) -> Result<String> {
         let alias = args.alias.clone().unwrap_or_else(|| args.target.clone());
         let install_args = {
             let mut config = self.config.lock().await;
@@ -269,7 +272,10 @@ impl NodeManager {
         response_line(bootstrap::bootstrap_response(&alias, &result))
     }
 
-    async fn refresh_peer_from_args(&self, args: cli::PeerBootstrapArgs) -> Result<String> {
+    pub(super) async fn refresh_peer_from_args(
+        &self,
+        args: cli::PeerBootstrapArgs,
+    ) -> Result<String> {
         let alias = args.alias.clone().unwrap_or_else(|| args.target.clone());
         let install_args = {
             let config = self.config.lock().await;
@@ -351,7 +357,7 @@ impl NodeManager {
         response_line(bootstrap::token_rotation_response(&alias, &result))
     }
 
-    async fn peer_is_recorded(&self, target: &str) -> bool {
+    pub(super) async fn peer_is_recorded(&self, target: &str) -> bool {
         let config = self.config.lock().await;
         registry::peer_is_route_ready(&config, target)
     }

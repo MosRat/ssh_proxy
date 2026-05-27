@@ -23,6 +23,24 @@ pub(crate) async fn run(args: cli::NodeControlArgs, config: config::AppConfig) -
         cli::NodeControlCommand::Shutdown => NodeRequest::command("shutdown")
             .with_auth_token(auth_token)
             .to_line()?,
+        cli::NodeControlCommand::Nodes => NodeRequest::command("nodes")
+            .with_auth_token(auth_token)
+            .to_line()?,
+        cli::NodeControlCommand::Jobs => NodeRequest::command("jobs")
+            .with_auth_token(auth_token)
+            .to_line()?,
+        cli::NodeControlCommand::NodeEnsure { scope } => NodeRequest::node_ensure(scope)
+            .with_auth_token(auth_token)
+            .to_line()?,
+        cli::NodeControlCommand::NodeStart { id } => NodeRequest::node_start(id)
+            .with_auth_token(auth_token)
+            .to_line()?,
+        cli::NodeControlCommand::NodeStop { id } => NodeRequest::node_stop(id)
+            .with_auth_token(auth_token)
+            .to_line()?,
+        cli::NodeControlCommand::NodeRestart { id } => NodeRequest::node_restart(id)
+            .with_auth_token(auth_token)
+            .to_line()?,
         cli::NodeControlCommand::Links => NodeRequest::command("links")
             .with_auth_token(auth_token)
             .to_line()?,
@@ -73,6 +91,12 @@ pub(crate) async fn run(args: cli::NodeControlArgs, config: config::AppConfig) -
             .with_auth_token(auth_token)
             .to_line()?,
         cli::NodeControlCommand::PeerBootstrap(args) => NodeRequest::peer_bootstrap(args)
+            .with_auth_token(auth_token)
+            .to_line()?,
+        cli::NodeControlCommand::PeerEnsure(args) => NodeRequest::peer_ensure(args)
+            .with_auth_token(auth_token)
+            .to_line()?,
+        cli::NodeControlCommand::PeerUpdate(args) => NodeRequest::peer_update(args)
             .with_auth_token(auth_token)
             .to_line()?,
         cli::NodeControlCommand::PeerRefresh(args) => NodeRequest::peer_refresh(args)

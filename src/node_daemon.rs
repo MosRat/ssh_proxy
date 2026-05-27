@@ -24,6 +24,7 @@ mod args;
 mod control_client;
 mod control_protocol;
 mod control_server;
+mod management;
 mod peers;
 mod quic_transport;
 mod routes;

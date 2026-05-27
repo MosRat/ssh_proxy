@@ -238,8 +238,16 @@ fn node_control_help_exposes_symmetric_routes() {
     assert!(help.contains("restart-route"));
     assert!(help.contains("routes"));
     assert!(help.contains("peers"));
+    assert!(help.contains("nodes"));
+    assert!(help.contains("jobs"));
+    assert!(help.contains("node-ensure"));
+    assert!(help.contains("node-start"));
+    assert!(help.contains("node-stop"));
+    assert!(help.contains("node-restart"));
     assert!(help.contains("token-rotate"));
     assert!(help.contains("peer-bootstrap"));
+    assert!(help.contains("peer-ensure"));
+    assert!(help.contains("peer-update"));
     assert!(help.contains("peer-refresh"));
     assert!(help.contains("peer-diff"));
     assert!(help.contains("peer-reconcile"));

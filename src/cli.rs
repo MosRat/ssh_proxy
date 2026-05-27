@@ -13,8 +13,8 @@ mod install;
 pub use install::InstallRemoteArgs;
 mod node;
 pub use node::{
-    NodeArgs, NodeCommand, NodeControlArgs, NodeControlCommand, NodeDaemonArgs, NodeForwardArgs,
-    NodeReverseArgs, PeerBootstrapArgs,
+    NodeArgs, NodeCommand, NodeControlArgs, NodeControlCommand, NodeControlScope, NodeDaemonArgs,
+    NodeForwardArgs, NodeReverseArgs, PeerBootstrapArgs,
 };
 mod proxy;
 pub use proxy::ProxyArgs;

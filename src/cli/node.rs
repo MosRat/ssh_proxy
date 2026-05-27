@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, path::PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use crate::{control_socket, peer_transport};
@@ -102,6 +102,21 @@ pub enum NodeControlCommand {
     Status,
     Descriptor,
     Shutdown,
+    Nodes,
+    Jobs,
+    NodeEnsure {
+        #[arg(long, value_enum, default_value = "user")]
+        scope: NodeControlScope,
+    },
+    NodeStart {
+        id: String,
+    },
+    NodeStop {
+        id: String,
+    },
+    NodeRestart {
+        id: String,
+    },
     Connect {
         profile: String,
     },
@@ -121,6 +136,8 @@ pub enum NodeControlCommand {
     Peers,
     TokenRotate,
     PeerBootstrap(PeerBootstrapArgs),
+    PeerEnsure(PeerBootstrapArgs),
+    PeerUpdate(PeerBootstrapArgs),
     PeerRefresh(PeerBootstrapArgs),
     PeerDiff(PeerBootstrapArgs),
     PeerReconcile(PeerBootstrapArgs),
@@ -134,6 +151,24 @@ pub enum NodeControlCommand {
     Send {
         json: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeControlScope {
+    User,
+    System,
+    Session,
+}
+
+impl NodeControlScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::System => "system",
+            Self::Session => "session",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Parser)]

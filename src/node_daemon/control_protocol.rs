@@ -113,6 +113,8 @@ pub(crate) struct NodeRequest {
     pub(crate) connect_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) fallback_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) node_scope: Option<String>,
 }
 
 impl NodeRequest {
@@ -146,6 +148,42 @@ impl NodeRequest {
             api_version: Some(NODE_CONTROL_VERSION),
             cmd: "disconnect".to_string(),
             profile: Some(profile),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn node_ensure(scope: cli::NodeControlScope) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "node_ensure".to_string(),
+            node_scope: Some(scope.as_str().to_string()),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn node_start(id: String) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "node_start".to_string(),
+            id: Some(id),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn node_stop(id: String) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "node_stop".to_string(),
+            id: Some(id),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn node_restart(id: String) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "node_restart".to_string(),
+            id: Some(id),
             ..Self::default()
         }
     }
@@ -224,6 +262,24 @@ impl NodeRequest {
         Self {
             api_version: Some(NODE_CONTROL_VERSION),
             cmd: "peer_bootstrap".to_string(),
+            bootstrap: Some(bootstrap),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn peer_ensure(bootstrap: cli::PeerBootstrapArgs) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "peer_ensure".to_string(),
+            bootstrap: Some(bootstrap),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn peer_update(bootstrap: cli::PeerBootstrapArgs) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "peer_update".to_string(),
             bootstrap: Some(bootstrap),
             ..Self::default()
         }
