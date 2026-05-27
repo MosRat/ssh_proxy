@@ -320,12 +320,10 @@ impl NodeManager {
         }
         drop(routes);
         let stored_jobs = self.jobs.list().await;
-        let route_jobs = jobs::route_jobs_from_status(&json!({ "routes": running_routes.clone() }));
-        let mut daemon_jobs = stored_jobs
+        let daemon_jobs = stored_jobs
             .iter()
             .map(jobs::JobRecord::to_value)
             .collect::<Vec<_>>();
-        daemon_jobs.extend(route_jobs.clone());
         let reports = self.peer_reports.lock().await.clone();
         let (node_id, node_name, profiles, peers, token_metadata) = {
             let config = self.config.lock().await;

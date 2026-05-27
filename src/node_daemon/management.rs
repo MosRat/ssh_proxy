@@ -301,16 +301,13 @@ impl NodeManager {
     }
 
     pub(super) async fn jobs_json(&self) -> Result<String> {
-        let status = self.status_value().await?;
         let job_values = self.jobs.jobs_value().await;
-        let mut daemon_jobs = job_values.as_array().cloned().unwrap_or_default();
-        daemon_jobs.extend(jobs::route_jobs_from_status(&status));
         response_line(json!({
             "ok": true,
             "kind": "jobs",
             "daemon_api": "v0.3",
-            "jobs": daemon_jobs,
-            "message": "daemon jobs are the stable v0.3 progress surface",
+            "jobs": job_values,
+            "message": "proxy session jobs are the stable v0.3 progress surface",
         }))
     }
 
