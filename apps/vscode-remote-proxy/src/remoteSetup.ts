@@ -80,6 +80,39 @@ export class RemoteSetup {
     );
   }
 
+  public async verifyForwardReady(
+    config: RemoteProxyConfig,
+    sshHost: string,
+    proxy: AppliedProxy,
+    options: { readonly timeoutMs?: number; readonly pollMs?: number } = {},
+  ): Promise<void> {
+    const timeoutMs = Math.max(1000, options.timeoutMs ?? 8000);
+    const pollMs = Math.max(100, options.pollMs ?? 300);
+    const deadline = Date.now() + timeoutMs;
+    let attempt = 0;
+    let lastError: unknown;
+
+    while (Date.now() <= deadline) {
+      attempt += 1;
+      try {
+        await this.verifyForward(config, sshHost, proxy);
+        if (attempt > 1) {
+          this.output.appendLine(`Remote forwarded port ${proxy.remoteBindHost}:${proxy.remotePort} became ready after ${attempt} attempts.`);
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        if (Date.now() + pollMs > deadline) {
+          break;
+        }
+        await sleep(pollMs);
+      }
+    }
+
+    const message = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`remote forwarded port ${proxy.remoteBindHost}:${proxy.remotePort} did not become ready within ${timeoutMs} ms: ${message}`);
+  }
+
   public async isRemotePortFree(config: RemoteProxyConfig, sshHost: string, host: string, port: number): Promise<boolean> {
     try {
       await this.runSshScript(config, sshHost, buildRemotePortFreeScript(host, port), `check remote port ${host}:${port}`);
@@ -252,4 +285,8 @@ function getRemoteWorkspacePaths(): string[] {
     seen.add(folder.uri.path);
   }
   return [...seen];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

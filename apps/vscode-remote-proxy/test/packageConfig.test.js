@@ -99,6 +99,8 @@ test('keeps explicit scripts for staging bundled ssh_proxy binaries', () => {
 
 test('declares monorepo publishing metadata', () => {
   assert.equal(manifest.license, 'MIT');
+  assert.equal(manifest.icon, 'assets/icon.png');
+  assert.ok(fs.existsSync(path.join(ROOT, manifest.icon)), 'extension icon should exist');
   assert.deepEqual(manifest.repository, {
     type: 'git',
     url: 'https://github.com/MosRat/ssh_proxy.git',
