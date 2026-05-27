@@ -25,21 +25,6 @@ ssh_proxy daemon --scope system install --elevate
 
 The daemon is the normal production path. CLI commands submit intent to the private named pipe or Unix socket; they do not directly own long-running routes. Non-interactive commands report `requires_elevation` instead of opening a UAC or sudo prompt.
 
-Bootstrap or refresh a remote peer through SSH:
-
-```powershell
-ssh_proxy host <remote-host> --accept-new --persist auto start
-ssh_proxy host <remote-host> node-status
-```
-
-Expose a local listener that uses the remote machine as egress:
-
-```powershell
-ssh_proxy route <remote-host> `
-  --direction local-uses-remote `
-  --port <local-proxy-port>
-```
-
 Expose a remote listener that uses this machine as egress through the daemon:
 
 ```powershell
@@ -70,17 +55,7 @@ resolve_target -> ensure_local_proxy -> ensure_peer -> plan_route
 
 `ssh_proxy status --workspace <id> --json` reports the current `ProxySessionStatus`. `ssh_proxy events --job <job-id> --json` reports structured job events. If the daemon restarts while a job is unfinished, it restores the latest snapshot and reconciles the proxy session instead of starting from an unknown state.
 
-The first v0.3 implementation still reuses the existing route and peer engine internally, but the daemon is now the only status source for CLI and VS Code paths.
-
-Inspect the selected plan before starting a route:
-
-```powershell
-ssh_proxy route <remote-host> `
-  --direction remote-uses-local `
-  --connect-mode reverse-link `
-  --port <remote-proxy-port> `
-  --explain
-```
+The daemon is the only production status source for CLI and VS Code paths. Older `route`, `node`, `service`, and `host` commands still exist as hidden compatibility/internal tools, but production workflows should use the daemon commands above.
 
 ## Core Modes
 
@@ -107,7 +82,7 @@ The extension in `apps/vscode-remote-proxy` automatically exposes a local proxy 
 ssh_proxy vscode up --target <ssh-host> --workspace <id> --local-proxy <url> --json
 ```
 
-The daemon owns route startup, readiness, job state, and health. OpenSSH is disabled by default and only re-enters when `remoteProxy.sshProxy.openSshFallbackPolicy=legacy-auto`.
+The daemon owns route startup, readiness, remote setup, job state, and health. The extension no longer exposes OpenSSH or session-daemon fallback as normal settings; external OpenSSH is only an emergency compatibility path reported by daemon diagnostics when Rust SSH cannot support the target.
 
 See [apps/vscode-remote-proxy/README.md](apps/vscode-remote-proxy/README.md) for usage, settings, troubleshooting, and packaging details.
 
@@ -125,7 +100,7 @@ Common checks:
 
 - If a remote shell returns `502 Bad Gateway`, verify the local upstream proxy URL and make sure the local proxy accepts CONNECT/SOCKS traffic.
 - If Windows daemon installation is denied, use `ssh_proxy daemon --json status` and `ssh_proxy doctor --json`. Auto-start does not pop UAC; interactive commands can install or update the daemon explicitly.
-- If the remote port is occupied, use `remoteProxy.remote.autoPickPort` in the extension or choose another `--port`.
+- If the remote port is occupied, keep `remoteProxy.remote.autoPickPort` enabled in the extension or choose another `--remote-port`.
 - If a route stays in `accepted`, `bootstrapping_peer`, or `starting`, inspect `ssh_proxy status --workspace <id> --json` and `ssh_proxy events --job <job-id> --json`; readiness is represented as daemon job progress.
 
 More operational detail lives in [docs/operations.md](docs/operations.md).
