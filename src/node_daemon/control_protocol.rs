@@ -120,6 +120,8 @@ pub(crate) struct NodeRequest {
     pub(crate) proxy_session: Option<ProxySessionSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) update_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) remote_url: Option<String>,
 }
 
 impl NodeRequest {
@@ -395,6 +397,21 @@ impl NodeRequest {
             cmd: "proxy_session_down".to_string(),
             id,
             proxy_session,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn apply_remote_settings(
+        target: String,
+        workspace: String,
+        remote_url: String,
+    ) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "apply_remote_settings".to_string(),
+            id: Some(workspace),
+            alias: Some(target),
+            remote_url: Some(remote_url),
             ..Self::default()
         }
     }

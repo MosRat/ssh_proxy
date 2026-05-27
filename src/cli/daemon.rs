@@ -322,6 +322,12 @@ pub struct VscodeApplySettingsArgs {
     #[arg(long)]
     pub proxy_url: String,
 
+    #[arg(long, default_value_t = control_socket::default_endpoint_string())]
+    pub endpoint: String,
+
+    #[arg(long)]
+    pub token: Option<String>,
+
     #[arg(long)]
     pub json: bool,
 }

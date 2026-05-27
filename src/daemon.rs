@@ -299,24 +299,44 @@ pub async fn vscode(args: cli::VscodeArgs, config: config::AppConfig) -> Result<
             )
             .await
         }
-        cli::VscodeCommand::ApplySettings(args) => print_json(
-            args.json,
-            json!({
-                "ok": true,
-                "kind": "vscode_apply_settings",
-                "daemon_api": "v0.3",
-                "target": args.target,
-                "workspace": args.workspace,
-                "proxy_url": args.proxy_url,
-                "job": job_status(
-                    "vscode-settings:accepted",
-                    "apply_remote_settings",
-                    "accepted",
-                    "queued",
-                    "remote settings application is an allowlisted daemon job in v0.3",
-                ),
-            }),
-        ),
+        cli::VscodeCommand::ApplySettings(args) => {
+            let request = node_daemon::NodeRequest::apply_remote_settings(
+                args.target.clone(),
+                args.workspace.clone(),
+                args.proxy_url.clone(),
+            )
+            .to_value()
+            .context("failed to encode remote settings request")?;
+            request_daemon_or_report(
+                &args.endpoint,
+                args.token.as_deref(),
+                &config,
+                request,
+                args.json,
+                || {
+                    json!({
+                        "ok": false,
+                        "kind": "vscode_apply_settings",
+                        "daemon_api": "v0.3",
+                        "target": args.target,
+                        "workspace": args.workspace,
+                        "proxy_url": args.proxy_url,
+                        "job": job_status(
+                            "vscode-settings:blocked",
+                            "apply_remote_settings",
+                            "blocked",
+                            "daemon_unavailable",
+                            "remote settings application requires the running daemon",
+                        ),
+                        "blocker": "daemon_unavailable",
+                        "next_action": "ssh_proxy daemon install --scope system --elevate",
+                        "requires_daemon": true,
+                        "retry_after_ms": 1000,
+                    })
+                },
+            )
+            .await
+        }
         cli::VscodeCommand::Diagnose(args) => {
             doctor(
                 cli::DoctorArgs {
