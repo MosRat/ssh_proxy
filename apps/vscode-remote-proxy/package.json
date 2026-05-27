@@ -316,7 +316,7 @@
         "remoteProxy.sshProxy.autoInstallLocalService": {
           "type": "boolean",
           "default": true,
-          "description": "Install or repair the local ssh_proxy service before creating a kernel route."
+          "description": "Probe existing service scopes first, then repair or install the local ssh_proxy service before creating a kernel route."
         },
         "remoteProxy.sshProxy.connectMode": {
           "type": "string",

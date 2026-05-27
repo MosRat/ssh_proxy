@@ -16,12 +16,14 @@ It is built for Remote SSH workflows where a machine behind SSH needs reliable a
 
 ## Quick Start
 
-Install and check the local user service:
+Install or repair the persistent local service:
 
 ```powershell
-ssh_proxy service --scope user install
+ssh_proxy service install
 ssh_proxy service --json status
 ```
+
+`service install` now probes existing user/system service scopes first and reuses the highest available scope before it creates anything new.
 
 Bootstrap or refresh a remote peer through SSH:
 
@@ -98,7 +100,7 @@ ssh_proxy node control --json routes
 Common checks:
 
 - If a remote shell returns `502 Bad Gateway`, verify the local upstream proxy URL and make sure the local proxy accepts CONNECT/SOCKS traffic.
-- If Windows service installation is denied, the VS Code extension should start a session daemon and pass `--endpoint` plus `--token` to route commands.
+- If Windows service installation is denied, the VS Code extension first falls back to a session daemon and then to OpenSSH if the kernel path still cannot start.
 - If the remote port is occupied, use `remoteProxy.remote.autoPickPort` in the extension or choose another `--port`.
 - If a route stays in `starting`, inspect `node control routes` and remote listener reachability before applying proxy environment settings.
 

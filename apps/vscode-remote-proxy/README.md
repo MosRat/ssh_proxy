@@ -40,7 +40,7 @@ OpenSSH mode is the compatibility fallback:
 ssh -R remote:port:local-proxy-host:local-proxy-port
 ```
 
-Kernel mode is preferred because it exposes route ids, ownership, session-daemon fallback, structured health, and richer diagnostics. OpenSSH remains available when `ssh_proxy` is not installed or kernel mode is explicitly disabled.
+Kernel mode is preferred because it exposes route ids, ownership, session-daemon fallback, structured health, and richer diagnostics. If kernel startup hits a service or route failure, the extension now falls back to the session daemon first and then OpenSSH before surfacing a hard failure.
 
 ## Quick Start
 
@@ -94,7 +94,7 @@ Remote port selection is sticky. The extension tries the current route, remember
 | `remoteProxy.remote.port` | `17890` | Preferred remote listener port. |
 | `remoteProxy.remote.autoPickPort` | `true` | Try nearby ports if the preferred port is busy. |
 | `remoteProxy.sshProxy.executable` | `ssh_proxy` | Explicit binary, bundled binary, or PATH fallback. |
-| `remoteProxy.sshProxy.autoInstallLocalService` | `true` | Try user service install before session daemon fallback. |
+| `remoteProxy.sshProxy.autoInstallLocalService` | `true` | Probe existing service scopes first, then repair/install before session daemon fallback. |
 | `remoteProxy.sshProxy.connectMode` | `reverse-link` | Preserve `ssh -R` style reachability by default. |
 | `remoteProxy.sshProxy.remoteSetup` | `auto` | Prefer `ssh_proxy host exec`, fallback to OpenSSH. |
 | `remoteProxy.forward.verifyAfterStart` | `true` | Verify remote listener readiness after route start. |
@@ -124,7 +124,7 @@ Run `Remote Proxy: Diagnose` first. It prints backend, detected SSH host, lease 
 Common failures:
 
 - `502 Bad Gateway`: the remote listener accepted the request but could not open the upstream path. Check the local proxy URL, including scheme and port, and confirm the local proxy accepts HTTP CONNECT or SOCKS5 traffic.
-- `Access is denied` during service install: Windows blocked scheduled task/service registration. Kernel mode should start a window-owned session daemon instead.
+- `Access is denied` during service install: Windows blocked scheduled task/service registration. The kernel path will cache that failure for the session, fall back to the session daemon, and then try OpenSSH if needed.
 - Remote port already in use: keep `remoteProxy.remote.autoPickPort=true`, or pick a different `remoteProxy.remote.port`.
 - Host unresolved in Extension Development Host: run `Remote Proxy: Pick SSH Host`, or enable storage fallback only if you understand it can be stale.
 - Route stuck in `starting`: open output, inspect `ssh_proxy node control routes`, and verify remote `127.0.0.1:<port>` reachability.
