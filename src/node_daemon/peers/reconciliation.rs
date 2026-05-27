@@ -300,7 +300,7 @@ pub(super) fn build_peer_reconcile(
             "code": "missing_local_record",
             "severity": "warning",
             "message": "remote daemon descriptor exists but the local peer/profile record is incomplete",
-            "repair_command": format!("ssh_proxy node control peer-refresh {target} --alias {alias}", target = result.target),
+            "repair_command": "ssh_proxy doctor --json",
         }));
     }
 
@@ -314,7 +314,7 @@ pub(super) fn build_peer_reconcile(
             "code": "stale_remote_record",
             "severity": "warning",
             "message": "local peer identity points at a different remote node id",
-            "repair_command": format!("ssh_proxy node control peer-refresh {target} --alias {alias}", target = result.target),
+            "repair_command": "ssh_proxy doctor --json",
         }));
     }
 
@@ -358,7 +358,7 @@ pub(super) fn build_peer_reconcile(
             "code": "token_mismatch",
             "severity": "warning",
             "message": "local record and remote descriptor disagree about token presence or token generation",
-            "repair_command": format!("ssh_proxy node control peer-rotate-token {target} --alias {alias}", target = result.target),
+            "repair_command": "ssh_proxy doctor --json",
         }));
     }
 
@@ -385,7 +385,7 @@ pub(super) fn build_peer_reconcile(
                 "field": field,
                 "severity": "warning",
                 "message": "local certificate fingerprint differs from the remote descriptor",
-                "repair_command": format!("ssh_proxy node control peer-refresh {target} --alias {alias}", target = result.target),
+                "repair_command": "ssh_proxy doctor --json",
             }));
         }
     }
@@ -402,7 +402,7 @@ pub(super) fn build_peer_reconcile(
                 "field": field,
                 "severity": "warning",
                 "message": "local peer record points at a different daemon owner or service instance",
-                "repair_command": format!("ssh_proxy node control peer-refresh {target} --alias {alias}", target = result.target),
+                "repair_command": "ssh_proxy doctor --json",
             }));
         }
     }
@@ -411,7 +411,7 @@ pub(super) fn build_peer_reconcile(
         json!({
             "needed": true,
             "mode": "adopt-existing-daemon",
-            "command": format!("ssh_proxy node control peer-refresh {target} --alias {alias}", target = result.target),
+            "command": "ssh_proxy doctor --json",
             "will_replace_auth_material": false,
             "note": "dry-run only; refresh/adoption must be invoked explicitly"
         })

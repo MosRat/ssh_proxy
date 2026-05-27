@@ -51,7 +51,7 @@ pub(super) fn route_response_with_plan(response: &str, plan: Value) -> Result<St
             "cleanup_command".to_string(),
             route_id
                 .as_str()
-                .map(|id| format!("ssh_proxy node control stop-route {id}"))
+                .map(|id| format!("ssh_proxy down --route-id {id}"))
                 .map(Value::from)
                 .unwrap_or(Value::Null),
         );
@@ -59,7 +59,7 @@ pub(super) fn route_response_with_plan(response: &str, plan: Value) -> Result<St
             "health".to_string(),
             json!({
                 "state": "accepted",
-                "message": "route accepted; query `ssh_proxy node control routes` for live health"
+                "message": "route accepted; query `ssh_proxy status --json` for daemon-owned health"
             }),
         );
         object.insert(
@@ -104,7 +104,7 @@ pub(super) fn remote_direct_route_response(target: &str, plan: Value) -> Value {
         .unwrap_or(Value::Null);
     let cleanup_command = route_id
         .as_str()
-        .map(|id| format!("ssh_proxy host {target} node-stop-route {id}"))
+        .map(|id| format!("ssh_proxy down --target {target} --route-id {id}"))
         .map(Value::from)
         .unwrap_or(Value::Null);
     json!({

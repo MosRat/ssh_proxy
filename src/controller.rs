@@ -115,7 +115,7 @@ pub async fn run_with_state(args: cli::ProxyArgs, state: Arc<SharedState>) -> Re
         cli::RemoteTransport::Auto | cli::RemoteTransport::Exec
     ) {
         warn!(
-            "proxy may fall back to a temporary SSH exec helper; for production prefer `ssh_proxy service ... install` locally plus `ssh_proxy host ... --persist auto start` remotely"
+            "proxy may use a temporary SSH exec helper; for production prefer `ssh_proxy daemon install --scope system --elevate` locally and `ssh_proxy up ...` for daemon-owned sessions"
         );
     }
     let tcp_target = args.tcp_target.clone();

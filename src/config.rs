@@ -331,8 +331,8 @@ schema_version = 1
 
 [daemon]
 control_listen = "127.0.0.1:1081"
-# The service installer enables a user-scoped transport by default.
-# Set transport_listen to choose a stable port, or pass service --no-transport.
+# The daemon installer enables a managed transport by default.
+# Set transport_listen to choose a stable port for daemon-managed direct transports.
 transport_listen = "127.0.0.1:19080"
 # Optional alternatives:
 # control_endpoint = "tcp://127.0.0.1:1081"
@@ -362,7 +362,7 @@ transport_listen = "127.0.0.1:19080"
 [identity]
 node_id = "spx-generated"
 node_name = "user@host"
-# secret is generated automatically by `config init` or `service install`.
+# secret is generated automatically by `config init` or daemon install.
 # cert/key/ca are optional direct TLS/QUIC identity material.
 # secret = "change-me"
 # cert = "~/.ssh_proxy/identity/node.pem"

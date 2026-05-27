@@ -36,7 +36,7 @@ pub async fn run(args: cli::RouteArgs, config: config::AppConfig) -> Result<()> 
         .await
         .with_context(|| {
             format!(
-                "failed to contact local daemon at {}; run `ssh_proxy service install` first",
+                "failed to contact local daemon at {}; run `ssh_proxy daemon install --scope system --elevate` first",
                 args.endpoint
             )
         })?;

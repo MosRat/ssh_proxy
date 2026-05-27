@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(value["remote_url"], "http://127.0.0.1:17890");
         assert_eq!(
             value["cleanup_command"],
-            "ssh_proxy node control stop-route vscode-remote-proxy-edge"
+            "ssh_proxy down --route-id vscode-remote-proxy-edge"
         );
         assert_eq!(value["health"]["state"], "accepted");
     }
@@ -660,7 +660,7 @@ mod tests {
         assert_eq!(value["remote_url"], "socks5h://127.0.0.1:17890/");
         assert_eq!(
             value["cleanup_command"],
-            "ssh_proxy host edge node-stop-route vscode-remote-proxy-edge"
+            "ssh_proxy down --target edge --route-id vscode-remote-proxy-edge"
         );
         assert_eq!(value["health"]["state"], "accepted");
     }

@@ -421,7 +421,7 @@ impl NodeManager {
                 "kind": "node_restart",
                 "code": "requires_supervisor",
                 "id": id,
-                "next_action": "service_ensure_or_session_daemon_restart",
+                "next_action": "daemon_restart_or_reinstall",
                 "message": "current daemon cannot restart itself without an external broker supervisor",
             }));
         }

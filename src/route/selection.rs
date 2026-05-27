@@ -188,7 +188,7 @@ pub(crate) fn local_peer_addr(
     }
     let Some(addr) = config.daemon.transport_listen else {
         bail!(
-            "--direction remote-uses-local needs --local-peer or [daemon].transport_listen; run `ssh_proxy service install` first"
+            "--direction remote-uses-local needs --local-peer or [daemon].transport_listen; run `ssh_proxy daemon install --scope system --elevate` first"
         );
     };
     if addr.ip().is_loopback() {
