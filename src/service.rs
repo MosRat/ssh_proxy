@@ -169,11 +169,7 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
     }))
 }
 
-fn service_manager_summary(
-    plan: &ServicePlan,
-    daemon_reachable: bool,
-    platform_ok: bool,
-) -> Value {
+fn service_manager_summary(plan: &ServicePlan, daemon_reachable: bool, platform_ok: bool) -> Value {
     let fallback_recommended = !daemon_reachable;
     json!({
         "kind": persistent_manager_kind(plan.scope),
@@ -666,7 +662,10 @@ mod tests {
         assert_eq!(summary["health"]["route_store"]["ok"], true);
         assert_eq!(summary["health"]["listeners"]["quic"]["configured"], true);
         assert!(summary["state"].is_string());
-        assert_eq!(summary["manager"]["session_daemon_fallback"]["supported"], true);
+        assert_eq!(
+            summary["manager"]["session_daemon_fallback"]["supported"],
+            true
+        );
         assert!(summary["manager"]["next_action"].is_string());
         assert!(summary["platform"]["status"]["ok"].is_boolean());
         assert!(!summary.to_string().contains("secret"));
@@ -675,13 +674,28 @@ mod tests {
 
     #[test]
     fn service_state_names_cover_core_cases() {
-        assert_eq!(service_state_name(true, true), "running_with_persistent_manager");
-        assert_eq!(service_state_name(true, false), "running_without_persistent_manager");
-        assert_eq!(service_state_name(false, true), "persistent_manager_registered_but_daemon_unreachable");
+        assert_eq!(
+            service_state_name(true, true),
+            "running_with_persistent_manager"
+        );
+        assert_eq!(
+            service_state_name(true, false),
+            "running_without_persistent_manager"
+        );
+        assert_eq!(
+            service_state_name(false, true),
+            "persistent_manager_registered_but_daemon_unreachable"
+        );
         assert_eq!(service_state_name(false, false), "unavailable");
         assert_eq!(service_next_action(true, false), "reuse_default_daemon");
-        assert_eq!(service_next_action(false, true), "start_or_repair_persistent_service");
-        assert_eq!(service_next_action(false, false), "install_persistent_service_or_start_session_daemon");
+        assert_eq!(
+            service_next_action(false, true),
+            "start_or_repair_persistent_service"
+        );
+        assert_eq!(
+            service_next_action(false, false),
+            "install_persistent_service_or_start_session_daemon"
+        );
     }
 
     #[test]

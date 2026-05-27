@@ -7,6 +7,10 @@ use tokio::{
     time,
 };
 
+mod proxy_endpoint;
+
+use proxy_endpoint::parse_proxy_endpoint;
+
 const CONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(4);
 const PROXY_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -161,59 +165,6 @@ async fn connect_via_socks5_proxy(addr: &str, host: &str, port: u16) -> Result<T
     Ok(stream)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ProxyEndpoint {
-    host: String,
-    port: u16,
-}
-
-fn parse_proxy_endpoint(value: &str, default_port: u16) -> Result<ProxyEndpoint> {
-    let authority_end = value.find(['/', '?', '#']).unwrap_or(value.len());
-    let authority = &value[..authority_end];
-    let authority = authority
-        .rsplit_once('@')
-        .map(|(_, endpoint)| endpoint)
-        .unwrap_or(authority);
-    if authority.is_empty() {
-        bail!("proxy endpoint is missing a host in {value:?}");
-    }
-
-    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
-        let end = rest
-            .find(']')
-            .ok_or_else(|| anyhow!("invalid bracketed IPv6 proxy endpoint {value:?}"))?;
-        let host = &rest[..end];
-        let tail = &rest[end + 1..];
-        let port = if let Some(port) = tail.strip_prefix(':') {
-            port.parse()
-                .with_context(|| format!("invalid proxy port in {value:?}"))?
-        } else if tail.is_empty() {
-            default_port
-        } else {
-            bail!("invalid IPv6 proxy endpoint suffix in {value:?}");
-        };
-        (host, port)
-    } else {
-        match authority.rsplit_once(':') {
-            Some((host, port)) if !host.contains(':') => {
-                let port = port
-                    .parse()
-                    .with_context(|| format!("invalid proxy port in {value:?}"))?;
-                (host, port)
-            }
-            _ => (authority, default_port),
-        }
-    };
-
-    if host.is_empty() {
-        bail!("proxy endpoint is missing a host in {value:?}");
-    }
-    Ok(ProxyEndpoint {
-        host: host.to_string(),
-        port,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -300,37 +251,5 @@ mod tests {
 
     fn endpoint(addr: SocketAddr) -> String {
         format!("{}:{}", addr.ip(), addr.port())
-    }
-
-    #[test]
-    fn proxy_endpoint_ignores_url_suffix() {
-        assert_eq!(
-            parse_proxy_endpoint("127.0.0.1:10808/", 8080).unwrap(),
-            ProxyEndpoint {
-                host: "127.0.0.1".to_string(),
-                port: 10808
-            }
-        );
-        assert_eq!(
-            parse_proxy_endpoint("user:pass@proxy.local:3128/path?x=1", 8080).unwrap(),
-            ProxyEndpoint {
-                host: "proxy.local".to_string(),
-                port: 3128
-            }
-        );
-        assert_eq!(
-            parse_proxy_endpoint("[::1]:1080/", 1080).unwrap(),
-            ProxyEndpoint {
-                host: "::1".to_string(),
-                port: 1080
-            }
-        );
-        assert_eq!(
-            parse_proxy_endpoint("proxy.local/", 8080).unwrap(),
-            ProxyEndpoint {
-                host: "proxy.local".to_string(),
-                port: 8080
-            }
-        );
     }
 }
