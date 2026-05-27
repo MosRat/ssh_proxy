@@ -20,7 +20,6 @@ use crate::{
 };
 
 mod bridge_manager;
-mod daemon_control;
 mod listener;
 mod status;
 use status::{BridgeWorkerCounters, BridgeWorkerState, ensure_worker_slot};
@@ -205,24 +204,6 @@ pub async fn control(mut args: cli::ControlArgs, config: config::AppConfig) -> R
     let response = control_socket::request(&endpoint, &command).await?;
     print!("{response}");
     Ok(())
-}
-
-pub async fn daemon(mut args: cli::ControllerDaemonArgs, config: config::AppConfig) -> Result<()> {
-    let default_addr = SocketAddr::from(([127, 0, 0, 1], 1081));
-    if args.control.is_none() && args.control_listen == default_addr {
-        if let Some(addr) = config.daemon.control_listen {
-            args.control_listen = addr;
-        }
-    }
-    let endpoint = match args
-        .control
-        .as_deref()
-        .or(config.daemon.control_endpoint.as_deref())
-    {
-        Some(value) => control_socket::ControlEndpoint::parse(value)?,
-        None => control_socket::ControlEndpoint::from_addr(args.control_listen),
-    };
-    daemon_control::run(endpoint, config).await
 }
 
 pub struct SharedState {

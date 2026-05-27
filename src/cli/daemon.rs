@@ -1,7 +1,4 @@
-use std::{
-    net::{IpAddr, SocketAddr},
-    path::PathBuf,
-};
+use std::{net::IpAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 

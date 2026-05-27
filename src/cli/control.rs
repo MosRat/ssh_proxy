@@ -17,18 +17,6 @@ pub struct ControlArgs {
     pub command: ControlCommand,
 }
 
-#[derive(Debug, Clone, Parser)]
-pub struct ControllerDaemonArgs {
-    #[arg(short, long, default_value = "127.0.0.1:1081")]
-    pub control_listen: SocketAddr,
-
-    #[arg(
-        long,
-        help = "Control endpoint to listen on: tcp://host:port, unix:///path.sock, or npipe://name"
-    )]
-    pub control: Option<String>,
-}
-
 #[derive(Debug, Clone, Subcommand)]
 pub enum ControlCommand {
     Status,

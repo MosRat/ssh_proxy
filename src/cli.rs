@@ -6,7 +6,7 @@ pub use config::{
     ConfigProfileSetArgs,
 };
 mod control;
-pub use control::{ControlArgs, ControlCommand, ControllerDaemonArgs};
+pub use control::{ControlArgs, ControlCommand};
 mod daemon;
 pub use daemon::{
     DaemonArgs, DaemonCommand, DaemonScope, DoctorArgs, DownArgs, EventsArgs, StatusArgs, UpArgs,
