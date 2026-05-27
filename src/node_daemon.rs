@@ -277,6 +277,7 @@ impl NodeManager {
                 Some(state) => state.status_value().await,
                 None => Value::Null,
             };
+            let readiness = route_readiness_value(id, task, &stats);
             running_routes.push(json!({
                 "id": id,
                 "direction": task.direction,
@@ -292,6 +293,9 @@ impl NodeManager {
                 "last_error": stats.last_error.clone(),
                 "started_at": stats.started_at_unix,
                 "updated_at": stats.updated_at_unix,
+                "readiness": readiness,
+                "managed_by": "current-daemon",
+                "job_id": format!("route:{id}"),
                 "stats": stats,
                 "link": link,
             }));
@@ -535,6 +539,35 @@ impl NodeManager {
         }
         self.shutdown_notify.notified().await;
     }
+}
+
+fn route_readiness_value(id: &str, task: &RouteTask, stats: &routes::RouteStats) -> Value {
+    let phase = match stats.state.as_str() {
+        "running" => "ready",
+        "failed" | "error" => "failed",
+        "restarting" => "starting",
+        "stopping" | "stopped" => "stopped",
+        _ => "starting",
+    };
+    let next_action = match phase {
+        "ready" => "none",
+        "failed" => "restart-route",
+        "stopped" => "remove-or-restart-route",
+        _ => "wait",
+    };
+    json!({
+        "state": stats.state,
+        "phase": phase,
+        "retry_count": stats.restart_count,
+        "attempts": stats.attempts,
+        "blocker": stats.last_error,
+        "next_action": next_action,
+        "managed_by": "current-daemon",
+        "job_id": format!("route:{id}"),
+        "route_id": id,
+        "peer": task.peer,
+        "updated_at": stats.updated_at_unix,
+    })
 }
 
 async fn run_reporter(manager: Arc<NodeManager>) -> Result<()> {

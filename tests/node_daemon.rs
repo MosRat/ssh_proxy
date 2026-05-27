@@ -730,6 +730,14 @@ fn node_daemon_persists_restores_and_forgets_routes() {
     assert_eq!(routes_json["ok"], true);
     assert_eq!(routes_json["routes"][0]["id"], "persisted");
     assert_eq!(routes_json["routes"][0]["persist"], true);
+    assert_eq!(routes_json["routes"][0]["managed_by"], "current-daemon");
+    assert_eq!(routes_json["routes"][0]["job_id"], "route:persisted");
+    assert_eq!(
+        routes_json["routes"][0]["readiness"]["job_id"],
+        "route:persisted"
+    );
+    assert_eq!(routes_json["routes"][0]["readiness"]["phase"], "ready");
+    assert_eq!(routes_json["routes"][0]["readiness"]["next_action"], "none");
     assert_eq!(
         routes_json["routes"][0]["runtime"]["selected_transport"],
         "auto"
