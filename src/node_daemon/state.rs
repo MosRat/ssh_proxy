@@ -203,7 +203,11 @@ impl RemoteSetupStatus {
         }
     }
 
-    pub(super) fn failed(error: String, desired_hash: Option<String>, remote_url: Option<String>) -> Self {
+    pub(super) fn failed(
+        error: String,
+        desired_hash: Option<String>,
+        remote_url: Option<String>,
+    ) -> Self {
         Self {
             state: "failed".to_string(),
             desired_hash,
@@ -281,6 +285,8 @@ struct DaemonStateRecord {
     version: String,
     health: String,
     update_state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    update: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     control_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,6 +303,7 @@ impl Default for DaemonStateRecord {
             version: env!("CARGO_PKG_VERSION").to_string(),
             health: "starting".to_string(),
             update_state: "idle".to_string(),
+            update: None,
             control_endpoint: None,
             name: None,
             started_at_unix: now,
@@ -339,7 +346,28 @@ impl ProductionState {
         store.version = STORE_VERSION;
         store.daemon.version = env!("CARGO_PKG_VERSION").to_string();
         store.daemon.health = "healthy".to_string();
-        store.daemon.update_state = "idle".to_string();
+        if matches!(
+            store.daemon.update_state.as_str(),
+            "switching" | "restart_daemon"
+        ) {
+            store.daemon.update_state = "healthy".to_string();
+            let update = json!({
+                "state": "healthy",
+                "message": "daemon restarted after staged update",
+                "updated_at_unix": now,
+            });
+            store.daemon.update = Some(match store.daemon.update.take() {
+                Some(Value::Object(mut existing)) => {
+                    if let Value::Object(update_object) = update {
+                        existing.extend(update_object);
+                    }
+                    Value::Object(existing)
+                }
+                _ => update,
+            });
+        } else {
+            store.daemon.update_state = "idle".to_string();
+        }
         store.daemon.control_endpoint = Some(control_endpoint.to_string());
         store.daemon.name = Some(name.to_string());
         store.daemon.started_at_unix = now;
@@ -358,11 +386,16 @@ impl ProductionState {
         store.daemon.health = "healthy".to_string();
         store.daemon.update_state = "pending".to_string();
         store.daemon.updated_at_unix = now;
-        save_store(&self.daemon_path, &*store)?;
-        Ok(json!({
+        store.daemon.update = Some(json!({
             "state": store.daemon.update_state,
             "source": source,
             "updated_at_unix": now,
+        }));
+        save_store(&self.daemon_path, &*store)?;
+        Ok(store.daemon.update.clone().unwrap_or_else(|| {
+            json!({
+                "state": store.daemon.update_state,
+            })
         }))
     }
 
@@ -373,6 +406,8 @@ impl ProductionState {
         staged_path: Option<String>,
         staged_hash: Option<String>,
         staged_version: Option<String>,
+        switch_script: Option<String>,
+        backup_path: Option<String>,
         last_error: Option<String>,
     ) -> Result<Value> {
         let mut store = self.daemon.lock().await;
@@ -386,16 +421,20 @@ impl ProductionState {
         };
         store.daemon.update_state = state.to_string();
         store.daemon.updated_at_unix = now;
-        save_store(&self.daemon_path, &*store)?;
-        Ok(json!({
+        let update = json!({
             "state": store.daemon.update_state,
             "source": source,
             "staged_path": staged_path,
             "staged_hash": staged_hash,
             "staged_version": staged_version,
+            "switch_script": switch_script,
+            "backup_path": backup_path,
             "last_error": last_error,
             "updated_at_unix": now,
-        }))
+        });
+        store.daemon.update = Some(update.clone());
+        save_store(&self.daemon_path, &*store)?;
+        Ok(update)
     }
 
     pub(super) async fn daemon_value(&self) -> Value {

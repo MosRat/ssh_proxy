@@ -358,14 +358,15 @@ impl NodeManager {
             .as_ref()
             .and_then(|path| config::file_sha256_fingerprint(path));
         let has_token = self.token_value().is_some();
+        let daemon_state = self.state.daemon_value().await;
         let daemon_status = jobs::daemon_status_block(
             &json!({
                 "ok": true,
                 "control": self.control_endpoint.to_string(),
             }),
             &stored_jobs,
+            Some(&daemon_state),
         );
-        let daemon_state = self.state.daemon_value().await;
         let proxy_sessions = self.state.sessions_value().await;
         let peer_store = self.state.peers_value().await;
         Ok(json!({

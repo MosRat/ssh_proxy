@@ -299,7 +299,30 @@ pub(super) fn route_job_value(route: &Value) -> Value {
     })
 }
 
-pub(super) fn daemon_status_block(status: &Value, jobs: &[JobRecord]) -> Value {
+pub(super) fn daemon_status_block(
+    status: &Value,
+    jobs: &[JobRecord],
+    daemon_state: Option<&Value>,
+) -> Value {
+    let update_state = daemon_state
+        .and_then(|state| state.get("update").cloned())
+        .or_else(|| {
+            daemon_state
+                .and_then(|state| state.get("update_state"))
+                .cloned()
+                .map(|state| {
+                    json!({
+                        "state": state,
+                        "last_job": latest_update_job(jobs),
+                    })
+                })
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "state": "idle",
+                "last_job": latest_update_job(jobs),
+            })
+        });
     json!({
         "api": "v0.3",
         "version": env!("CARGO_PKG_VERSION"),
@@ -312,11 +335,16 @@ pub(super) fn daemon_status_block(status: &Value, jobs: &[JobRecord]) -> Value {
             "degraded"
         },
         "jobs_summary": jobs_summary(jobs),
-        "update_state": {
-            "state": "idle",
-            "last_job": Value::Null,
-        },
+        "update_state": update_state,
     })
+}
+
+fn latest_update_job(jobs: &[JobRecord]) -> Value {
+    jobs.iter()
+        .filter(|job| job.kind == "self_update")
+        .max_by_key(|job| job.updated_at_unix)
+        .map(JobRecord::to_value)
+        .unwrap_or(Value::Null)
 }
 
 fn route_job_state(state: &str) -> &'static str {
@@ -497,5 +525,30 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].message, "left queued");
+    }
+
+    #[test]
+    fn daemon_status_uses_persisted_update_state() {
+        let job = JobRecord::new("self-update:pending", "self_update").transition(
+            JobState::WaitingRetry,
+            JobPhase::RestartDaemon,
+            80,
+        );
+        let status = daemon_status_block(
+            &json!({
+                "ok": true,
+                "control": "npipe://ssh_proxy/system/control",
+            }),
+            &[job],
+            Some(&json!({
+                "update_state": "restart_daemon",
+                "update": {
+                    "state": "restart_daemon",
+                    "staged_version": "0.2.0",
+                }
+            })),
+        );
+        assert_eq!(status["update_state"]["state"], "restart_daemon");
+        assert_eq!(status["update_state"]["staged_version"], "0.2.0");
     }
 }
