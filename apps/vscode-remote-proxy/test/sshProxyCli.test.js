@@ -5,6 +5,7 @@ const {
   buildSshProxyNodeControlShutdownArgs,
   buildSshProxyNodeControlStatusArgs,
   buildSshProxyNodeDaemonArgs,
+  buildSshProxyServiceInstallArgs,
   buildSshProxyServiceStatusArgs,
   buildSshProxyRoutesArgs,
   buildSshProxyStopRouteArgs,
@@ -22,6 +23,8 @@ test('normalizes an empty ssh_proxy executable to the PATH command', () => {
 
 test('builds JSON command shapes consumed by the extension', () => {
   assert.deepEqual(buildSshProxyServiceStatusArgs(), ['service', '--json', 'status']);
+  assert.deepEqual(buildSshProxyServiceInstallArgs(), ['service', '--scope', 'auto', 'install']);
+  assert.deepEqual(buildSshProxyServiceInstallArgs('user'), ['service', '--scope', 'user', 'install']);
   assert.deepEqual(buildSshProxyRoutesArgs(), ['node', 'control', '--json', 'routes']);
   assert.deepEqual(buildSshProxyStopRouteArgs('route-1'), ['node', 'control', '--json', 'stop-route', 'route-1']);
 });

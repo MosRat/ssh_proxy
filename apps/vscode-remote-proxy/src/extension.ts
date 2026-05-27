@@ -151,6 +151,18 @@ class RemoteProxyController implements vscode.Disposable {
     return this.openSshBackend;
   }
 
+  private async buildForwardingBackendCandidates(config: RemoteProxyConfig): Promise<ForwardingBackend[]> {
+    const preferred = await this.selectForwardingBackend(config);
+    if (preferred === this.sshProxyBackend) {
+      return [this.sshProxyBackend, this.openSshBackend];
+    }
+    return [this.openSshBackend];
+  }
+
+  private describeForwardingBackend(backend: ForwardingBackend): string {
+    return backend === this.sshProxyBackend ? 'ssh_proxy kernel' : 'OpenSSH';
+  }
+
   private getBackendName(): ForwardingBackendKind {
     return this.forwarder === this.sshProxyBackend ? 'ssh_proxy' : 'openssh';
   }
@@ -230,7 +242,7 @@ class RemoteProxyController implements vscode.Disposable {
         return;
       }
 
-      await this.ensureForwardingBackend(config);
+      const backendCandidates = await this.buildForwardingBackendCandidates(config);
       const lockTimings = startLockTimings(config);
       const startLock = config.singletonReuseEnabled
         ? await this.leaseCoordinator.acquireStartLock(
@@ -240,11 +252,36 @@ class RemoteProxyController implements vscode.Disposable {
         )
         : undefined;
       let reused: AppliedProxy | undefined;
-      let applied: AppliedProxy;
+      let applied: AppliedProxy | undefined;
+      let lastError: unknown;
       try {
-        reused = await this.tryReuseLease(config, sshHost, targetKey);
-        applied = reused ?? await this.startForwardOnAvailablePort(config, sshHost, targetKey, local);
-        await this.setup.applyAll(config, sshHost, applied);
+        for (const [index, backend] of backendCandidates.entries()) {
+          if (this.forwarder !== backend) {
+            this.forwarder.stop();
+            this.forwarder = backend;
+          }
+
+          try {
+            reused = await this.tryReuseLease(config, sshHost, targetKey);
+            applied = reused ?? await this.startForwardOnAvailablePort(config, sshHost, targetKey, local);
+            await this.setup.applyAll(config, sshHost, applied);
+            break;
+          } catch (error) {
+            lastError = error;
+            const message = error instanceof Error ? error.message : String(error);
+            this.output.appendLine(`Forward attempt using ${this.describeForwardingBackend(backend)} failed: ${message}`);
+            await this.releaseLeaseAndStopForwarder();
+            if (index + 1 < backendCandidates.length) {
+              this.output.appendLine(`Falling back to ${this.describeForwardingBackend(backendCandidates[index + 1])} backend.`);
+            }
+            if (index + 1 >= backendCandidates.length) {
+              throw error;
+            }
+          }
+        }
+        if (!applied) {
+          throw lastError instanceof Error ? lastError : new Error('no forwarding backend could start');
+        }
       } finally {
         await startLock?.release();
       }
@@ -253,8 +290,12 @@ class RemoteProxyController implements vscode.Disposable {
       this.nextRestartAt = 0;
       this.lastHealthCheckAt = 0;
       this.leaseCoordinator.resetHeartbeat();
-      this.rememberPreferredPort(applied);
-      vscode.window.showInformationMessage(`${reused ? 'Remote Proxy reused' : 'Remote Proxy active'}: ${applied.remoteUrl}`);
+      const active = applied;
+      if (!active) {
+        throw new Error('forwarding backend did not produce an applied proxy');
+      }
+      this.rememberPreferredPort(active);
+      vscode.window.showInformationMessage(`${reused ? 'Remote Proxy reused' : 'Remote Proxy active'}: ${active.remoteUrl}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.output.appendLine(`Start failed: ${message}`);

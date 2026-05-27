@@ -31,6 +31,10 @@ export function buildSshProxyServiceStatusArgs(): string[] {
   return ['service', '--json', 'status'];
 }
 
+export function buildSshProxyServiceInstallArgs(scope: 'auto' | 'user' | 'system' = 'auto'): string[] {
+  return ['service', '--scope', scope, 'install'];
+}
+
 export function buildSshProxyNodeControlStatusArgs(connection: SshProxyControlConnection = {}): string[] {
   return buildSshProxyNodeControlArgs(connection, ['status']);
 }

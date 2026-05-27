@@ -36,6 +36,8 @@ export class SshProxyKernelBackend implements ForwardingBackend {
   private currentCli: SshProxyCli | undefined;
   private currentControl: SshProxyControlConnection | undefined;
   private sessionDaemon: SshProxySessionDaemon | undefined;
+  private localServiceInstallBlocked = false;
+  private localServiceInstallBlockedReason: string | undefined;
 
   public readonly onDidChange = this.changeEmitter.event;
 
@@ -227,11 +229,23 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       return this.startSessionDaemon(cli, `local service is not healthy and auto-install is disabled: ${prettyJson(initialStatus)}`);
     }
 
-    this.output.appendLine('ssh_proxy local service is not healthy; attempting user install');
+    if (this.localServiceInstallBlocked) {
+      return this.startSessionDaemon(
+        cli,
+        `local service install is blocked for this session: ${this.localServiceInstallBlockedReason ?? 'previous permission failure'}; status=${prettyJson(initialStatus)}`,
+      );
+    }
+
+    this.output.appendLine('ssh_proxy local service is not healthy; attempting auto repair/install');
     try {
-      await cli.serviceInstall('user');
+      await cli.serviceInstall('auto');
     } catch (error) {
-      return this.startSessionDaemon(cli, `user service install failed: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      if (isPermissionDeniedMessage(message)) {
+        this.localServiceInstallBlocked = true;
+        this.localServiceInstallBlockedReason = message;
+      }
+      return this.startSessionDaemon(cli, `auto service ensure failed: ${message}`);
     }
     const repairedStatus = await this.readLocalServiceStatus(cli);
     this.setSnapshot({ serviceStatus: repairedStatus });
@@ -360,6 +374,10 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       ...update,
     };
   }
+}
+
+function isPermissionDeniedMessage(message: string): boolean {
+  return /access is denied|permission denied|not permitted|operation not permitted/i.test(message);
 }
 
 function prettyJson(value: unknown): string {
