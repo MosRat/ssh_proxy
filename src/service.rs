@@ -25,12 +25,58 @@ pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()
     let plan = ServicePlan::new(args, config)?;
     match plan.command {
         cli::ServiceCommand::Print => print_service(&plan),
+        cli::ServiceCommand::Ensure => ensure_service(&plan, json).await,
         cli::ServiceCommand::Install => install_service(&plan),
         cli::ServiceCommand::Uninstall => platform::platform_uninstall(&plan),
         cli::ServiceCommand::Start => platform::platform_start(&plan),
         cli::ServiceCommand::Stop => platform::platform_stop(&plan),
         cli::ServiceCommand::Status => status_service(&plan, json).await,
     }
+}
+
+async fn ensure_service(plan: &ServicePlan, json_output: bool) -> Result<()> {
+    let before = service_status_summary(plan).await?;
+    if before["ok"].as_bool().unwrap_or(false) {
+        if json_output {
+            println!("{}", serde_json::to_string(&before)?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&before)?);
+        }
+        return Ok(());
+    }
+
+    let outcome = match install_or_repair_service(plan) {
+        Ok(()) => service_status_summary(plan).await?,
+        Err(err) => {
+            let mut value = service_status_summary(plan).await?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert("ok".to_string(), Value::Bool(false));
+                object.insert("ensure_error".to_string(), Value::String(err.to_string()));
+                object.insert(
+                    "next_action".to_string(),
+                    Value::String(if is_permission_denied_error(&err.to_string()) {
+                        "session_daemon".to_string()
+                    } else if requires_elevation(plan, &err.to_string()) {
+                        "install_system_elevated".to_string()
+                    } else {
+                        "session_daemon".to_string()
+                    }),
+                );
+                object.insert(
+                    "requires_elevation".to_string(),
+                    Value::Bool(requires_elevation(plan, &err.to_string())),
+                );
+            }
+            value
+        }
+    };
+
+    if json_output {
+        println!("{}", serde_json::to_string(&outcome)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    }
+    Ok(())
 }
 
 fn print_service(plan: &ServicePlan) -> Result<()> {
@@ -58,6 +104,10 @@ fn print_service(plan: &ServicePlan) -> Result<()> {
 }
 
 fn install_service(plan: &ServicePlan) -> Result<()> {
+    install_or_repair_service(plan)
+}
+
+fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
     let action = plan.resolution.next_action;
     let original_config = if plan.config_to_save.is_some() {
         match fs::read(&plan.config_path) {
@@ -118,6 +168,22 @@ fn install_service(plan: &ServicePlan) -> Result<()> {
     Ok(())
 }
 
+fn requires_elevation(plan: &ServicePlan, error: &str) -> bool {
+    matches!(plan.scope, plan::ServiceScope::System)
+        && !plan::is_admin()
+        && (error.contains("administrator")
+            || error.contains("root")
+            || is_permission_denied_error(error))
+}
+
+fn is_permission_denied_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("access is denied")
+        || lower.contains("permission denied")
+        || lower.contains("privilege")
+        || lower.contains("elevation")
+}
+
 fn restore_config_snapshot(path: &Path, snapshot: Option<Vec<u8>>) -> Result<()> {
     match snapshot {
         Some(bytes) => {
@@ -158,6 +224,9 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
     let overall_ok = daemon_reachable || platform_ok;
     let manager = service_manager_summary(plan, daemon_reachable, platform_ok);
     let inventory = inventory_json(&plan.resolution);
+    let selected_control = selected_control_json(plan, daemon_reachable);
+    let candidates = service_candidates_json(plan);
+    let requires_elevation = matches!(plan.scope, plan::ServiceScope::System) && !plan::is_admin();
     Ok(json!({
         "ok": overall_ok,
         "kind": "service_status",
@@ -165,6 +234,10 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "user": current_user(),
         "resolution": inventory,
+        "selected_control": selected_control,
+        "candidates": candidates,
+        "requires_elevation": requires_elevation,
+        "next_action": service_next_action(daemon_reachable, platform_ok),
         "scope": service_scope_name(plan.scope),
         "requested_scope": cli_service_scope_name(plan.requested_scope),
         "paths": {
@@ -222,6 +295,80 @@ fn service_manager_summary(plan: &ServicePlan, daemon_reachable: bool, platform_
         },
         "next_action": service_next_action(daemon_reachable, platform_ok),
     })
+}
+
+fn selected_control_json(plan: &ServicePlan, daemon_reachable: bool) -> Value {
+    let selected = if daemon_reachable {
+        json!({
+            "endpoint": plan.endpoint,
+            "source": "configured_or_default",
+            "reachable": true,
+            "kind": control_endpoint_kind_from_str(&plan.endpoint),
+        })
+    } else {
+        Value::Null
+    };
+    json!({
+        "selected": selected,
+        "preferred_order": [
+            "system_service",
+            "user_service",
+            "configured_endpoint",
+            "default_endpoint",
+            "tcp_legacy"
+        ],
+        "configured_endpoint": plan.endpoint,
+        "default_endpoint": crate::control_socket::default_endpoint_string(),
+    })
+}
+
+fn service_candidates_json(plan: &ServicePlan) -> Value {
+    let mut candidates = Vec::new();
+    for probe in &plan.resolution.probe_chain {
+        candidates.push(json!({
+            "scope": service_scope_name(probe.scope),
+            "service_name": probe.service_name,
+            "exists": probe.exists,
+            "healthy": probe.healthy,
+            "accessible": probe.accessible,
+            "permission_denied": probe.permission_denied,
+            "control_endpoint": if probe.scope == plan.scope {
+                Value::String(plan.endpoint.clone())
+            } else {
+                Value::Null
+            },
+            "version": Value::Null,
+            "binary_path": Value::Null,
+            "details": probe.details.clone(),
+        }));
+    }
+    candidates.push(json!({
+        "scope": "configured",
+        "service_name": "configured_endpoint",
+        "exists": true,
+        "healthy": false,
+        "accessible": true,
+        "permission_denied": false,
+        "control_endpoint": plan.endpoint,
+        "version": env!("CARGO_PKG_VERSION"),
+        "binary_path": plan.exe.clone(),
+        "details": {
+            "kind": control_endpoint_kind_from_str(&plan.endpoint),
+        },
+    }));
+    Value::Array(candidates)
+}
+
+fn control_endpoint_kind_from_str(endpoint: &str) -> &'static str {
+    if endpoint.starts_with("npipe://") {
+        "named-pipe"
+    } else if endpoint.starts_with("unix://") {
+        "unix"
+    } else if endpoint.starts_with("tcp://") {
+        "tcp"
+    } else {
+        "tcp"
+    }
 }
 
 fn service_state_name(daemon_reachable: bool, platform_ok: bool) -> &'static str {
@@ -684,6 +831,7 @@ mod tests {
                 install_dir: None,
                 no_copy: true,
                 json: false,
+                elevate: false,
                 command: cli::ServiceCommand::Status,
             },
             config::AppConfig::default(),

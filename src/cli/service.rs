@@ -58,6 +58,12 @@ pub struct ServiceArgs {
     #[arg(long, help = "Emit machine-readable JSON output")]
     pub json: bool,
 
+    #[arg(
+        long,
+        help = "Allow an interactive elevation prompt when a system service action needs administrator/root privileges"
+    )]
+    pub elevate: bool,
+
     #[command(subcommand)]
     pub command: ServiceCommand,
 }
@@ -65,6 +71,7 @@ pub struct ServiceArgs {
 #[derive(Debug, Clone, Subcommand)]
 pub enum ServiceCommand {
     Print,
+    Ensure,
     Install,
     Uninstall,
     Start,

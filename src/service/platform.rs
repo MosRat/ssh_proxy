@@ -644,6 +644,9 @@ pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
             ],
         ),
         ServiceScope::System => {
+            if plan.elevate && !is_elevated_for_platform() {
+                return platform_install_elevated(plan);
+            }
             ensure_admin("installing a Windows system service requires administrator privileges")?;
             run_command(
                 "sc.exe",
@@ -672,6 +675,45 @@ pub(super) fn platform_uninstall(plan: &ServicePlan) -> Result<()> {
             run_command("sc.exe", &["delete", &service_name])
         }
     }
+}
+
+#[cfg(windows)]
+pub(super) fn platform_install_elevated(plan: &ServicePlan) -> Result<()> {
+    let mut args = vec![
+        "-NoProfile".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-Command".to_string(),
+    ];
+    let mut service_args = vec![
+        "service".to_string(),
+        "--scope".to_string(),
+        "system".to_string(),
+        "--control".to_string(),
+        plan.endpoint.clone(),
+    ];
+    if let Some(transport) = plan.transport {
+        service_args.push("--transport".to_string());
+        service_args.push(transport.to_string());
+    } else {
+        service_args.push("--no-transport".to_string());
+    }
+    if let Some(token) = &plan.token {
+        service_args.push("--token".to_string());
+        service_args.push(token.clone());
+    }
+    if !plan.copy_exe {
+        service_args.push("--no-copy".to_string());
+    }
+    service_args.push("install".to_string());
+
+    let command = format!(
+        "$p = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
+        powershell_quote(&plan.source_exe.display().to_string()),
+        powershell_quote(&join_windows_args(&service_args)),
+    );
+    args.push(command);
+    run_command("powershell.exe", &args.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 #[cfg(windows)]
@@ -717,6 +759,30 @@ fn windows_schtasks_create(plan: &ServicePlan, service_name: &str) -> String {
         "schtasks /Create /TN {service_name} /SC ONLOGON /RL LIMITED /F /TR {}",
         command_quote(&plan.daemon_command())
     )
+}
+
+#[cfg(windows)]
+fn is_elevated_for_platform() -> bool {
+    crate::service::plan::is_admin()
+}
+
+#[cfg(windows)]
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(windows)]
+fn join_windows_args(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| {
+            if arg.chars().any(|ch| ch.is_whitespace() || ch == '"') {
+                format!("\"{}\"", arg.replace('"', "\\\""))
+            } else {
+                arg.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(windows)]

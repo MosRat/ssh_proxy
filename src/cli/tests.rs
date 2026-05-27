@@ -67,6 +67,30 @@ fn service_accepts_json_flag() {
 }
 
 #[test]
+fn service_accepts_ensure_and_elevate() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "service",
+        "--scope",
+        "system",
+        "--json",
+        "--elevate",
+        "ensure",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Service(args) => {
+            assert_eq!(args.scope, ServiceScope::System);
+            assert!(args.json);
+            assert!(args.elevate);
+            assert!(matches!(args.command, ServiceCommand::Ensure));
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
 fn node_control_accepts_json_flag() {
     let cli = Cli::try_parse_from(["ssh_proxy", "node", "control", "--json", "status"]).unwrap();
 

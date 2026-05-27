@@ -22,6 +22,7 @@ pub(crate) struct ServicePlan {
     pub(crate) tls_key: Option<PathBuf>,
     pub(crate) tls_client_ca: Option<PathBuf>,
     pub(crate) report_to: Vec<String>,
+    pub(crate) elevate: bool,
     pub(crate) config_path: PathBuf,
     pub(crate) route_store_path: PathBuf,
     pub(crate) config_to_save: Option<config::AppConfig>,
@@ -38,7 +39,7 @@ impl ServicePlan {
         let source_exe = std::env::current_exe().context("failed to locate current executable")?;
         let should_materialize_config = matches!(
             args.command,
-            cli::ServiceCommand::Install | cli::ServiceCommand::Print
+            cli::ServiceCommand::Ensure | cli::ServiceCommand::Install | cli::ServiceCommand::Print
         );
         let copy_exe = !args.no_copy;
         let exe = if copy_exe {
@@ -158,6 +159,7 @@ impl ServicePlan {
             tls_key,
             tls_client_ca,
             report_to,
+            elevate: args.elevate,
             config_path: config::config_path()?,
             route_store_path,
             config_to_save,
@@ -329,7 +331,7 @@ fn is_admin() -> bool {
 }
 
 #[cfg(windows)]
-fn is_admin() -> bool {
+pub(crate) fn is_admin() -> bool {
     Command::new("net")
         .arg("session")
         .output()
