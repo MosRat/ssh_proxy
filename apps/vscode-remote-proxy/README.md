@@ -45,6 +45,14 @@ Kernel mode is preferred because the daemon owns route ids, job progress, readin
 
 Auto-start never prompts for UAC or sudo elevation. Interactive commands can guide the user to install or update the local daemon. OpenSSH only participates when `remoteProxy.sshProxy.openSshFallbackPolicy=legacy-auto`.
 
+## Daemon Job Readiness
+
+`Remote Proxy: Start` calls `ssh_proxy vscode up` and receives a daemon job id plus the intended remote proxy URL. The extension then polls `ssh_proxy vscode status` and renders the daemon phase instead of starting its own route or service fallback chain.
+
+Typical phases are `resolve_target`, `ensure_peer`, `start_route`, `wait_route_ready`, `verify_remote_port`, `apply_remote_settings`, and `healthy`. A terminal `failed` or `cancelled` job includes a blocker, last error, and next action for Diagnose output.
+
+When no daemon is reachable, auto-start reports the blocker in the status bar. Interactive commands can guide installation or update; background startup does not open an elevation prompt.
+
 ## Quick Start
 
 1. Install the extension or launch it in Extension Development Host.
@@ -133,7 +141,7 @@ Common failures:
 - `Access is denied` during daemon install: Windows blocked service registration. Auto-start will not pop UAC; run an interactive daemon install/update command or inspect `ssh_proxy doctor --json`.
 - Remote port already in use: keep `remoteProxy.remote.autoPickPort=true`, or pick a different `remoteProxy.remote.port`.
 - Host unresolved in Extension Development Host: run `Remote Proxy: Pick SSH Host`, or enable storage fallback only if you understand it can be stale.
-- Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy events --json` and `ssh_proxy node control --json routes`, and verify remote `127.0.0.1:<port>` reachability.
+- Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy vscode status --workspace <id> --json` and `ssh_proxy events --job <job-id> --json`, and verify remote `127.0.0.1:<port>` reachability.
 - Unexpected OpenSSH usage: confirm `remoteProxy.sshProxy.openSshFallbackPolicy` is still `disabled`; `legacy-auto` intentionally restores the older fallback chain.
 
 Remote shell smoke test:

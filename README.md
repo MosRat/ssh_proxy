@@ -20,10 +20,10 @@ Install or inspect the local daemon:
 
 ```powershell
 ssh_proxy daemon --json status
-ssh_proxy daemon --scope system install
+ssh_proxy daemon --scope system install --elevate
 ```
 
-The daemon is the normal production path. CLI commands submit intent to the private named pipe or Unix socket; they do not directly own long-running routes.
+The daemon is the normal production path. CLI commands submit intent to the private named pipe or Unix socket; they do not directly own long-running routes. Non-interactive commands report `requires_elevation` instead of opening a UAC or sudo prompt.
 
 Bootstrap or refresh a remote peer through SSH:
 
@@ -54,9 +54,23 @@ Inspect the daemon-owned job and route state:
 
 ```powershell
 ssh_proxy status --json
-ssh_proxy events --json
+ssh_proxy events --job <job-id> --json
 ssh_proxy doctor --json
 ```
+
+## Daemon Job Workflow
+
+`ssh_proxy up` and `ssh_proxy vscode up` both submit an `ensure_proxy_session` job to the daemon. The command returns quickly with a job id, route id, and intended remote URL. The daemon then drives the session through these phases:
+
+```text
+resolve_target -> ensure_local_proxy -> ensure_peer -> plan_route
+  -> start_route -> wait_route_ready -> verify_remote_port
+  -> apply_remote_settings -> healthy
+```
+
+`ssh_proxy status --workspace <id> --json` reports the current `ProxySessionStatus`. `ssh_proxy events --job <job-id> --json` reports structured job events. If the daemon restarts while a job is unfinished, it restores the latest snapshot and reconciles the proxy session instead of starting from an unknown state.
+
+The first v0.3 implementation still reuses the existing route and peer engine internally, but the daemon is now the only status source for CLI and VS Code paths.
 
 Inspect the selected plan before starting a route:
 
@@ -102,10 +116,9 @@ See [apps/vscode-remote-proxy/README.md](apps/vscode-remote-proxy/README.md) for
 Use JSON status first:
 
 ```powershell
-ssh_proxy service --json status
-ssh_proxy node control --json routes
 ssh_proxy status --json
-ssh_proxy events --json
+ssh_proxy events --job <job-id> --json
+ssh_proxy doctor --json
 ```
 
 Common checks:
@@ -113,7 +126,7 @@ Common checks:
 - If a remote shell returns `502 Bad Gateway`, verify the local upstream proxy URL and make sure the local proxy accepts CONNECT/SOCKS traffic.
 - If Windows daemon installation is denied, use `ssh_proxy daemon --json status` and `ssh_proxy doctor --json`. Auto-start does not pop UAC; interactive commands can install or update the daemon explicitly.
 - If the remote port is occupied, use `remoteProxy.remote.autoPickPort` in the extension or choose another `--port`.
-- If a route stays in `accepted`, `bootstrapping_peer`, or `starting`, inspect `ssh_proxy events --json` and `ssh_proxy node control --json routes`; readiness is represented as daemon job progress.
+- If a route stays in `accepted`, `bootstrapping_peer`, or `starting`, inspect `ssh_proxy status --workspace <id> --json` and `ssh_proxy events --job <job-id> --json`; readiness is represented as daemon job progress.
 
 More operational detail lives in [docs/operations.md](docs/operations.md).
 
