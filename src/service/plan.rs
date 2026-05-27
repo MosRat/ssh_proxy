@@ -3,10 +3,13 @@ use std::{fs, net::SocketAddr, path::PathBuf, process::Command};
 use anyhow::{Context, Result, bail};
 
 use crate::{cli, config, control_socket};
+use super::inventory::ServiceInventory;
 
 pub(crate) struct ServicePlan {
     pub(crate) command: cli::ServiceCommand,
+    pub(crate) requested_scope: cli::ServiceScope,
     pub(crate) scope: ServiceScope,
+    pub(crate) resolution: ServiceInventory,
     pub(crate) source_exe: PathBuf,
     pub(crate) exe: PathBuf,
     pub(crate) copy_exe: bool,
@@ -133,10 +136,16 @@ impl ServicePlan {
             .map(config::expand_path)
             .unwrap_or(config::routes_path()?);
         let config_to_save = should_materialize_config.then_some(config);
-        let scope = resolve_scope(args.scope)?;
+        let probe_chain = super::inventory::collect_service_inventory();
+        let resolution = super::inventory::resolve_service_inventory(args.scope, probe_chain);
+        let scope = resolution
+            .selected_scope
+            .unwrap_or_else(preferred_install_scope);
         Ok(Self {
             command: args.command,
+            requested_scope: args.scope,
             scope,
+            resolution,
             source_exe,
             exe,
             copy_exe,
@@ -264,15 +273,11 @@ fn executable_name() -> &'static str {
     }
 }
 
-fn resolve_scope(scope: cli::ServiceScope) -> Result<ServiceScope> {
-    match scope {
-        cli::ServiceScope::User => Ok(ServiceScope::User),
-        cli::ServiceScope::System => {
-            ensure_admin("system service scope requires root/admin privileges")?;
-            Ok(ServiceScope::System)
-        }
-        cli::ServiceScope::Auto if is_admin() => Ok(ServiceScope::System),
-        cli::ServiceScope::Auto => Ok(ServiceScope::User),
+pub(crate) fn preferred_install_scope() -> ServiceScope {
+    if is_admin() {
+        ServiceScope::System
+    } else {
+        ServiceScope::User
     }
 }
 

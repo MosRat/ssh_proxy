@@ -13,9 +13,11 @@ use tokio::time::{self, Duration};
 use crate::{cli, config};
 
 mod peer_health;
+mod inventory;
 mod plan;
 mod platform;
 
+use inventory::{inventory_json, ServiceNextAction};
 use plan::ServicePlan;
 
 pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()> {
@@ -56,6 +58,7 @@ fn print_service(plan: &ServicePlan) -> Result<()> {
 }
 
 fn install_service(plan: &ServicePlan) -> Result<()> {
+    let action = plan.resolution.next_action;
     let original_config = if plan.config_to_save.is_some() {
         match fs::read(&plan.config_path) {
             Ok(bytes) => Some(Some(bytes)),
@@ -73,20 +76,44 @@ fn install_service(plan: &ServicePlan) -> Result<()> {
         None
     };
 
-    if let Some(config) = &plan.config_to_save {
-        config.save_default()?;
-        println!("saved daemon defaults to {}", plan.config_path.display());
-    }
-    plan.install_binary()?;
-    if let Err(err) = platform::platform_install(plan) {
-        if let Some(snapshot) = original_config {
-            restore_config_snapshot(&plan.config_path, snapshot)?;
-            eprintln!(
-                "rolled back daemon defaults in {} after service install failure",
-                plan.config_path.display()
+    match action {
+        ServiceNextAction::Reuse => {
+            println!(
+                "selected existing {} service at {}; no install required",
+                service_scope_name(plan.scope),
+                platform_service_name(plan.scope)
             );
+            return Ok(());
         }
-        return Err(err);
+        ServiceNextAction::StartOrRepair | ServiceNextAction::Install => {
+            if let Some(config) = &plan.config_to_save {
+                config.save_default()?;
+                println!("saved daemon defaults to {}", plan.config_path.display());
+            }
+            plan.install_binary()?;
+            if let Err(err) = if matches!(action, ServiceNextAction::StartOrRepair) {
+                platform::platform_start(plan)
+            } else {
+                platform::platform_install(plan)
+            } {
+                if let Some(snapshot) = original_config {
+                    restore_config_snapshot(&plan.config_path, snapshot)?;
+                    eprintln!(
+                        "rolled back daemon defaults in {} after service install failure",
+                        plan.config_path.display()
+                    );
+                }
+                return Err(err);
+            }
+        }
+        ServiceNextAction::Unavailable => {
+            if let Some(snapshot) = original_config {
+                restore_config_snapshot(&plan.config_path, snapshot)?;
+            }
+            return Err(anyhow::anyhow!(
+                "no persistent service scope could be selected; no install target available"
+            ));
+        }
     }
     Ok(())
 }
@@ -130,13 +157,16 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
     let platform_ok = platform["ok"].as_bool().unwrap_or(false);
     let overall_ok = daemon_reachable || platform_ok;
     let manager = service_manager_summary(plan, daemon_reachable, platform_ok);
+    let inventory = inventory_json(&plan.resolution);
     Ok(json!({
         "ok": overall_ok,
         "kind": "service_status",
         "state": service_state_name(daemon_reachable, platform_ok),
         "version": env!("CARGO_PKG_VERSION"),
         "user": current_user(),
+        "resolution": inventory,
         "scope": service_scope_name(plan.scope),
+        "requested_scope": cli_service_scope_name(plan.requested_scope),
         "paths": {
             "config": plan.config_path,
             "route_store": plan.route_store_path,
@@ -174,6 +204,11 @@ fn service_manager_summary(plan: &ServicePlan, daemon_reachable: bool, platform_
     json!({
         "kind": persistent_manager_kind(plan.scope),
         "service_name": platform_service_name(plan.scope),
+        "requested_scope": cli_service_scope_name(plan.requested_scope),
+        "selected_scope": service_scope_name(plan.scope),
+        "selected_reason": plan.resolution.selected_reason,
+        "resolution_next_action": plan.resolution.next_action.as_str(),
+        "fallback_chain": plan.resolution.fallback_chain.iter().map(|scope| service_scope_name(*scope)).collect::<Vec<_>>(),
         "persistent_installed_or_registered": platform_ok,
         "daemon_reachable": daemon_reachable,
         "session_daemon_fallback": {
@@ -613,6 +648,14 @@ fn service_scope_name(scope: plan::ServiceScope) -> &'static str {
     match scope {
         plan::ServiceScope::User => "user",
         plan::ServiceScope::System => "system",
+    }
+}
+
+fn cli_service_scope_name(scope: cli::ServiceScope) -> &'static str {
+    match scope {
+        cli::ServiceScope::Auto => "auto",
+        cli::ServiceScope::User => "user",
+        cli::ServiceScope::System => "system",
     }
 }
 

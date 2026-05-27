@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 #[cfg(windows)]
 use super::plan::command_quote;
 use super::plan::{ServicePlan, ServiceScope, ensure_admin, platform_service_name};
+use super::inventory::{ServiceProbeState, ServiceProbeSummary};
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "local.ssh-proxy.daemon";
 
@@ -61,6 +62,45 @@ fn capture_command_output(program: &str, args: &[&str]) -> Value {
     }
 }
 
+fn service_probe_summary(
+    scope: ServiceScope,
+    service_name: String,
+    state: ServiceProbeState,
+    exists: bool,
+    healthy: bool,
+    accessible: bool,
+    permission_denied: bool,
+    details: Value,
+) -> ServiceProbeSummary {
+    ServiceProbeSummary {
+        scope,
+        service_name,
+        state,
+        exists,
+        healthy,
+        accessible,
+        permission_denied,
+        details,
+    }
+}
+
+fn contains_permission_denied(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("access is denied")
+        || text.to_ascii_lowercase().contains("permission denied")
+        || text.to_ascii_lowercase().contains("not permitted")
+        || text.to_ascii_lowercase().contains("operation not permitted")
+}
+
+#[cfg(target_os = "linux")]
+fn split_status_lines(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let (left, right) = line.split_once('=')?;
+            Some((left.trim().to_string(), right.trim().to_string()))
+        })
+        .collect()
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
     let unit = linux_unit(plan);
@@ -81,6 +121,71 @@ pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
         println!("status:  systemctl status ssh_proxy.service");
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary {
+    let service_name = platform_service_name(scope);
+    let args: Vec<&str> = match scope {
+        ServiceScope::User => vec![
+            "--user",
+            "show",
+            "--property=LoadState,ActiveState,UnitFileState",
+            "ssh_proxy.service",
+        ],
+        ServiceScope::System => vec![
+            "show",
+            "--property=LoadState,ActiveState,UnitFileState",
+            "ssh_proxy.service",
+        ],
+    };
+    let capture = capture_command_output("systemctl", &args);
+    let stdout = capture["stdout"].as_str().unwrap_or_default();
+    let stderr = capture["stderr"].as_str().unwrap_or_default();
+    let capture_ok = capture["ok"].as_bool().unwrap_or(false);
+    let mut load_state = None;
+    let mut active_state = None;
+    let mut unit_file_state = None;
+    for (key, value) in split_status_lines(stdout) {
+        match key.as_str() {
+            "LoadState" => load_state = Some(value),
+            "ActiveState" => active_state = Some(value),
+            "UnitFileState" => unit_file_state = Some(value),
+            _ => {}
+        }
+    }
+    let exists = load_state.as_deref().is_some_and(|state| state != "not-found")
+        || unit_file_state.as_deref().is_some_and(|state| state != "not-found");
+    let healthy = active_state.as_deref() == Some("active");
+    let permission_denied = contains_permission_denied(stderr);
+    let state = if healthy {
+        ServiceProbeState::Healthy
+    } else if exists {
+        ServiceProbeState::Present
+    } else if permission_denied {
+        ServiceProbeState::PermissionDenied
+    } else if capture_ok {
+        ServiceProbeState::Missing
+    } else {
+        ServiceProbeState::Unknown
+    };
+    service_probe_summary(
+        scope,
+        service_name,
+        state,
+        exists,
+        healthy,
+        capture_ok || exists,
+        permission_denied,
+        json!({
+            "program": "systemctl",
+            "args": args,
+            "capture": capture,
+            "load_state": load_state,
+            "active_state": active_state,
+            "unit_file_state": unit_file_state,
+        }),
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -208,6 +313,51 @@ pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
         println!("status:  launchctl print system/{LAUNCHD_LABEL}");
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary {
+    let service_name = platform_service_name(scope);
+    let manifest_path = macos_manifest_path(scope);
+    let domain = match scope {
+        ServiceScope::User => format!("gui/{}/{}", current_uid().unwrap_or_else(|_| "0".to_string()), service_name),
+        ServiceScope::System => format!("system/{}", service_name),
+    };
+    let capture = capture_command_output("launchctl", &["print", &domain]);
+    let stderr = capture["stderr"].as_str().unwrap_or_default();
+    let plist_exists = manifest_path.as_ref().is_some_and(|path| path.exists());
+    let loaded = capture["ok"].as_bool().unwrap_or(false);
+    let permission_denied = contains_permission_denied(stderr);
+    let exists = loaded || plist_exists;
+    let healthy = loaded;
+    let state = if healthy {
+        ServiceProbeState::Healthy
+    } else if exists {
+        ServiceProbeState::Present
+    } else if permission_denied {
+        ServiceProbeState::PermissionDenied
+    } else if capture["ok"].as_bool().unwrap_or(false) {
+        ServiceProbeState::Missing
+    } else {
+        ServiceProbeState::Unknown
+    };
+    service_probe_summary(
+        scope,
+        service_name,
+        state,
+        exists,
+        healthy,
+        exists || loaded,
+        permission_denied,
+        json!({
+            "program": "launchctl",
+            "domain": domain,
+            "manifest_path": manifest_path.map(|path| path.display().to_string()),
+            "capture": capture,
+            "loaded": loaded,
+            "plist_exists": plist_exists,
+        }),
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -351,6 +501,20 @@ fn launchd_plist(plan: &ServicePlan) -> String {
 }
 
 #[cfg(target_os = "macos")]
+fn macos_manifest_path(scope: ServiceScope) -> Option<PathBuf> {
+    match scope {
+        ServiceScope::User => dirs::home_dir().map(|base| {
+            base.join("Library")
+                .join("LaunchAgents")
+                .join(format!("{LAUNCHD_LABEL}.plist"))
+        }),
+        ServiceScope::System => Some(PathBuf::from(format!(
+            "/Library/LaunchDaemons/{LAUNCHD_LABEL}.plist"
+        ))),
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn current_uid() -> Result<String> {
     let output = Command::new("id").arg("-u").output()?;
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
@@ -382,6 +546,82 @@ pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(windows)]
+pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary {
+    let service_name = platform_service_name(scope);
+    match scope {
+        ServiceScope::User => {
+            let capture = capture_command_output(
+                "schtasks",
+                &["/Query", "/TN", &service_name, "/FO", "LIST", "/V"],
+            );
+            let stdout = capture["stdout"].as_str().unwrap_or_default();
+            let stderr = capture["stderr"].as_str().unwrap_or_default();
+            let running = stdout.to_ascii_lowercase().contains("running");
+            let exists = capture["ok"].as_bool().unwrap_or(false);
+            let permission_denied = contains_permission_denied(stderr);
+            let state = if running {
+                ServiceProbeState::Healthy
+            } else if exists {
+                ServiceProbeState::Present
+            } else if permission_denied {
+                ServiceProbeState::PermissionDenied
+            } else if capture["ok"].as_bool().unwrap_or(false) {
+                ServiceProbeState::Missing
+            } else {
+                ServiceProbeState::Unknown
+            };
+            service_probe_summary(
+                scope,
+                service_name,
+                state,
+                exists,
+                running,
+                exists || running,
+                permission_denied,
+                json!({
+                    "program": "schtasks",
+                    "capture": capture,
+                    "running": running,
+                }),
+            )
+        }
+        ServiceScope::System => {
+            let capture = capture_command_output("sc.exe", &["query", &service_name]);
+            let stdout = capture["stdout"].as_str().unwrap_or_default();
+            let stderr = capture["stderr"].as_str().unwrap_or_default();
+            let running = stdout.to_ascii_uppercase().contains("RUNNING");
+            let exists = capture["ok"].as_bool().unwrap_or(false);
+            let permission_denied = contains_permission_denied(stderr);
+            let state = if running {
+                ServiceProbeState::Healthy
+            } else if exists {
+                ServiceProbeState::Present
+            } else if permission_denied {
+                ServiceProbeState::PermissionDenied
+            } else if capture["ok"].as_bool().unwrap_or(false) {
+                ServiceProbeState::Missing
+            } else {
+                ServiceProbeState::Unknown
+            };
+            service_probe_summary(
+                scope,
+                service_name,
+                state,
+                exists,
+                running,
+                exists || running,
+                permission_denied,
+                json!({
+                    "program": "sc.exe",
+                    "capture": capture,
+                    "running": running,
+                }),
+            )
+        }
+    }
 }
 
 #[cfg(windows)]
