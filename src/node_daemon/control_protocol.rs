@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use super::proxy_session::ProxySessionSpec;
 use crate::cli;
 
 pub(crate) const NODE_CONTROL_VERSION: u16 = 1;
@@ -115,6 +116,8 @@ pub(crate) struct NodeRequest {
     pub(crate) fallback_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) node_scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) proxy_session: Option<ProxySessionSpec>,
 }
 
 impl NodeRequest {
@@ -345,6 +348,60 @@ impl NodeRequest {
             cmd: "report".to_string(),
             node: Some(node),
             status: Some(status),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn ensure_proxy_session(proxy_session: ProxySessionSpec) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "ensure_proxy_session".to_string(),
+            id: Some(proxy_session.job_id()),
+            proxy_session: Some(proxy_session),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn proxy_session_status(
+        id: Option<String>,
+        proxy_session: Option<ProxySessionSpec>,
+    ) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "proxy_session_status".to_string(),
+            id,
+            proxy_session,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn proxy_session_down(
+        id: Option<String>,
+        proxy_session: Option<ProxySessionSpec>,
+    ) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "proxy_session_down".to_string(),
+            id,
+            proxy_session,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn job_status(id: String) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "job_status".to_string(),
+            id: Some(id),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn job_events(id: Option<String>) -> Self {
+        Self {
+            api_version: Some(NODE_CONTROL_VERSION),
+            cmd: "job_events".to_string(),
+            id,
             ..Self::default()
         }
     }

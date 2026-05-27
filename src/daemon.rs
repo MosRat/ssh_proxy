@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{cli, config, control_socket, node_daemon, route, service};
+use crate::{cli, config, control_socket, node_daemon, service};
 
 pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<()> {
     match args.command {
@@ -100,8 +100,10 @@ pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<
 }
 
 pub async fn up(args: cli::UpArgs, config: config::AppConfig) -> Result<()> {
-    let route_args = route_args_from_up(&args);
-    let request = route::route_intent_request(route_args);
+    let spec = node_daemon::ProxySessionSpec::from_up_args(&args);
+    let request = node_daemon::NodeRequest::ensure_proxy_session(spec.clone())
+        .to_value()
+        .context("failed to encode proxy session request")?;
     request_daemon_or_report(
         &args.endpoint,
         args.token.as_deref(),
@@ -112,15 +114,9 @@ pub async fn up(args: cli::UpArgs, config: config::AppConfig) -> Result<()> {
             json!({
                 "kind": "proxy_session",
                 "daemon_api": "v0.3",
-                "spec": proxy_session_spec(
-                    &args.target,
-                    args.workspace.as_deref(),
-                    &args.local_proxy,
-                    &args.remote_bind.to_string(),
-                    args.remote_port,
-                ),
+                "spec": spec.to_value(),
                 "job": job_status(
-                    &format!("proxy:{}", session_key(args.route_key())),
+                    &spec.job_id(),
                     "ensure_proxy_session",
                     "blocked",
                     "daemon_unavailable",
@@ -137,14 +133,14 @@ pub async fn down(args: cli::DownArgs, config: config::AppConfig) -> Result<()> 
         args.workspace
             .as_deref()
             .or(args.target.as_deref())
-            .map(route_id_for_key)
+            .map(node_daemon::ProxySessionSpec::route_id_for_key)
     }) {
         Some(id) => id,
         None => bail!("down requires --route-id, --workspace, or --target"),
     };
-    let request = node_daemon::NodeRequest::route_stop(id.clone())
+    let request = node_daemon::NodeRequest::proxy_session_down(Some(id.clone()), None)
         .to_value()
-        .context("failed to encode route stop request")?;
+        .context("failed to encode proxy session down request")?;
     request_daemon_or_report(
         &args.endpoint,
         args.token.as_deref(),
@@ -167,9 +163,16 @@ pub async fn down(args: cli::DownArgs, config: config::AppConfig) -> Result<()> 
 }
 
 pub async fn status(args: cli::StatusArgs, config: config::AppConfig) -> Result<()> {
-    let request = node_daemon::NodeRequest::command("status")
-        .to_value()
-        .context("failed to encode status request")?;
+    let request = if let Some(key) = args.workspace.as_deref().or(args.target.as_deref()) {
+        node_daemon::NodeRequest::proxy_session_status(
+            Some(node_daemon::ProxySessionSpec::job_id_for_key(key)),
+            None,
+        )
+    } else {
+        node_daemon::NodeRequest::command("status")
+    }
+    .to_value()
+    .context("failed to encode status request")?;
     request_daemon_or_report(
         &args.endpoint,
         args.token.as_deref(),
@@ -195,9 +198,9 @@ pub async fn status(args: cli::StatusArgs, config: config::AppConfig) -> Result<
 }
 
 pub async fn events(args: cli::EventsArgs, config: config::AppConfig) -> Result<()> {
-    let request = node_daemon::NodeRequest::command("jobs")
+    let request = node_daemon::NodeRequest::job_events(args.job.clone())
         .to_value()
-        .context("failed to encode jobs request")?;
+        .context("failed to encode job events request")?;
     request_daemon_or_report(
         &args.endpoint,
         args.token.as_deref(),
@@ -323,64 +326,6 @@ fn service_args(
     }
 }
 
-fn route_args_from_up(args: &cli::UpArgs) -> cli::RouteArgs {
-    cli::RouteArgs {
-        target: args.target.clone(),
-        direction: cli::RouteDirection::RemoteUsesLocal,
-        connect_mode: args.connect_mode,
-        port: args.remote_port,
-        bind: args.remote_bind,
-        tcp_target: None,
-        endpoint: args.endpoint.clone(),
-        token: args.token.clone(),
-        ssh_args: Vec::new(),
-        user: None,
-        ssh_port: None,
-        identity: Vec::new(),
-        config: None,
-        known_hosts: None,
-        accept_new: false,
-        insecure_ignore_host_key: false,
-        jump: Vec::new(),
-        remote_path: None,
-        remote_bin: None,
-        deploy: cli::DeployMode::Auto,
-        remote_os: cli::RemoteOs::Auto,
-        remote_transport: cli::RemoteTransport::Auto,
-        remote_tcp: None,
-        remote_control: None,
-        remote_quic: None,
-        remote_tls: None,
-        remote_ca: None,
-        remote_name: "localhost".to_string(),
-        remote_token: None,
-        egress_proxy: Some(args.local_proxy.clone()),
-        reconnect_delay_secs: None,
-        reconnect_max_delay_secs: None,
-        connect_timeout_secs: None,
-        quic_max_bidi_streams: None,
-        quic_stream_receive_window: None,
-        quic_receive_window: None,
-        quic_keep_alive_interval_secs: None,
-        quic_idle_timeout_secs: None,
-        transport_pool_size: None,
-        workload_hint: Some(cli::RouteWorkloadHint::Large),
-        ssh_session_pool_size: None,
-        no_reconnect: false,
-        local_peer: None,
-        allow_plain_tcp: false,
-        id: Some(
-            args.id
-                .clone()
-                .unwrap_or_else(|| route_id_for_key(args.route_key())),
-        ),
-        volatile: args.volatile,
-        dry_run: false,
-        explain: false,
-        json: args.json,
-    }
-}
-
 async fn request_daemon_or_report(
     endpoint: &str,
     token: Option<&str>,
@@ -408,30 +353,6 @@ async fn request_daemon_or_report(
     }
 }
 
-fn proxy_session_spec(
-    target: &str,
-    workspace: Option<&str>,
-    local_proxy: &str,
-    remote_bind: &str,
-    remote_port: u16,
-) -> Value {
-    json!({
-        "target": target,
-        "workspace_id": workspace,
-        "local_proxy": local_proxy,
-        "remote_bind": remote_bind,
-        "remote_port_policy": {
-            "preferred": remote_port,
-            "auto_pick": true,
-        },
-        "apply_policy": {
-            "vscode_settings": true,
-            "server_env": true,
-            "git": true,
-        },
-    })
-}
-
 fn job_status(id: &str, kind: &str, state: &str, phase: &str, message: &str) -> Value {
     json!({
         "id": id,
@@ -446,24 +367,6 @@ fn job_status(id: &str, kind: &str, state: &str, phase: &str, message: &str) -> 
     })
 }
 
-fn route_id_for_key(key: &str) -> String {
-    format!("v3-{}", session_key(key))
-}
-
-fn session_key(key: &str) -> String {
-    let normalized = key
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    normalized.trim_matches('-').chars().take(64).collect()
-}
-
 fn print_json(compact: bool, value: Value) -> Result<()> {
     if compact {
         println!("{}", serde_json::to_string(&value)?);
@@ -475,18 +378,10 @@ fn print_json(compact: bool, value: Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::{cli, control_socket, node_daemon::ProxySessionSpec};
 
     #[test]
-    fn route_ids_are_stable_and_safe() {
-        assert_eq!(
-            route_id_for_key("Host 126 / Workspace"),
-            "v3-host-126---workspace"
-        );
-    }
-
-    #[test]
-    fn up_args_map_to_remote_uses_local_route() {
+    fn up_args_map_to_proxy_session_spec() {
         let args = cli::UpArgs {
             target: "edge".to_string(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
@@ -500,14 +395,10 @@ mod tests {
             volatile: true,
             json: true,
         };
-        let route = route_args_from_up(&args);
-        assert_eq!(route.target, "edge");
-        assert_eq!(route.direction, cli::RouteDirection::RemoteUsesLocal);
-        assert_eq!(route.connect_mode, cli::RouteConnectMode::ReverseLink);
-        assert_eq!(
-            route.egress_proxy.as_deref(),
-            Some("http://127.0.0.1:10808/")
-        );
-        assert_eq!(route.id.as_deref(), Some("v3-workspace-a"));
+        let spec = ProxySessionSpec::from_up_args(&args);
+        assert_eq!(spec.target, "edge");
+        assert_eq!(spec.connect_mode, cli::RouteConnectMode::ReverseLink);
+        assert_eq!(spec.local_proxy, "http://127.0.0.1:10808/");
+        assert_eq!(spec.route_id(), "v3-workspace-a");
     }
 }

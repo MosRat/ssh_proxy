@@ -27,6 +27,7 @@ mod control_server;
 mod jobs;
 mod management;
 mod peers;
+mod proxy_session;
 mod quic_transport;
 mod routes;
 mod transport;
@@ -36,6 +37,7 @@ use routes::RouteTask;
 
 pub(crate) use args::{proxy_args_from_node_forward, reverse_args_from_node_reverse};
 pub(crate) use control_protocol::{NodeRequest, NodeResponse, attach_auth_token, response_line};
+pub(crate) use proxy_session::ProxySessionSpec;
 
 pub(crate) fn control_api_version() -> u16 {
     control_protocol::NODE_CONTROL_VERSION

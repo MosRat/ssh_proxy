@@ -126,6 +126,17 @@ async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Re
         "jobs" | "job_list" | "job-list" => manager.jobs_json().await,
         "job_status" | "job-status" => manager.job_status_json(request).await,
         "job_events" | "job-events" => manager.job_events_json(request).await,
+        "ensure_proxy_session" | "ensure-proxy-session" => {
+            manager.ensure_proxy_session(request).await
+        }
+        "proxy_session_status" | "proxy-session-status" => {
+            manager.proxy_session_status(request).await
+        }
+        "proxy_session_down" | "proxy-session-down" => manager.proxy_session_down(request).await,
+        "apply_remote_settings" | "apply-remote-settings" => Ok(NodeResponse::ok_message(
+            "remote settings application is queued for daemon v0.3",
+        )
+        .to_line()?),
         "node_ensure" | "node-ensure" => manager.node_ensure(request).await,
         "node_start" | "node-start" => manager.node_start(request).await,
         "node_stop" | "node-stop" => manager.node_stop(request).await,
