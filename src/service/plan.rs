@@ -2,8 +2,8 @@ use std::{fs, net::SocketAddr, path::PathBuf, process::Command};
 
 use anyhow::{Context, Result, bail};
 
-use crate::{cli, config, control_socket};
 use super::inventory::ServiceInventory;
+use crate::{cli, config, control_socket};
 
 pub(crate) struct ServicePlan {
     pub(crate) command: cli::ServiceCommand,
@@ -321,7 +321,7 @@ pub(crate) fn ensure_admin(message: &str) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn is_admin() -> bool {
+pub(crate) fn is_admin() -> bool {
     Command::new("id")
         .arg("-u")
         .output()

@@ -6,9 +6,9 @@ use crate::{cli, deploy, route};
 #[cfg(test)]
 use crate::{config, peer_transport};
 
-use super::{NodeManager, NodeRequest, NodeResponse, response_line};
 #[cfg(test)]
 use super::control_protocol;
+use super::{NodeManager, NodeRequest, NodeResponse, response_line};
 
 mod bootstrap;
 mod compatibility;

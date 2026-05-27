@@ -145,7 +145,10 @@ fn selected_reason(
         return format!("selected existing healthy {:?} service", scope);
     }
     if probe.exists {
-        return format!("selected existing {:?} service for repair or restart", scope);
+        return format!(
+            "selected existing {:?} service for repair or restart",
+            scope
+        );
     }
 
     match requested_scope {
@@ -241,7 +244,10 @@ mod tests {
     fn auto_prefers_highest_existing_scope() {
         let inventory = resolve_service_inventory(
             cli::ServiceScope::Auto,
-            vec![probe(ServiceScope::System, true, false), probe(ServiceScope::User, true, true)],
+            vec![
+                probe(ServiceScope::System, true, false),
+                probe(ServiceScope::User, true, true),
+            ],
         );
 
         assert_eq!(inventory.selected_scope, Some(ServiceScope::System));
@@ -253,7 +259,10 @@ mod tests {
     fn auto_falls_back_to_install_scope_when_no_service_exists() {
         let inventory = resolve_service_inventory(
             cli::ServiceScope::Auto,
-            vec![probe(ServiceScope::System, false, false), probe(ServiceScope::User, false, false)],
+            vec![
+                probe(ServiceScope::System, false, false),
+                probe(ServiceScope::User, false, false),
+            ],
         );
 
         assert_eq!(inventory.selected_scope, Some(preferred_install_scope()));
@@ -264,7 +273,10 @@ mod tests {
     fn explicit_scope_is_kept_even_when_others_exist() {
         let inventory = resolve_service_inventory(
             cli::ServiceScope::System,
-            vec![probe(ServiceScope::System, false, false), probe(ServiceScope::User, true, true)],
+            vec![
+                probe(ServiceScope::System, false, false),
+                probe(ServiceScope::User, true, true),
+            ],
         );
 
         assert_eq!(inventory.selected_scope, Some(ServiceScope::System));

@@ -9,10 +9,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
+use super::inventory::{ServiceProbeState, ServiceProbeSummary};
 #[cfg(windows)]
 use super::plan::command_quote;
 use super::plan::{ServicePlan, ServiceScope, ensure_admin, platform_service_name};
-use super::inventory::{ServiceProbeState, ServiceProbeSummary};
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "local.ssh-proxy.daemon";
 
@@ -88,7 +88,9 @@ fn contains_permission_denied(text: &str) -> bool {
     text.to_ascii_lowercase().contains("access is denied")
         || text.to_ascii_lowercase().contains("permission denied")
         || text.to_ascii_lowercase().contains("not permitted")
-        || text.to_ascii_lowercase().contains("operation not permitted")
+        || text
+            .to_ascii_lowercase()
+            .contains("operation not permitted")
 }
 
 #[cfg(target_os = "linux")]
@@ -154,8 +156,12 @@ pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary
             _ => {}
         }
     }
-    let exists = load_state.as_deref().is_some_and(|state| state != "not-found")
-        || unit_file_state.as_deref().is_some_and(|state| state != "not-found");
+    let exists = load_state
+        .as_deref()
+        .is_some_and(|state| state != "not-found")
+        || unit_file_state
+            .as_deref()
+            .is_some_and(|state| state != "not-found");
     let healthy = active_state.as_deref() == Some("active");
     let permission_denied = contains_permission_denied(stderr);
     let state = if healthy {
@@ -320,7 +326,11 @@ pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary
     let service_name = platform_service_name(scope);
     let manifest_path = macos_manifest_path(scope);
     let domain = match scope {
-        ServiceScope::User => format!("gui/{}/{}", current_uid().unwrap_or_else(|_| "0".to_string()), service_name),
+        ServiceScope::User => format!(
+            "gui/{}/{}",
+            current_uid().unwrap_or_else(|_| "0".to_string()),
+            service_name
+        ),
         ServiceScope::System => format!("system/{}", service_name),
     };
     let capture = capture_command_output("launchctl", &["print", &domain]);
@@ -713,7 +723,10 @@ pub(super) fn platform_install_elevated(plan: &ServicePlan) -> Result<()> {
         powershell_quote(&join_windows_args(&service_args)),
     );
     args.push(command);
-    run_command("powershell.exe", &args.iter().map(String::as_str).collect::<Vec<_>>())
+    run_command(
+        "powershell.exe",
+        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
 }
 
 #[cfg(windows)]

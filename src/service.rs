@@ -12,12 +12,13 @@ use tokio::time::{self, Duration};
 
 use crate::{cli, config};
 
-mod peer_health;
+mod broker;
 mod inventory;
+mod peer_health;
 mod plan;
 mod platform;
 
-use inventory::{inventory_json, ServiceNextAction};
+use inventory::{ServiceNextAction, inventory_json};
 use plan::ServicePlan;
 
 pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()> {
@@ -227,6 +228,7 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
     let selected_control = selected_control_json(plan, daemon_reachable);
     let candidates = service_candidates_json(plan);
     let requires_elevation = matches!(plan.scope, plan::ServiceScope::System) && !plan::is_admin();
+    let broker = broker::broker_json(plan, daemon_reachable, platform_ok, requires_elevation);
     Ok(json!({
         "ok": overall_ok,
         "kind": "service_status",
@@ -236,6 +238,7 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
         "resolution": inventory,
         "selected_control": selected_control,
         "candidates": candidates,
+        "broker": broker,
         "requires_elevation": requires_elevation,
         "next_action": service_next_action(daemon_reachable, platform_ok),
         "scope": service_scope_name(plan.scope),

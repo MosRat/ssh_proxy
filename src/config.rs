@@ -17,11 +17,11 @@ mod peer;
 mod profile;
 pub use profile::expand_path;
 mod schema;
+#[cfg(test)]
+pub use schema::DaemonConfig;
 pub use schema::{
     AppConfig, CONFIG_SCHEMA_VERSION, NodeIdentity, PeerRecord, ProxyProfile, TokenMetadata,
 };
-#[cfg(test)]
-pub use schema::DaemonConfig;
 
 impl AppConfig {
     pub fn load_default() -> Result<Self> {
