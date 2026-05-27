@@ -70,8 +70,21 @@ export function buildSshProxyVscodeUpArgs(options: {
   readonly remoteBind: string;
   readonly remotePort: number;
   readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+  readonly workspacePaths?: readonly string[];
+  readonly serverDir?: string;
+  readonly noProxy?: string;
+  readonly proxySupport?: string;
+  readonly applyRemoteMachineSettings?: boolean;
+  readonly applyTerminalEnv?: boolean;
+  readonly applyServerEnvSetup?: boolean;
+  readonly applyGitConfig?: boolean;
+  readonly applyGitGlobalConfig?: boolean;
+  readonly applyGitWorkspaceConfig?: boolean;
+  readonly applyGitForceOverride?: boolean;
+  readonly applyRemoteStatusFile?: boolean;
+  readonly verifyRemotePort?: boolean;
 }): string[] {
-  return [
+  const args = [
     'vscode',
     'up',
     '--target',
@@ -86,8 +99,48 @@ export function buildSshProxyVscodeUpArgs(options: {
     String(options.remotePort),
     '--connect-mode',
     options.connectMode,
-    '--json',
   ];
+  for (const workspacePath of options.workspacePaths ?? []) {
+    args.push('--workspace-path', workspacePath);
+  }
+  if (options.serverDir) {
+    args.push('--server-dir', options.serverDir);
+  }
+  if (options.noProxy) {
+    args.push('--no-proxy', options.noProxy);
+  }
+  if (options.proxySupport) {
+    args.push('--proxy-support', options.proxySupport);
+  }
+  if (options.applyRemoteMachineSettings === false) {
+    args.push('--no-remote-machine-settings');
+  }
+  if (options.applyTerminalEnv === false) {
+    args.push('--no-terminal-env');
+  }
+  if (options.applyServerEnvSetup === false) {
+    args.push('--no-server-env');
+  }
+  if (options.applyGitConfig === false) {
+    args.push('--no-git');
+  }
+  if (options.applyGitGlobalConfig === false) {
+    args.push('--no-git-global');
+  }
+  if (options.applyGitWorkspaceConfig === false) {
+    args.push('--no-git-workspace');
+  }
+  if (options.applyGitForceOverride === false) {
+    args.push('--no-git-force-override');
+  }
+  if (options.applyRemoteStatusFile === false) {
+    args.push('--no-remote-status-file');
+  }
+  if (options.verifyRemotePort === false) {
+    args.push('--no-verify-remote-port');
+  }
+  args.push('--json');
+  return args;
 }
 
 export function buildSshProxyVscodeStatusArgs(options: {

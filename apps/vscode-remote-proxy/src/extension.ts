@@ -231,61 +231,27 @@ class RemoteProxyController implements vscode.Disposable {
         return;
       }
 
-      const backendCandidates = await this.buildForwardingBackendCandidates(config);
-      const lockTimings = startLockTimings(config);
-      const startLock = config.singletonReuseEnabled
-        ? await this.leaseCoordinator.acquireStartLock(
-          targetKey,
-          lockTimings.timeoutMs,
-          lockTimings.staleMs,
-        )
-        : undefined;
-      let reused: AppliedProxy | undefined;
-      let applied: AppliedProxy | undefined;
-      let lastError: unknown;
-      try {
-        for (const [index, backend] of backendCandidates.entries()) {
-          if (this.forwarder !== backend) {
-            this.forwarder.stop();
-            this.forwarder = backend;
-          }
-
-          const backendConfig = this.configForBackend(config, backend);
-          try {
-            reused = await this.tryReuseLease(backendConfig, sshHost, targetKey);
-            applied = reused ?? await this.startForwardOnAvailablePort(backendConfig, sshHost, targetKey, local);
-            await this.setup.applyAll(backendConfig, sshHost, applied);
-            break;
-          } catch (error) {
-            lastError = error;
-            const message = error instanceof Error ? error.message : String(error);
-            this.output.appendLine(`Forward attempt using ${this.describeForwardingBackend(backend)} failed: ${message}`);
-            await this.releaseLeaseAndStopForwarder();
-            if (index + 1 < backendCandidates.length) {
-              this.output.appendLine(`Falling back to ${this.describeForwardingBackend(backendCandidates[index + 1])} backend.`);
-            }
-            if (index + 1 >= backendCandidates.length) {
-              throw error;
-            }
-          }
-        }
-        if (!applied) {
-          throw lastError instanceof Error ? lastError : new Error('no forwarding backend could start');
-        }
-      } finally {
-        await startLock?.release();
-      }
+      const backend = await this.ensureForwardingBackend(config);
+      const applied: AppliedProxy = {
+        local,
+        remoteUrl: makeRemoteProxyUrl(local, config.remoteBindHost, config.remotePort),
+        remotePort: config.remotePort,
+        remoteBindHost: config.remoteBindHost,
+        workspaceId: targetKey,
+      };
+      this.output.appendLine(`Starting daemon-owned proxy session for ${sshHost} (${targetKey}).`);
+      await backend.startAndWait(config, sshHost, applied, 900);
       this.restartFailures = 0;
       this.healthFailures = 0;
       this.nextRestartAt = 0;
       this.lastHealthCheckAt = 0;
       this.leaseCoordinator.resetHeartbeat();
-      const active = applied;
+      const active = backend.appliedProxy ?? applied;
       if (!active) {
         throw new Error('forwarding backend did not produce an applied proxy');
       }
       this.rememberPreferredPort(active);
-      vscode.window.showInformationMessage(`${reused ? 'Remote Proxy reused' : 'Remote Proxy active'}: ${active.remoteUrl}`);
+      vscode.window.showInformationMessage(`Remote Proxy active: ${active.remoteUrl}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.output.appendLine(`Start failed: ${message}`);
@@ -338,8 +304,7 @@ class RemoteProxyController implements vscode.Disposable {
 
     try {
       await this.releaseLeaseAndStopForwarder();
-      await this.setup.cleanupAll(config, sshHost);
-      vscode.window.showInformationMessage(`Remote Proxy settings cleaned on ${sshHost}.`);
+      vscode.window.showInformationMessage(`Remote Proxy cleanup requested through daemon on ${sshHost}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.output.appendLine(`Cleanup failed: ${message}`);
@@ -365,18 +330,13 @@ class RemoteProxyController implements vscode.Disposable {
       return;
     }
 
-    const targetKey = this.leaseCoordinator.getStableTargetKey(sshHost, this.lastResolvedTargetKey);
-    config = applyHostProfile(config, readHostProfile([sshHost, targetKey]));
-    const applied = this.forwarder.status === 'running' ? this.forwarder.appliedProxy : await this.buildAppliedProxy(config);
-
-    if (!applied) {
-      vscode.window.showWarningMessage('No local proxy was detected.');
-      return;
-    }
-
     try {
-      await this.setup.applyAll(config, sshHost, applied);
-      vscode.window.showInformationMessage(`Remote Proxy settings applied: ${applied.remoteUrl}`);
+      if (this.forwarder === this.sshProxyBackend && this.forwarder.status === 'running') {
+        await this.sshProxyBackend.refreshStatus();
+        vscode.window.showInformationMessage('Remote Proxy settings are managed by the daemon for the active session.');
+      } else {
+        await this.start({ interactive: true });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.output.appendLine(`Apply settings failed: ${message}`);
@@ -474,15 +434,13 @@ class RemoteProxyController implements vscode.Disposable {
     this.output.appendLine(REMOTE_PROXY_DIAGNOSTICS_HEADER);
     this.output.appendLine(snapshot.lines.join('\n'));
 
-    const config = readConfig();
-    const setupConfig = this.configForBackend(config, this.forwarder);
-    const sshHost = this.forwarder.currentSshHost;
-    if (sshHost && snapshot.proxy && shouldVerifyRemoteForward(this.forwarder.status, snapshot.proxy, sshHost)) {
+    if (this.forwarder === this.sshProxyBackend) {
       try {
-        await this.setup.verifyForward(setupConfig, sshHost, snapshot.proxy);
-        this.output.appendLine(remoteForwardReachableLine(snapshot.proxy));
+        await this.sshProxyBackend.refreshStatus();
+        this.output.appendLine('Remote forward verification is owned by the ssh_proxy daemon; use the daemon job and remote_setup fields above.');
       } catch (error) {
-        this.output.appendLine(remoteForwardFailureLine(error));
+        const message = error instanceof Error ? error.message : String(error);
+        this.output.appendLine(`Daemon status refresh failed: ${message}`);
       }
     } else {
       this.output.appendLine(REMOTE_PROXY_DIAGNOSTICS_SKIP_LINE);
@@ -791,20 +749,11 @@ class RemoteProxyController implements vscode.Disposable {
   }
 
   private async monitorHealthAndLease(config: RemoteProxyConfig): Promise<void> {
-    if (!config.healthCheckEnabled || !this.leaseCoordinator.targetKey || !this.forwarder.appliedProxy || !this.forwarder.currentSshHost) {
+    if (!config.healthCheckEnabled || this.forwarder.status !== 'running') {
       return;
     }
 
     const now = Date.now();
-    const heartbeatIntervalMs = leaseHeartbeatIntervalMs(
-      config.singletonLeaseTtlSeconds,
-      config.healthCheckIntervalSeconds,
-    );
-    if (this.leaseCoordinator.mode === 'owner' && shouldRunTimedCheck(now, this.leaseCoordinator.lastHeartbeatAt, heartbeatIntervalMs)) {
-      await this.leaseCoordinator.heartbeatCurrent();
-      this.leaseCoordinator.markHeartbeat(now);
-    }
-
     const healthIntervalMs = healthCheckIntervalMs(config.healthCheckIntervalSeconds);
     if (!shouldRunTimedCheck(now, this.lastHealthCheckAt, healthIntervalMs)) {
       return;
@@ -812,28 +761,23 @@ class RemoteProxyController implements vscode.Disposable {
     this.lastHealthCheckAt = now;
 
     try {
-      const setupConfig = this.configForBackend(config, this.forwarder);
-      await this.setup.verifyForward(setupConfig, this.forwarder.currentSshHost, this.forwarder.appliedProxy);
+      if (this.forwarder === this.sshProxyBackend) {
+        await this.sshProxyBackend.refreshStatus();
+      }
       if (this.healthFailures > 0) {
-        this.output.appendLine(`Proxy health check recovered after ${this.healthFailures} failed attempt(s).`);
+        this.output.appendLine(`Daemon health status recovered after ${this.healthFailures} failed refresh attempt(s).`);
       }
       this.healthFailures = 0;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const decision = recordHealthCheckFailure(this.healthFailures, config.healthCheckFailureThreshold);
       this.healthFailures = decision.failures;
-      this.output.appendLine(`Proxy health check failed (${decision.failures}/${decision.threshold}): ${message}`);
+      this.output.appendLine(`Daemon health status refresh failed (${decision.failures}/${decision.threshold}): ${message}`);
       if (!decision.shouldRestart) {
         return;
       }
       this.forwarder.fail(message);
-      await this.leaseCoordinator.releaseOwned();
-      this.leaseCoordinator.clear();
       this.healthFailures = 0;
-      if (!this.canRestartNow(config)) {
-        return;
-      }
-      await this.start({ interactive: false });
     }
   }
 

@@ -114,6 +114,19 @@ export class SshProxyCli {
     readonly remoteBind: string;
     readonly remotePort: number;
     readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+    readonly workspacePaths?: readonly string[];
+    readonly serverDir?: string;
+    readonly noProxy?: string;
+    readonly proxySupport?: string;
+    readonly applyRemoteMachineSettings?: boolean;
+    readonly applyTerminalEnv?: boolean;
+    readonly applyServerEnvSetup?: boolean;
+    readonly applyGitConfig?: boolean;
+    readonly applyGitGlobalConfig?: boolean;
+    readonly applyGitWorkspaceConfig?: boolean;
+    readonly applyGitForceOverride?: boolean;
+    readonly applyRemoteStatusFile?: boolean;
+    readonly verifyRemotePort?: boolean;
   }): Promise<unknown> {
     return this.runJson(buildSshProxyVscodeUpArgs(options), undefined, {
       label: 'ssh_proxy vscode up',

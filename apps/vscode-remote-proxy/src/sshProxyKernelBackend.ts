@@ -110,6 +110,19 @@ export class SshProxyKernelBackend implements ForwardingBackend {
         remoteBind: proxy.remoteBindHost,
         remotePort: proxy.remotePort,
         connectMode: config.sshProxyConnectMode,
+        workspacePaths: remoteWorkspacePaths(),
+        serverDir: serverDirName(),
+        noProxy: config.noProxy,
+        proxySupport: config.proxySupport,
+        applyRemoteMachineSettings: config.applyRemoteMachineSettings,
+        applyTerminalEnv: config.applyTerminalEnv,
+        applyServerEnvSetup: config.applyServerEnvSetup,
+        applyGitConfig: config.applyGitConfig,
+        applyGitGlobalConfig: config.applyGitGlobalConfig,
+        applyGitWorkspaceConfig: config.applyGitWorkspaceConfig,
+        applyGitForceOverride: config.applyGitForceOverride,
+        applyRemoteStatusFile: config.applyRemoteStatusFile,
+        verifyRemotePort: config.verifyAfterStart,
       });
       const record = asRecord(started);
       if (record?.ok === false) {
@@ -179,6 +192,40 @@ export class SshProxyKernelBackend implements ForwardingBackend {
   public dispose(): void {
     void this.stop();
     this.changeEmitter.dispose();
+  }
+
+  public async refreshStatus(): Promise<void> {
+    const cli = this.cliForCurrent();
+    const workspace = this.currentProxy?.workspaceId ?? this.currentSshHostValue;
+    if (!cli || !workspace || !this.currentSshHostValue) {
+      return;
+    }
+    const status = await cli.vscodeStatusJson({ workspace, target: this.currentSshHostValue });
+    this.setSnapshot({ serviceStatus: status, lastRefreshAt: Date.now() });
+    const record = asRecord(status);
+    const job = asRecord(record?.job);
+    const route = asRecord(record?.route);
+    if (record?.remote_url || route) {
+      const currentRoute = this.snapshot.routeState;
+      this.snapshot = {
+        ...this.snapshot,
+        routeState: currentRoute ? {
+          ...currentRoute,
+          remoteUrl: asString(record?.remote_url) ?? asString(route?.remote_url) ?? currentRoute.remoteUrl,
+          health: job ?? route ?? currentRoute.health,
+          liveRoute: route,
+        } : undefined,
+      };
+    }
+    const state = asString(job?.state) ?? asString(record?.health);
+    if (state === 'failed' || state === 'cancelled') {
+      this.statusValue = 'failed';
+      this.lastErrorValue = asString(job?.last_error) ?? asString(record?.last_error) ?? 'ssh_proxy daemon job failed';
+    } else if (state === 'healthy' || record?.health === 'healthy') {
+      this.statusValue = 'running';
+      this.lastErrorValue = undefined;
+    }
+    this.changeEmitter.fire();
   }
 
   private cliForCurrent(): SshProxyCli | undefined {
@@ -286,4 +333,18 @@ function asString(value: unknown): string | undefined {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function serverDirName(): string {
+  return vscode.env.appName.toLowerCase().includes('insider') ? '.vscode-server-insiders' : '.vscode-server';
+}
+
+function remoteWorkspacePaths(): string[] {
+  const paths = new Set<string>();
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (folder.uri.scheme === 'vscode-remote' && folder.uri.path) {
+      paths.add(folder.uri.path);
+    }
+  }
+  return [...paths];
 }
