@@ -62,6 +62,18 @@ pub(super) fn route_response_with_plan(response: &str, plan: Value) -> Result<St
                 "message": "route accepted; query `ssh_proxy node control routes` for live health"
             }),
         );
+        object.insert(
+            "job_id".to_string(),
+            route_id
+                .as_str()
+                .map(|id| format!("route:{id}"))
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        );
+        object.insert(
+            "readiness".to_string(),
+            accepted_readiness(route_id.as_str(), "route accepted"),
+        );
         object.insert("plan".to_string(), plan);
     }
     response_line(value)
@@ -108,11 +120,31 @@ pub(super) fn remote_direct_route_response(target: &str, plan: Value) -> Value {
         "remote_url": remote_proxy_url_from_plan(&plan, &remote_listen).unwrap_or(Value::Null),
         "fallback_reason": plan.get("fallback_reason").cloned().unwrap_or(Value::Null),
         "cleanup_command": cleanup_command,
+        "job_id": route_id
+            .as_str()
+            .map(|id| format!("route:{id}"))
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        "readiness": accepted_readiness(route_id.as_str(), "remote route intent accepted"),
         "health": {
             "state": "accepted",
             "message": "remote-owned route accepted; query the remote node for live health"
         },
         "plan": plan
+    })
+}
+
+fn accepted_readiness(route_id: Option<&str>, message: &str) -> Value {
+    json!({
+        "state": "accepted",
+        "phase": "starting",
+        "retry_count": 0,
+        "blocker": Value::Null,
+        "next_action": "poll_routes",
+        "managed_by": "current-daemon",
+        "job_id": route_id.map(|id| format!("route:{id}")),
+        "route_id": route_id,
+        "message": message,
     })
 }
 

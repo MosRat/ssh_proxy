@@ -603,6 +603,9 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(value["route_id"], "vscode-remote-proxy-edge");
+        assert_eq!(value["job_id"], "route:vscode-remote-proxy-edge");
+        assert_eq!(value["readiness"]["state"], "accepted");
+        assert_eq!(value["readiness"]["next_action"], "poll_routes");
         assert_eq!(value["owner"], "local");
         assert_eq!(value["selected_transport"], "ssh-reverse-link");
         assert_eq!(value["connect_mode"], "reverse-link");
@@ -646,6 +649,9 @@ mod tests {
         let value = route_intent::remote_direct_route_response("edge", plan);
 
         assert_eq!(value["route_id"], "vscode-remote-proxy-edge");
+        assert_eq!(value["job_id"], "route:vscode-remote-proxy-edge");
+        assert_eq!(value["readiness"]["state"], "accepted");
+        assert_eq!(value["readiness"]["next_action"], "poll_routes");
         assert_eq!(value["owner"], "remote");
         assert_eq!(value["connect_mode"], "direct");
         assert_eq!(value["selected_transport"], "tls-tcp");
