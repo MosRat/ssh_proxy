@@ -24,25 +24,26 @@ The listener URL is written to remote VS Code settings, terminal environment var
 
 `remoteProxy.backend=auto` is the default.
 
-Kernel mode uses the bundled or configured `ssh_proxy` binary:
+Kernel mode uses the bundled or configured `ssh_proxy` binary as a thin daemon client:
 
 ```text
-remote tools -> remote 127.0.0.1:<port>
-  -> remote ssh_proxy listener
-  -> reverse-link/direct route
-  -> local ssh_proxy daemon or session daemon
+VS Code extension
+  -> ssh_proxy vscode up
+  -> local ssh_proxy daemon
+  -> daemon job/readiness/route state
+  -> remote 127.0.0.1:<port>
   -> local upstream proxy
 ```
 
-OpenSSH mode is the compatibility fallback:
+OpenSSH mode is an explicit legacy backend:
 
 ```text
 ssh -R remote:port:local-proxy-host:local-proxy-port
 ```
 
-Kernel mode is preferred because it exposes route ids, ownership, session-daemon fallback, structured health, and richer diagnostics. The extension first asks `ssh_proxy service ensure` for a reusable control endpoint, so an already-running system or user service wins over a new install attempt. If persistent service setup is blocked, the session daemon is treated as a normal kernel fallback. OpenSSH is the final compatibility path.
+Kernel mode is preferred because the daemon owns route ids, job progress, readiness, peer state, update state, and health repair. The extension no longer runs the old service/session/OpenSSH fallback chain in the normal path.
 
-Auto-start never prompts for UAC or sudo elevation. Interactive commands can allow an elevation prompt when `remoteProxy.sshProxy.allowElevationPrompt=true`, but the extension still prefers reuse, repair, and session daemon fallback before asking for a privileged system service action.
+Auto-start never prompts for UAC or sudo elevation. Interactive commands can guide the user to install or update the local daemon. OpenSSH only participates when `remoteProxy.sshProxy.openSshFallbackPolicy=legacy-auto`.
 
 ## Quick Start
 
@@ -90,17 +91,18 @@ Remote port selection is sticky. The extension tries the current route, remember
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `remoteProxy.backend` | `auto` | Prefer `ssh_proxy`, fall back to OpenSSH. |
+| `remoteProxy.backend` | `auto` | Use the `ssh_proxy` daemon client by default. |
 | `remoteProxy.localProxy.mode` | `auto` | Detect proxy from manual URL, env, then port probes. |
 | `remoteProxy.localProxy.url` | empty | Manual local proxy URL. |
 | `remoteProxy.remote.port` | `17890` | Preferred remote listener port. |
 | `remoteProxy.remote.autoPickPort` | `true` | Try nearby ports if the preferred port is busy. |
 | `remoteProxy.sshProxy.executable` | `ssh_proxy` | Explicit binary, bundled binary, or PATH fallback. |
-| `remoteProxy.sshProxy.autoInstallLocalService` | `true` | Probe existing service scopes first, then repair/install before session daemon fallback. |
-| `remoteProxy.sshProxy.preferPersistentService` | `true` | Try service discovery before starting a session daemon. |
+| `remoteProxy.sshProxy.autoInstallLocalService` | `true` | Kept for older configs; daemon-first mode expects explicit daemon install/update. |
+| `remoteProxy.sshProxy.preferPersistentService` | `true` | Kept for older configs; normal mode uses the local daemon. |
 | `remoteProxy.sshProxy.allowElevationPrompt` | `true` | Allow elevation prompts only from interactive commands. |
 | `remoteProxy.sshProxy.connectMode` | `reverse-link` | Preserve `ssh -R` style reachability by default. |
-| `remoteProxy.sshProxy.remoteSetup` | `auto` | Prefer `ssh_proxy host exec`, fallback to OpenSSH. |
+| `remoteProxy.sshProxy.openSshFallbackPolicy` | `disabled` | Keep OpenSSH out of the normal path; use `legacy-auto` only for emergency compatibility. |
+| `remoteProxy.sshProxy.remoteSetup` | `auto` | Prefer Rust `ssh_proxy host exec`; legacy OpenSSH fallback is explicit. |
 | `remoteProxy.forward.verifyAfterStart` | `true` | Verify remote listener readiness after route start. |
 | `remoteProxy.forward.healthCheckEnabled` | `true` | Periodically verify the active listener. |
 | `remoteProxy.apply.gitConfig` | `true` | Apply remote Git proxy config. |
@@ -128,11 +130,11 @@ Run `Remote Proxy: Diagnose` first. It prints backend, detected SSH host, lease 
 Common failures:
 
 - `502 Bad Gateway`: the remote listener accepted the request but could not open the upstream path. Check the local proxy URL, including scheme and port, and confirm the local proxy accepts HTTP CONNECT or SOCKS5 traffic.
-- `Access is denied` during service install: Windows blocked scheduled task/service registration. The kernel path records that scope as blocked for the current VS Code window, falls back to the session daemon, and only tries OpenSSH if the kernel route still cannot become ready.
+- `Access is denied` during daemon install: Windows blocked service registration. Auto-start will not pop UAC; run an interactive daemon install/update command or inspect `ssh_proxy doctor --json`.
 - Remote port already in use: keep `remoteProxy.remote.autoPickPort=true`, or pick a different `remoteProxy.remote.port`.
 - Host unresolved in Extension Development Host: run `Remote Proxy: Pick SSH Host`, or enable storage fallback only if you understand it can be stale.
-- Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy node control routes`, and verify remote `127.0.0.1:<port>` reachability. The extension polls kernel readiness before remote verification and does not shut down a healthy session daemon on the first route startup timeout.
-- Repeated `Checking bundled ssh_proxy` after OpenSSH fallback: the active backend should force remote setup and health checks through OpenSSH. If it reappears, include the output channel and `Remote Proxy: Diagnose` result in the issue.
+- Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy events --json` and `ssh_proxy node control --json routes`, and verify remote `127.0.0.1:<port>` reachability.
+- Unexpected OpenSSH usage: confirm `remoteProxy.sshProxy.openSshFallbackPolicy` is still `disabled`; `legacy-auto` intentionally restores the older fallback chain.
 
 Remote shell smoke test:
 

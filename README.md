@@ -1,29 +1,29 @@
 # ssh_proxy
 
-`ssh_proxy` is a Rust-native SSH bootstrap and proxy routing tool. One binary can run as a CLI, a local daemon, a remote helper, a route supervisor, and a SOCKS5H/HTTP proxy ingress.
+`ssh_proxy` is a Rust-native SSH bootstrap and proxy routing daemon. One binary can run the local Docker-like daemon, act as a thin CLI client, install/update remote peers, and expose SOCKS5H/HTTP proxy routes.
 
 It is built for Remote SSH workflows where a machine behind SSH needs reliable access through another machine's proxy, while still leaving room for direct peer transports when both sides are reachable.
 
 ## What It Does
 
-- Creates local or remote proxy listeners with SSH fallback.
+- Creates local or remote proxy listeners through the local daemon.
 - Uses `russh` for native SSH bootstrap and management.
 - Supports SOCKS5H and HTTP proxy ingress.
 - Supports fixed TCP tunnels with `--tcp-target`.
 - Can chain egress through an existing HTTP CONNECT or SOCKS5 proxy.
-- Runs persistent local/remote daemons, or session-scoped routes when service installation is unavailable.
-- Provides JSON status, route explain output, and route health data for automation.
+- Uses a single local daemon as the authoritative service, route, peer, job, and health control plane.
+- Provides JSON daemon status, job progress, route health, and VS Code-focused integration commands.
 
 ## Quick Start
 
-Discover, reuse, or repair the persistent local service:
+Install or inspect the local daemon:
 
 ```powershell
-ssh_proxy service --json ensure
-ssh_proxy service --json status
+ssh_proxy daemon --json status
+ssh_proxy daemon --scope system install
 ```
 
-`service ensure` probes existing user/system service scopes first, reuses a healthy control endpoint when one exists, and only repairs or installs when no usable service is available. `service install` remains available for direct installs and accepts `--elevate` when an explicit elevated system install is intended.
+The daemon is the normal production path. CLI commands submit intent to the private named pipe or Unix socket; they do not directly own long-running routes.
 
 Bootstrap or refresh a remote peer through SSH:
 
@@ -40,14 +40,22 @@ ssh_proxy route <remote-host> `
   --port <local-proxy-port>
 ```
 
-Expose a remote listener that uses this machine as egress:
+Expose a remote listener that uses this machine as egress through the daemon:
 
 ```powershell
-ssh_proxy route <remote-host> `
-  --direction remote-uses-local `
-  --connect-mode reverse-link `
-  --port <remote-proxy-port> `
-  --egress-proxy http://127.0.0.1:10808/
+ssh_proxy up `
+  --target <remote-host> `
+  --local-proxy http://127.0.0.1:10808/ `
+  --remote-port <remote-proxy-port> `
+  --json
+```
+
+Inspect the daemon-owned job and route state:
+
+```powershell
+ssh_proxy status --json
+ssh_proxy events --json
+ssh_proxy doctor --json
 ```
 
 Inspect the selected plan before starting a route:
@@ -79,14 +87,13 @@ Supported upstream egress proxy schemes:
 
 ## VS Code Extension
 
-The extension in `apps/vscode-remote-proxy` automatically exposes a local proxy inside a VS Code Remote SSH window. Its recovery order is:
+The extension in `apps/vscode-remote-proxy` automatically exposes a local proxy inside a VS Code Remote SSH window. Its normal path is a thin daemon client:
 
-1. reuse an existing `ssh_proxy` service/control endpoint
-2. repair or install a user service when allowed
-3. use a session-owned daemon when persistent service setup is unavailable
-4. fall back to OpenSSH reverse forwarding only after the kernel path is exhausted
+```powershell
+ssh_proxy vscode up --target <ssh-host> --workspace <id> --local-proxy <url> --json
+```
 
-The extension remains a VS Code UI extension because it needs local access to proxy detection, SSH config, the `ssh_proxy` executable, and the local daemon/session process.
+The daemon owns route startup, readiness, job state, and health. OpenSSH is disabled by default and only re-enters when `remoteProxy.sshProxy.openSshFallbackPolicy=legacy-auto`.
 
 See [apps/vscode-remote-proxy/README.md](apps/vscode-remote-proxy/README.md) for usage, settings, troubleshooting, and packaging details.
 
@@ -97,14 +104,16 @@ Use JSON status first:
 ```powershell
 ssh_proxy service --json status
 ssh_proxy node control --json routes
+ssh_proxy status --json
+ssh_proxy events --json
 ```
 
 Common checks:
 
 - If a remote shell returns `502 Bad Gateway`, verify the local upstream proxy URL and make sure the local proxy accepts CONNECT/SOCKS traffic.
-- If Windows service installation is denied, use `service --json status` to inspect `selected_control`, `candidates`, and `next_action`. The VS Code extension caches the denied scope for the current window, uses a session daemon, and only then considers OpenSSH.
+- If Windows daemon installation is denied, use `ssh_proxy daemon --json status` and `ssh_proxy doctor --json`. Auto-start does not pop UAC; interactive commands can install or update the daemon explicitly.
 - If the remote port is occupied, use `remoteProxy.remote.autoPickPort` in the extension or choose another `--port`.
-- If a route stays in `accepted`, `bootstrapping_peer`, or `starting`, inspect `node control routes`; route readiness fields are additive diagnostics and the extension waits before applying remote proxy settings.
+- If a route stays in `accepted`, `bootstrapping_peer`, or `starting`, inspect `ssh_proxy events --json` and `ssh_proxy node control --json routes`; readiness is represented as daemon job progress.
 
 More operational detail lives in [docs/operations.md](docs/operations.md).
 
