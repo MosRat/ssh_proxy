@@ -1,7 +1,20 @@
 use std::process::Command;
 
 #[cfg(windows)]
-use std::{thread, time::Duration};
+use std::{
+    ffi::{OsStr, OsString},
+    thread,
+    time::Duration,
+};
+#[cfg(windows)]
+use windows_service::{
+    Error as WindowsServiceError,
+    service::{
+        Service, ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceState,
+        ServiceType,
+    },
+    service_manager::{ServiceManager, ServiceManagerAccess},
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{
@@ -699,36 +712,37 @@ pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
                 return platform_install_elevated(plan);
             }
             ensure_admin("installing a Windows system service requires administrator privileges")?;
-            if windows_service_exists(&service_name) {
-                run_command(
-                    "sc.exe",
-                    &[
-                        "config",
-                        &service_name,
-                        "start=",
-                        "auto",
-                        "DisplayName=",
-                        "ssh_proxy daemon",
-                        "binPath=",
-                        &plan.daemon_command(),
-                    ],
-                )?;
-            } else {
-                run_command(
-                    "sc.exe",
-                    &[
-                        "create",
-                        &service_name,
-                        "start=",
-                        "auto",
-                        "DisplayName=",
-                        "ssh_proxy daemon",
-                        "binPath=",
-                        &plan.daemon_command(),
-                    ],
-                )?;
+            let manager = windows_service_manager(
+                ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
+            )?;
+            let service_info = windows_system_service_info(plan, &service_name);
+            let access = ServiceAccess::CHANGE_CONFIG
+                | ServiceAccess::QUERY_STATUS
+                | ServiceAccess::START
+                | ServiceAccess::STOP;
+            let service = match manager.open_service(&service_name, access) {
+                Ok(service) => {
+                    service.change_config(&service_info).with_context(|| {
+                        format!("failed to configure Windows service {service_name}")
+                    })?;
+                    service
+                }
+                Err(err) if windows_service_error_code(&err) == Some(1060) => manager
+                    .create_service(&service_info, access)
+                    .with_context(|| format!("failed to create Windows service {service_name}"))?,
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("failed to open Windows service {service_name}"));
+                }
+            };
+            if let Err(err) = service.set_description("ssh_proxy local daemon control plane") {
+                eprintln!("warning: failed to set Windows service description: {err}");
             }
-            platform_start(plan)
+            if windows_service_status_is(&service, ServiceState::Running) {
+                Ok(())
+            } else {
+                platform_start(plan)
+            }
         }
     }
 }
@@ -740,13 +754,29 @@ pub(super) fn platform_uninstall(plan: &ServicePlan) -> Result<()> {
         ServiceScope::User => run_command("schtasks", &["/Delete", "/TN", &service_name, "/F"]),
         ServiceScope::System => {
             ensure_admin("removing a Windows system service requires administrator privileges")?;
-            run_command("sc.exe", &["delete", &service_name])
+            if let Some(service) = windows_open_system_service(
+                &service_name,
+                ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS | ServiceAccess::STOP,
+            )? {
+                if !windows_service_status_is(&service, ServiceState::Stopped) {
+                    let _ = service.stop();
+                    windows_wait_service_stopped(&service_name)?;
+                }
+                service
+                    .delete()
+                    .with_context(|| format!("failed to delete Windows service {service_name}"))?;
+            }
+            Ok(())
         }
     }
 }
 
 #[cfg(windows)]
 pub(super) fn platform_install_elevated(plan: &ServicePlan) -> Result<()> {
+    let log_path = std::env::temp_dir().join(format!(
+        "ssh_proxy-daemon-install-{}.log",
+        std::process::id()
+    ));
     let mut args = vec![
         "-NoProfile".to_string(),
         "-ExecutionPolicy".to_string(),
@@ -775,15 +805,40 @@ pub(super) fn platform_install_elevated(plan: &ServicePlan) -> Result<()> {
     }
     service_args.push("install".to_string());
 
+    let elevated_args = vec![
+        "-NoProfile".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-Command".to_string(),
+        format!(
+            "$ErrorActionPreference = 'Continue'; $log = {}; Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue; & {} {} *> $log; $code = $LASTEXITCODE; if ($null -eq $code) {{ $code = 0 }}; exit $code",
+            powershell_quote(&log_path.display().to_string()),
+            powershell_quote(&plan.source_exe.display().to_string()),
+            powershell_array(&service_args),
+        ),
+    ];
     let command = format!(
-        "$p = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; if ($null -eq $p.ExitCode) {{ exit 1223 }}; exit $p.ExitCode",
-        powershell_quote(&plan.source_exe.display().to_string()),
-        powershell_quote(&join_windows_args(&service_args)),
+        "$p = Start-Process -FilePath 'powershell.exe' -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; if ($null -eq $p.ExitCode) {{ exit 1223 }}; exit $p.ExitCode",
+        powershell_quote(&join_windows_args(&elevated_args)),
     );
     args.push(command);
-    run_command(
-        "powershell.exe",
-        &args.iter().map(String::as_str).collect::<Vec<_>>(),
+    let output = Command::new("powershell.exe")
+        .args(args.iter().map(String::as_str))
+        .output()
+        .context("failed to run elevated PowerShell installer")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let elevated_log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    bail!(
+        "powershell.exe exited with status {}\nstdout: {}\nstderr: {}\nelevated installer log ({}): {}",
+        output.status,
+        stdout.trim(),
+        stderr.trim(),
+        log_path.display(),
+        elevated_log.trim()
     )
 }
 
@@ -804,7 +859,22 @@ pub(super) fn platform_start(plan: &ServicePlan) -> Result<()> {
             if windows_service_running(&service_name) {
                 return Ok(());
             }
-            run_command("sc.exe", &["start", &service_name])
+            let service = windows_open_system_service(
+                &service_name,
+                ServiceAccess::START | ServiceAccess::QUERY_STATUS,
+            )?
+            .ok_or_else(|| anyhow::anyhow!("Windows service {service_name} is not installed"))?;
+            let empty: [&OsStr; 0] = [];
+            match service.start(&empty) {
+                Ok(()) => {}
+                Err(err) if windows_service_error_code(&err) == Some(1056) => {}
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("failed to start Windows service {service_name}")
+                    });
+                }
+            }
+            windows_wait_service_running(&service_name)
         }
     }
 }
@@ -814,7 +884,21 @@ pub(super) fn platform_stop(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
         ServiceScope::User => run_command("schtasks", &["/End", "/TN", &service_name]),
-        ServiceScope::System => run_command("sc.exe", &["stop", &service_name]),
+        ServiceScope::System => {
+            let Some(service) = windows_open_system_service(
+                &service_name,
+                ServiceAccess::STOP | ServiceAccess::QUERY_STATUS,
+            )?
+            else {
+                return Ok(());
+            };
+            match service.stop() {
+                Ok(_) => windows_wait_service_stopped(&service_name),
+                Err(err) if windows_service_error_code(&err) == Some(1062) => Ok(()),
+                Err(err) => Err(err)
+                    .with_context(|| format!("failed to stop Windows service {service_name}")),
+            }
+        }
     }
 }
 
@@ -847,17 +931,17 @@ fn windows_schtasks_create(plan: &ServicePlan, service_name: &str) -> String {
 
 #[cfg(windows)]
 fn windows_service_exists(service_name: &str) -> bool {
-    capture_command_output("sc.exe", &["query", service_name])["ok"]
-        .as_bool()
+    windows_open_system_service(service_name, ServiceAccess::QUERY_STATUS)
+        .map(|service| service.is_some())
         .unwrap_or(false)
 }
 
 #[cfg(windows)]
 fn windows_service_running(service_name: &str) -> bool {
-    capture_command_output("sc.exe", &["query", service_name])["stdout"]
-        .as_str()
-        .map(|stdout| stdout.to_ascii_uppercase().contains("RUNNING"))
-        .unwrap_or(false)
+    windows_open_system_service(service_name, ServiceAccess::QUERY_STATUS)
+        .ok()
+        .flatten()
+        .is_some_and(|service| windows_service_status_is(&service, ServiceState::Running))
 }
 
 #[cfg(windows)]
@@ -866,16 +950,17 @@ fn windows_stop_service_for_replace(service_name: &str) -> Result<()> {
         return Ok(());
     }
     if !windows_service_stopped(service_name) {
-        let stop = capture_command_output("sc.exe", &["stop", service_name]);
-        if !stop["ok"].as_bool().unwrap_or(false) {
-            let detail = format!(
-                "{}\n{}",
-                stop["stdout"].as_str().unwrap_or_default(),
-                stop["stderr"].as_str().unwrap_or_default()
-            );
-            let lower = detail.to_ascii_lowercase();
-            if !lower.contains("1062") && !lower.contains("has not been started") {
-                bail!("failed to stop Windows service {service_name}: {detail}");
+        if let Some(service) = windows_open_system_service(
+            service_name,
+            ServiceAccess::STOP | ServiceAccess::QUERY_STATUS,
+        )? {
+            match service.stop() {
+                Ok(_) => {}
+                Err(err) if windows_service_error_code(&err) == Some(1062) => {}
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("failed to stop Windows service {service_name}"));
+                }
             }
         }
     }
@@ -895,21 +980,30 @@ fn windows_wait_service_stopped(service_name: &str) -> Result<()> {
 
 #[cfg(windows)]
 fn windows_service_stopped(service_name: &str) -> bool {
-    let capture = capture_command_output("sc.exe", &["query", service_name]);
-    let stdout = capture["stdout"]
-        .as_str()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if stdout.contains("STOPPED") {
-        return true;
+    windows_open_system_service(service_name, ServiceAccess::QUERY_STATUS)
+        .map(|service| {
+            service.is_none()
+                || service.is_some_and(|service| {
+                    windows_service_status_is(&service, ServiceState::Stopped)
+                })
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn windows_wait_service_running(service_name: &str) -> Result<()> {
+    for _ in 0..80 {
+        if windows_service_running(service_name) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(250));
     }
-    let combined = format!(
-        "{}\n{}",
-        capture["stdout"].as_str().unwrap_or_default(),
-        capture["stderr"].as_str().unwrap_or_default()
+    let status = capture_command_output("sc.exe", &["query", service_name]);
+    bail!(
+        "Windows service {service_name} did not reach RUNNING state: {}{}",
+        status["stdout"].as_str().unwrap_or_default(),
+        status["stderr"].as_str().unwrap_or_default()
     )
-    .to_ascii_lowercase();
-    combined.contains("1060") || combined.contains("does not exist")
 }
 
 #[cfg(windows)]
@@ -921,6 +1015,102 @@ fn windows_task_running(service_name: &str) -> bool {
         .as_str()
         .map(|stdout| stdout.to_ascii_lowercase().contains("running"))
         .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn windows_service_manager(access: ServiceManagerAccess) -> Result<ServiceManager> {
+    ServiceManager::local_computer(None::<&str>, access)
+        .context("failed to connect to Windows Service Control Manager")
+}
+
+#[cfg(windows)]
+fn windows_open_system_service(
+    service_name: &str,
+    access: ServiceAccess,
+) -> Result<Option<Service>> {
+    let manager = windows_service_manager(ServiceManagerAccess::CONNECT)?;
+    match manager.open_service(service_name, access) {
+        Ok(service) => Ok(Some(service)),
+        Err(err) if windows_service_error_code(&err) == Some(1060) => Ok(None),
+        Err(err) => {
+            Err(err).with_context(|| format!("failed to open Windows service {service_name}"))
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_system_service_info(plan: &ServicePlan, service_name: &str) -> ServiceInfo {
+    ServiceInfo {
+        name: OsString::from(service_name),
+        display_name: OsString::from("ssh_proxy daemon"),
+        service_type: ServiceType::OWN_PROCESS,
+        start_type: ServiceStartType::AutoStart,
+        error_control: ServiceErrorControl::Normal,
+        executable_path: plan.exe.clone(),
+        launch_arguments: windows_service_launch_arguments(plan),
+        dependencies: Vec::new(),
+        account_name: None,
+        account_password: None,
+    }
+}
+
+#[cfg(windows)]
+fn windows_service_launch_arguments(plan: &ServicePlan) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("daemon"),
+        OsString::from("serve"),
+        OsString::from("--control"),
+        OsString::from(&plan.endpoint),
+    ];
+    if let Some(transport) = plan.transport {
+        args.push(OsString::from("--transport"));
+        args.push(OsString::from(transport.to_string()));
+    }
+    if let Some(token) = &plan.token {
+        args.push(OsString::from("--token"));
+        args.push(OsString::from(token));
+    }
+    if let Some(transport) = plan.tls_transport {
+        args.push(OsString::from("--tls-transport"));
+        args.push(OsString::from(transport.to_string()));
+    }
+    if let Some(transport) = plan.quic_transport {
+        args.push(OsString::from("--quic-transport"));
+        args.push(OsString::from(transport.to_string()));
+    }
+    if let Some(path) = &plan.tls_cert {
+        args.push(OsString::from("--tls-cert"));
+        args.push(path.as_os_str().to_os_string());
+    }
+    if let Some(path) = &plan.tls_key {
+        args.push(OsString::from("--tls-key"));
+        args.push(path.as_os_str().to_os_string());
+    }
+    if let Some(path) = &plan.tls_client_ca {
+        args.push(OsString::from("--tls-client-ca"));
+        args.push(path.as_os_str().to_os_string());
+    }
+    for endpoint in &plan.report_to {
+        args.push(OsString::from("--report-to"));
+        args.push(OsString::from(endpoint));
+    }
+    args
+}
+
+#[cfg(windows)]
+fn windows_service_status_is(service: &Service, expected: ServiceState) -> bool {
+    service
+        .query_status()
+        .map(|status| status.current_state == expected)
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn windows_service_error_code(error: &WindowsServiceError) -> Option<i32> {
+    match error {
+        WindowsServiceError::Winapi(err) => err.raw_os_error(),
+        _ => None,
+    }
 }
 
 #[cfg(windows)]
@@ -945,6 +1135,17 @@ fn join_windows_args(args: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(windows)]
+fn powershell_array(args: &[String]) -> String {
+    format!(
+        "@({})",
+        args.iter()
+            .map(|arg| powershell_quote(arg))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 #[cfg(windows)]
