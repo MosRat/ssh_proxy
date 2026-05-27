@@ -109,7 +109,9 @@ fn cli_help_exposes_only_production_daemon_commands() {
         .expect("failed to run ssh_proxy");
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("help should be utf-8");
-    for visible in ["daemon", "up", "down", "status", "events", "doctor", "vscode"] {
+    for visible in [
+        "daemon", "up", "down", "status", "events", "doctor", "vscode",
+    ] {
         assert!(help.contains(visible), "{visible} should be visible");
     }
     for hidden in [

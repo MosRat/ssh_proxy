@@ -81,7 +81,10 @@ pub(super) async fn apply_remote_settings(
     if spec.apply_policy.verify_remote_port {
         run_script(
             &client,
-            &build_verify_forward_script(&spec.remote_bind.to_string(), spec.remote_port_policy.preferred),
+            &build_verify_forward_script(
+                &spec.remote_bind.to_string(),
+                spec.remote_port_policy.preferred,
+            ),
             &format!(
                 "verify remote forwarded port {}:{}",
                 spec.remote_bind, spec.remote_port_policy.preferred
@@ -180,7 +183,10 @@ fn install_args_from_spec(
         persist: cli::PersistMode::Auto,
     };
     if let Some(profile) = config.profiles.get(&spec.target) {
-        args.target = profile.target.clone().unwrap_or_else(|| spec.target.clone());
+        args.target = profile
+            .target
+            .clone()
+            .unwrap_or_else(|| spec.target.clone());
     }
     Ok(args)
 }
@@ -194,8 +200,14 @@ fn setup_payload(spec: &ProxySessionSpec, remote_url: &str, route: Option<&Value
         json!(&spec.apply_policy.proxy_support),
     );
     if spec.apply_policy.terminal_env {
-        values.insert("terminal.integrated.env.linux".to_string(), json!(env.clone()));
-        values.insert("terminal.integrated.env.osx".to_string(), json!(env.clone()));
+        values.insert(
+            "terminal.integrated.env.linux".to_string(),
+            json!(env.clone()),
+        );
+        values.insert(
+            "terminal.integrated.env.osx".to_string(),
+            json!(env.clone()),
+        );
         values.insert("terminal.integrated.env.windows".to_string(), json!(env));
     }
     json!({

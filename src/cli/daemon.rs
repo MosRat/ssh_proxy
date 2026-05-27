@@ -86,7 +86,11 @@ pub struct UpArgs {
     )]
     pub workspace_paths: Vec<String>,
 
-    #[arg(long, default_value = ".vscode-server", help = "Remote VS Code server directory")]
+    #[arg(
+        long,
+        default_value = ".vscode-server",
+        help = "Remote VS Code server directory"
+    )]
     pub server_dir: String,
 
     #[arg(

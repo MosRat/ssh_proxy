@@ -88,7 +88,10 @@ pub enum Commands {
     Doctor(DoctorArgs),
     #[command(about = "VS Code Remote SSH integration commands")]
     Vscode(VscodeArgs),
-    #[command(hide = true, about = "Internal remote host helper compatibility entrypoint")]
+    #[command(
+        hide = true,
+        about = "Internal remote host helper compatibility entrypoint"
+    )]
     Host(HostArgs),
     #[command(hide = true, about = "Internal service compatibility entrypoint")]
     Service(ServiceArgs),
