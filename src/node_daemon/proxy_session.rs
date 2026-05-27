@@ -267,6 +267,19 @@ impl NodeManager {
             "resolved proxy session target",
         )
         .await?;
+        if let Err(err) = validate_proxy_session_spec(&spec) {
+            let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
+                .failed(err.to_string(), Some("invalid_local_proxy".to_string()))
+                .with_next_action("set remoteProxy.localProxy.url to http:// or socks5h://");
+            let job = self
+                .jobs
+                .upsert(job, "proxy session validation failed")
+                .await?;
+            self.state
+                .upsert_session_from_job(&spec, &job, None)
+                .await?;
+            return Ok(());
+        }
         self.proxy_job_phase(
             &spec,
             &job_id,
@@ -570,6 +583,45 @@ fn proxy_url_for_remote(local_proxy: &str, remote_bind: &str, remote_port: u16) 
     format!("{scheme}://{userinfo}{remote_bind}:{remote_port}{suffix}")
 }
 
+fn validate_proxy_session_spec(spec: &ProxySessionSpec) -> Result<()> {
+    let (scheme, rest) = spec
+        .local_proxy
+        .split_once("://")
+        .ok_or_else(|| anyhow!("local proxy URL must include a scheme"))?;
+    match scheme {
+        "http" | "socks5" | "socks5h" => {}
+        _ => {
+            return Err(anyhow!(
+                "unsupported local proxy scheme {scheme:?}; use http:// or socks5h://"
+            ));
+        }
+    }
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let authority = authority
+        .rsplit_once('@')
+        .map(|(_, endpoint)| endpoint)
+        .unwrap_or(authority);
+    if authority.is_empty() {
+        return Err(anyhow!("local proxy URL is missing a host"));
+    }
+    if let Some(port) = authority
+        .strip_prefix('[')
+        .and_then(|rest| rest.find(']').map(|end| &rest[end + 1..]))
+        .and_then(|tail| tail.strip_prefix(':'))
+        .or_else(|| {
+            authority
+                .rsplit_once(':')
+                .filter(|(host, _)| !host.contains(':'))
+                .map(|(_, port)| port)
+        })
+    {
+        port.parse::<u16>()
+            .map_err(|_| anyhow!("local proxy URL has an invalid port"))?;
+    }
+    Ok(())
+}
+
 fn sanitize_key(key: &str) -> String {
     let normalized = key
         .chars()
@@ -624,5 +676,28 @@ mod tests {
             proxy_url_for_remote("http://user:pass@127.0.0.1:10808/path", "127.0.0.1", 17890),
             "http://user:pass@127.0.0.1:17890/path",
         );
+    }
+
+    #[test]
+    fn validates_supported_local_proxy_urls() {
+        let mut spec = ProxySessionSpec {
+            target: "126".to_string(),
+            workspace_id: None,
+            local_proxy: "socks5h://user:pass@[::1]:1080/path".to_string(),
+            remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
+            remote_port_policy: RemotePortPolicy {
+                preferred: 17890,
+                auto_pick: true,
+            },
+            connect_mode: cli::RouteConnectMode::ReverseLink,
+            apply_policy: ApplyPolicy::default(),
+        };
+        validate_proxy_session_spec(&spec).unwrap();
+
+        spec.local_proxy = "https://127.0.0.1:10808/".to_string();
+        assert!(validate_proxy_session_spec(&spec).is_err());
+
+        spec.local_proxy = "http://127.0.0.1:abc/".to_string();
+        assert!(validate_proxy_session_spec(&spec).is_err());
     }
 }

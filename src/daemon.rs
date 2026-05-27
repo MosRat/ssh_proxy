@@ -112,6 +112,7 @@ pub async fn up(args: cli::UpArgs, config: config::AppConfig) -> Result<()> {
         args.json,
         || {
             json!({
+                "ok": false,
                 "kind": "proxy_session",
                 "daemon_api": "v0.3",
                 "spec": spec.to_value(),
@@ -122,6 +123,11 @@ pub async fn up(args: cli::UpArgs, config: config::AppConfig) -> Result<()> {
                     "daemon_unavailable",
                     "install or start the ssh_proxy daemon, then retry this proxy session",
                 ),
+                "blocker": "daemon_unavailable",
+                "next_action": "ssh_proxy daemon install --scope system --elevate",
+                "retry_after_ms": 1000,
+                "requires_daemon": true,
+                "requires_elevation": true,
             })
         },
     )
@@ -154,6 +160,9 @@ pub async fn down(args: cli::DownArgs, config: config::AppConfig) -> Result<()> 
                 "daemon_api": "v0.3",
                 "route_id": id,
                 "code": "daemon_unavailable",
+                "blocker": "daemon_unavailable",
+                "next_action": "ssh_proxy daemon install --scope system --elevate",
+                "retry_after_ms": 1000,
                 "requires_daemon": true,
                 "requires_elevation": true,
             })
@@ -189,8 +198,10 @@ pub async fn status(args: cli::StatusArgs, config: config::AppConfig) -> Result<
                 "workspace": args.workspace,
                 "health": "unavailable",
                 "code": "daemon_unavailable",
+                "blocker": "daemon_unavailable",
                 "requires_elevation": true,
-                "next_action": "daemon install --scope system",
+                "next_action": "ssh_proxy daemon install --scope system --elevate",
+                "retry_after_ms": 1000,
             })
         },
     )
@@ -215,6 +226,9 @@ pub async fn events(args: cli::EventsArgs, config: config::AppConfig) -> Result<
                 "job": args.job,
                 "events": [],
                 "code": "daemon_unavailable",
+                "blocker": "daemon_unavailable",
+                "next_action": "ssh_proxy daemon install --scope system --elevate",
+                "retry_after_ms": 1000,
                 "requires_daemon": true,
             })
         },
@@ -242,7 +256,8 @@ pub async fn doctor(args: cli::DoctorArgs, config: config::AppConfig) -> Result<
                     "name": "daemon_control",
                     "ok": false,
                     "blocker": "daemon_unavailable",
-                    "next_action": "ssh_proxy daemon install --scope system"
+                    "next_action": "ssh_proxy daemon install --scope system --elevate",
+                    "retry_after_ms": 1000
                 }],
                 "requires_elevation": true,
             })
