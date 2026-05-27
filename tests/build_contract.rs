@@ -102,6 +102,26 @@ fn source_avoids_direct_c_ffi_surface() {
     );
 }
 
+#[test]
+fn release_docs_list_full_local_gate_commands() {
+    let docs = read_repo_file("docs/release.md");
+    let gates = [
+        "cargo test --tests",
+        "cargo build --release",
+        "cargo zigbuild --target x86_64-unknown-linux-musl --release",
+        "npm --prefix apps/vscode-remote-proxy test",
+        "npm --prefix apps/vscode-remote-proxy run package:with-kernel",
+    ];
+
+    for gate in gates {
+        assert_contains(
+            &docs,
+            gate,
+            "release docs should list the local production gate",
+        );
+    }
+}
+
 fn read_repo_file(relative: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     fs::read_to_string(&path)

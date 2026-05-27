@@ -85,6 +85,22 @@ test('hides legacy fallback settings from the production configuration surface',
   }
 });
 
+test('keeps legacy backend helpers out of the production extension source', () => {
+  const sourceFiles = new Set(fs.readdirSync(path.join(ROOT, 'src')));
+  const forbiddenFiles = [
+    'openSshReverseBackend.ts',
+    'sessionDaemon.ts',
+    'serviceRecovery.ts',
+    'remoteSetupScripts.ts',
+    'leaseCoordinator.ts',
+    'routeArgsBuilder.ts',
+  ];
+
+  for (const file of forbiddenFiles) {
+    assert.equal(sourceFiles.has(file), false, `${file} should not return to the normal extension path`);
+  }
+});
+
 test('keeps explicit scripts for staging bundled ssh_proxy binaries', () => {
   assert.equal(
     manifest.scripts['kernel:stage'],

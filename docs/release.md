@@ -27,6 +27,17 @@ checks, then runs:
 - `cargo test --tests`
 - `npm --prefix apps/vscode-remote-proxy test`
 
+For a local production gate before packaging or publishing, run the explicit
+commands as well:
+
+```powershell
+cargo test --tests
+cargo build --release
+cargo zigbuild --target x86_64-unknown-linux-musl --release
+npm --prefix apps/vscode-remote-proxy test
+npm --prefix apps/vscode-remote-proxy run package:with-kernel
+```
+
 ## Rust Release Binary
 
 ```powershell
