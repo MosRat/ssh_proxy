@@ -146,6 +146,17 @@ export function buildSshProxyDaemonInstallArgs(options: {
   return args;
 }
 
+export function isSshProxyDaemonInstallCancelledMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('0xc000013a')
+    || lower.includes('exit code 1223')
+    || lower.includes('code 1223')
+    || lower.includes('operation was canceled')
+    || lower.includes('operation was cancelled')
+    || lower.includes('the operation was canceled by the user')
+    || lower.includes('用户取消');
+}
+
 export function buildSshProxyDownArgs(options: {
   readonly routeId?: string;
   readonly workspace?: string;

@@ -8,6 +8,7 @@ const {
   buildSshProxyVscodeStatusArgs,
   buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
+  isSshProxyDaemonInstallCancelledMessage,
   normalizeSshProxyExecutable,
   parseSshProxyJson,
   redactSshProxyArgs,
@@ -99,6 +100,21 @@ test('redacts token flags and proxy URL credentials', () => {
       '--egress-proxy',
       'http://<redacted>@127.0.0.1:18080',
     ],
+  );
+});
+
+test('classifies cancelled elevated daemon installs', () => {
+  assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('powershell.exe exited with status exit code: 0xc000013a'),
+    true,
+  );
+  assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('ssh_proxy daemon install failed with code 1223'),
+    true,
+  );
+  assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('failed to copy binary because it is in use'),
+    false,
   );
 });
 

@@ -110,6 +110,13 @@ fn install_service(plan: &ServicePlan) -> Result<()> {
 
 fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
     let action = plan.resolution.next_action;
+    if matches!(
+        action,
+        ServiceNextAction::Reuse | ServiceNextAction::StartOrRepair | ServiceNextAction::Install
+    ) && platform::platform_install_requires_elevation(plan)
+    {
+        return platform::platform_install(plan);
+    }
     let original_config = if plan.config_to_save.is_some() {
         match fs::read(&plan.config_path) {
             Ok(bytes) => Some(Some(bytes)),
@@ -139,12 +146,16 @@ fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
         ServiceNextAction::Reuse
         | ServiceNextAction::StartOrRepair
         | ServiceNextAction::Install => {
-            if let Some(config) = &plan.config_to_save {
-                config.save_default()?;
-                println!("saved daemon defaults to {}", plan.config_path.display());
-            }
-            plan.install_binary()?;
-            if let Err(err) = platform::platform_install(plan) {
+            let install_result = (|| -> Result<()> {
+                if let Some(config) = &plan.config_to_save {
+                    config.save_default()?;
+                    println!("saved daemon defaults to {}", plan.config_path.display());
+                }
+                platform::platform_prepare_install(plan)?;
+                plan.install_binary()?;
+                platform::platform_install(plan)
+            })();
+            if let Err(err) = install_result {
                 if let Some(snapshot) = original_config {
                     restore_config_snapshot(&plan.config_path, snapshot)?;
                     eprintln!(

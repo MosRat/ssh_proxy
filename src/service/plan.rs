@@ -1,4 +1,6 @@
 use std::{fs, net::SocketAddr, path::PathBuf, process::Command};
+#[cfg(windows)]
+use std::{thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
 
@@ -236,17 +238,14 @@ impl ServicePlan {
         if !self.copy_exe {
             return Ok(());
         }
+        if self.source_exe == self.exe {
+            return Ok(());
+        }
         if let Some(parent) = self.exe.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-        fs::copy(&self.source_exe, &self.exe).with_context(|| {
-            format!(
-                "failed to copy {} to {}",
-                self.source_exe.display(),
-                self.exe.display()
-            )
-        })?;
+        copy_binary(&self.source_exe, &self.exe)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -254,6 +253,41 @@ impl ServicePlan {
             permissions.set_mode(0o755);
             fs::set_permissions(&self.exe, permissions)?;
         }
+        Ok(())
+    }
+}
+
+fn copy_binary(source: &PathBuf, target: &PathBuf) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let mut last_error = None;
+        for _ in 0..20 {
+            match fs::copy(source, target) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    last_error = Some(err);
+                    thread::sleep(Duration::from_millis(250));
+                }
+            }
+        }
+        let err = last_error.expect("copy loop should record an error");
+        return Err(err).with_context(|| {
+            format!(
+                "failed to copy {} to {}",
+                source.display(),
+                target.display()
+            )
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        fs::copy(source, target).with_context(|| {
+            format!(
+                "failed to copy {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
         Ok(())
     }
 }

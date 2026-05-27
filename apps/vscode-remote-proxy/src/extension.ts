@@ -20,6 +20,7 @@ import {
   resolveSshProxyExecutableCandidates,
   sshProxyUnavailableCandidatesMessage,
 } from './sshProxyDiscovery';
+import { isSshProxyDaemonInstallCancelledMessage } from './sshProxyCliUtils';
 import { isSshProxyDaemonRejectedError, SshProxyKernelBackend } from './sshProxyKernelBackend';
 import { SshProxyKernelStatusSnapshot } from './sshProxyKernelStatus';
 import { buildRemoteProxyStatusLines } from './statusDisplay';
@@ -463,16 +464,6 @@ class RemoteProxyController implements vscode.Disposable {
   }
 
   private async installDaemonWithElevation(config: RemoteProxyConfig): Promise<boolean> {
-    const continueAction = 'Continue';
-    const picked = await vscode.window.showInformationMessage(
-      'Remote Proxy needs the local ssh_proxy system daemon. Windows may show a UAC prompt.',
-      { modal: true },
-      continueAction,
-    );
-    if (picked !== continueAction) {
-      return false;
-    }
-
     try {
       const resolved = await findAvailableSshProxyCli(
         config.sshProxyExecutable,
@@ -488,7 +479,7 @@ class RemoteProxyController implements vscode.Disposable {
       await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: 'Installing ssh_proxy daemon',
+          title: 'Installing ssh_proxy daemon. Approve the Windows UAC prompt if it appears.',
           cancellable: false,
         },
         async () => {
@@ -501,6 +492,11 @@ class RemoteProxyController implements vscode.Disposable {
       return true;
     } catch (installError) {
       const message = installError instanceof Error ? installError.message : String(installError);
+      if (isSshProxyDaemonInstallCancelledMessage(message)) {
+        this.output.appendLine('ssh_proxy daemon install was cancelled before completion.');
+        void vscode.window.showWarningMessage('ssh_proxy daemon install was cancelled.');
+        return false;
+      }
       this.output.appendLine(`ssh_proxy daemon install failed: ${message}`);
       void vscode.window.showErrorMessage(`ssh_proxy daemon install failed: ${message}`, 'Show Output')
         .then((action) => {

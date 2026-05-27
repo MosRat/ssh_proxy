@@ -1,5 +1,8 @@
 use std::process::Command;
 
+#[cfg(windows)]
+use std::{thread, time::Duration};
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{
     fs,
@@ -91,6 +94,16 @@ fn contains_permission_denied(text: &str) -> bool {
         || text
             .to_ascii_lowercase()
             .contains("operation not permitted")
+}
+
+#[cfg(not(windows))]
+pub(super) fn platform_install_requires_elevation(_plan: &ServicePlan) -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+pub(super) fn platform_prepare_install(_plan: &ServicePlan) -> Result<()> {
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -635,6 +648,31 @@ pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary
 }
 
 #[cfg(windows)]
+pub(super) fn platform_install_requires_elevation(plan: &ServicePlan) -> bool {
+    matches!(plan.scope, ServiceScope::System) && plan.elevate && !is_elevated_for_platform()
+}
+
+#[cfg(windows)]
+pub(super) fn platform_prepare_install(plan: &ServicePlan) -> Result<()> {
+    let service_name = platform_service_name(plan.scope);
+    match plan.scope {
+        ServiceScope::User => {
+            if windows_task_running(&service_name) {
+                run_command("schtasks", &["/End", "/TN", &service_name])?;
+                thread::sleep(Duration::from_millis(500));
+            }
+            Ok(())
+        }
+        ServiceScope::System => {
+            ensure_admin(
+                "preparing a Windows system service install requires administrator privileges",
+            )?;
+            windows_stop_service_for_replace(&service_name)
+        }
+    }
+}
+
+#[cfg(windows)]
 pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
@@ -738,7 +776,7 @@ pub(super) fn platform_install_elevated(plan: &ServicePlan) -> Result<()> {
     service_args.push("install".to_string());
 
     let command = format!(
-        "$p = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
+        "$p = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; if ($null -eq $p.ExitCode) {{ exit 1223 }}; exit $p.ExitCode",
         powershell_quote(&plan.source_exe.display().to_string()),
         powershell_quote(&join_windows_args(&service_args)),
     );
@@ -820,6 +858,58 @@ fn windows_service_running(service_name: &str) -> bool {
         .as_str()
         .map(|stdout| stdout.to_ascii_uppercase().contains("RUNNING"))
         .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn windows_stop_service_for_replace(service_name: &str) -> Result<()> {
+    if !windows_service_exists(service_name) {
+        return Ok(());
+    }
+    if !windows_service_stopped(service_name) {
+        let stop = capture_command_output("sc.exe", &["stop", service_name]);
+        if !stop["ok"].as_bool().unwrap_or(false) {
+            let detail = format!(
+                "{}\n{}",
+                stop["stdout"].as_str().unwrap_or_default(),
+                stop["stderr"].as_str().unwrap_or_default()
+            );
+            let lower = detail.to_ascii_lowercase();
+            if !lower.contains("1062") && !lower.contains("has not been started") {
+                bail!("failed to stop Windows service {service_name}: {detail}");
+            }
+        }
+    }
+    windows_wait_service_stopped(service_name)
+}
+
+#[cfg(windows)]
+fn windows_wait_service_stopped(service_name: &str) -> Result<()> {
+    for _ in 0..60 {
+        if windows_service_stopped(service_name) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    bail!("Windows service {service_name} did not stop before binary replacement")
+}
+
+#[cfg(windows)]
+fn windows_service_stopped(service_name: &str) -> bool {
+    let capture = capture_command_output("sc.exe", &["query", service_name]);
+    let stdout = capture["stdout"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if stdout.contains("STOPPED") {
+        return true;
+    }
+    let combined = format!(
+        "{}\n{}",
+        capture["stdout"].as_str().unwrap_or_default(),
+        capture["stderr"].as_str().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    combined.contains("1060") || combined.contains("does not exist")
 }
 
 #[cfg(windows)]
