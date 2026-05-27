@@ -58,14 +58,14 @@ pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<
             .await
         }
         cli::DaemonCommand::Status => {
-            service::run(
-                service_args(
-                    args.scope,
-                    args.json,
-                    false,
-                    false,
-                    cli::ServiceCommand::Status,
-                ),
+            status(
+                cli::StatusArgs {
+                    target: None,
+                    workspace: None,
+                    endpoint: control_socket::default_endpoint_string(),
+                    token: None,
+                    json: args.json,
+                },
                 config,
             )
             .await
