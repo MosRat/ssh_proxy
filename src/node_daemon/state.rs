@@ -366,6 +366,38 @@ impl ProductionState {
         }))
     }
 
+    pub(super) async fn record_daemon_update_state(
+        &self,
+        state: &str,
+        source: Option<String>,
+        staged_path: Option<String>,
+        staged_hash: Option<String>,
+        staged_version: Option<String>,
+        last_error: Option<String>,
+    ) -> Result<Value> {
+        let mut store = self.daemon.lock().await;
+        let now = now_unix();
+        store.version = STORE_VERSION;
+        store.daemon.version = env!("CARGO_PKG_VERSION").to_string();
+        store.daemon.health = if state == "failed" {
+            "degraded".to_string()
+        } else {
+            "healthy".to_string()
+        };
+        store.daemon.update_state = state.to_string();
+        store.daemon.updated_at_unix = now;
+        save_store(&self.daemon_path, &*store)?;
+        Ok(json!({
+            "state": store.daemon.update_state,
+            "source": source,
+            "staged_path": staged_path,
+            "staged_hash": staged_hash,
+            "staged_version": staged_version,
+            "last_error": last_error,
+            "updated_at_unix": now,
+        }))
+    }
+
     pub(super) async fn daemon_value(&self) -> Value {
         let store = self.daemon.lock().await;
         serde_json::to_value(&store.daemon).unwrap_or_else(|_| json!({ "health": "unknown" }))
