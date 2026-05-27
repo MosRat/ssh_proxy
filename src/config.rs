@@ -18,9 +18,10 @@ mod profile;
 pub use profile::expand_path;
 mod schema;
 pub use schema::{
-    AppConfig, CONFIG_SCHEMA_VERSION, DaemonConfig, NodeIdentity, PeerRecord, ProxyProfile,
-    TokenMetadata,
+    AppConfig, CONFIG_SCHEMA_VERSION, NodeIdentity, PeerRecord, ProxyProfile, TokenMetadata,
 };
+#[cfg(test)]
+pub use schema::DaemonConfig;
 
 impl AppConfig {
     pub fn load_default() -> Result<Self> {

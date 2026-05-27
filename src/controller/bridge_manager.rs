@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::anyhow;
 use tokio::time;
 use tracing::{error, info, warn};
 

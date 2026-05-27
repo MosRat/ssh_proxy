@@ -2,9 +2,13 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tracing::info;
 
-use crate::{cli, config, deploy, peer_transport, route};
+use crate::{cli, deploy, route};
+#[cfg(test)]
+use crate::{config, peer_transport};
 
-use super::{NodeManager, NodeRequest, NodeResponse, control_protocol, response_line};
+use super::{NodeManager, NodeRequest, NodeResponse, response_line};
+#[cfg(test)]
+use super::control_protocol;
 
 mod bootstrap;
 mod compatibility;

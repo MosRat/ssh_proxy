@@ -39,7 +39,6 @@ pub const QUIC_NATIVE_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(15);
 use crate::{
     cli, peer_transport,
     quic_native::{
-        self,
         flow::write_flow_header_with_buffer,
         session::{RouteSessionSpec, client_negotiate},
         stream_header::{StreamHeader, StreamTarget},

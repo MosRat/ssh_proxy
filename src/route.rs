@@ -20,15 +20,10 @@ pub(crate) use response::{
 };
 pub(crate) use runner::explain_plan;
 pub use runner::run;
-pub(crate) use selection::{
-    RemoteUseDecision, RemoteUsePlan, local_peer_addr, remote_use_decision, route_deploy_mode,
-    transport_selection_policy,
-};
-pub(crate) use transport::{
-    direct_transport_policy, direct_transport_policy_reason, parse_remote_os,
-    parse_remote_transport, remote_transport_name, ssh_data_plane_reason, ssh_mode_name,
-    ssh_mode_reason, tls_peer_auth_mode,
-};
+#[cfg(test)]
+pub(crate) use selection::local_peer_addr;
+pub(crate) use selection::{RemoteUsePlan, remote_use_decision};
+pub(crate) use transport::{parse_remote_transport, remote_transport_name};
 
 #[cfg(test)]
 mod tests;
