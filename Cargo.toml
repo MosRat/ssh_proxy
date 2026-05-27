@@ -1,6 +1,6 @@
 [package]
 name = "ssh_proxy"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A peer-oriented SSH bootstrap and proxy routing daemon with SSH fallback, TLS/TCP, and QUIC transports."
 license = "MIT"
