@@ -12,7 +12,10 @@ use tracing::warn;
 
 use crate::config;
 
-use super::{jobs::JobRecord, proxy_session::ProxySessionSpec};
+use super::{
+    jobs::JobRecord,
+    proxy_session::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy},
+};
 
 const STORE_VERSION: u32 = 1;
 
@@ -22,12 +25,16 @@ pub(super) struct ProxySessionRecord {
     pub(super) target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) workspace_paths: Vec<String>,
     pub(super) job_id: String,
     pub(super) route_id: String,
     pub(super) local_proxy: String,
     pub(super) remote_bind: String,
     pub(super) remote_port: u16,
     pub(super) remote_url: String,
+    #[serde(default)]
+    pub(super) apply_policy: ApplyPolicy,
     pub(super) state: String,
     pub(super) phase: String,
     pub(super) health: String,
@@ -50,12 +57,14 @@ impl ProxySessionRecord {
             session_id: spec.session_id(),
             target: spec.target.clone(),
             workspace_id: spec.workspace_id.clone(),
+            workspace_paths: spec.workspace_paths.clone(),
             job_id: job.id.clone(),
             route_id: spec.route_id(),
             local_proxy: spec.local_proxy.clone(),
             remote_bind: spec.remote_bind.to_string(),
             remote_port: spec.remote_port_policy.preferred,
             remote_url: job.remote_url.clone().unwrap_or_else(|| spec.remote_url()),
+            apply_policy: spec.apply_policy.clone(),
             state: enum_value(&job.state),
             phase: enum_value(&job.phase),
             health: job_health(job),
@@ -72,11 +81,13 @@ impl ProxySessionRecord {
     fn update_from_job(&mut self, spec: &ProxySessionSpec, job: &JobRecord) {
         self.target = spec.target.clone();
         self.workspace_id = spec.workspace_id.clone();
+        self.workspace_paths = spec.workspace_paths.clone();
         self.route_id = spec.route_id();
         self.local_proxy = spec.local_proxy.clone();
         self.remote_bind = spec.remote_bind.to_string();
         self.remote_port = spec.remote_port_policy.preferred;
         self.remote_url = job.remote_url.clone().unwrap_or_else(|| spec.remote_url());
+        self.apply_policy = spec.apply_policy.clone();
         self.state = enum_value(&job.state);
         self.phase = enum_value(&job.phase);
         self.health = job_health(job);
@@ -85,17 +96,33 @@ impl ProxySessionRecord {
         self.last_error = job.last_error.clone();
         self.updated_at_unix = job.updated_at_unix;
         if self.phase == "apply_remote_settings" {
-            self.remote_setup.state = "required".to_string();
+            self.remote_setup = RemoteSetupStatus::required();
             self.remote_setup.updated_at_unix = job.updated_at_unix;
         }
         if self.phase == "healthy" && self.remote_setup.state == "pending" {
-            self.remote_setup.state = "required".to_string();
+            self.remote_setup = RemoteSetupStatus::required();
             self.remote_setup.updated_at_unix = job.updated_at_unix;
         }
     }
 
     pub(super) fn to_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| json!({ "session_id": self.session_id }))
+    }
+
+    pub(super) fn to_spec(&self) -> Result<ProxySessionSpec> {
+        Ok(ProxySessionSpec {
+            target: self.target.clone(),
+            workspace_id: self.workspace_id.clone(),
+            workspace_paths: self.workspace_paths.clone(),
+            local_proxy: self.local_proxy.clone(),
+            remote_bind: self.remote_bind.parse()?,
+            remote_port_policy: RemotePortPolicy {
+                preferred: self.remote_port,
+                auto_pick: true,
+            },
+            connect_mode: crate::cli::RouteConnectMode::ReverseLink,
+            apply_policy: self.apply_policy.clone(),
+        })
     }
 }
 
@@ -104,6 +131,18 @@ pub(super) struct RemoteSetupStatus {
     pub(super) state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) desired_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) applied_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) drift_detected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) remote_url: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) next_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_error: Option<String>,
     pub(super) updated_at_unix: u64,
@@ -114,8 +153,65 @@ impl RemoteSetupStatus {
         Self {
             state: "pending".to_string(),
             last_hash: None,
+            desired_hash: None,
+            applied_hash: None,
+            drift_detected: false,
+            remote_url: None,
+            verified: false,
+            next_action: Some("wait_for_proxy_session_job".to_string()),
             last_error: None,
             updated_at_unix: now_unix(),
+        }
+    }
+
+    pub(super) fn required() -> Self {
+        Self {
+            state: "required".to_string(),
+            next_action: Some("apply_remote_settings".to_string()),
+            ..Self::pending()
+        }
+    }
+
+    pub(super) fn running(desired_hash: Option<String>, remote_url: Option<String>) -> Self {
+        Self {
+            state: "running".to_string(),
+            desired_hash,
+            remote_url,
+            next_action: Some("wait_for_remote_setup".to_string()),
+            updated_at_unix: now_unix(),
+            ..Self::pending()
+        }
+    }
+
+    pub(super) fn applied(
+        desired_hash: String,
+        applied_hash: String,
+        remote_url: String,
+        verified: bool,
+    ) -> Self {
+        Self {
+            state: "applied".to_string(),
+            last_hash: Some(applied_hash.clone()),
+            desired_hash: Some(desired_hash),
+            applied_hash: Some(applied_hash),
+            drift_detected: false,
+            remote_url: Some(remote_url),
+            verified,
+            next_action: Some("monitor_remote_setup_drift".to_string()),
+            last_error: None,
+            updated_at_unix: now_unix(),
+        }
+    }
+
+    pub(super) fn failed(error: String, desired_hash: Option<String>, remote_url: Option<String>) -> Self {
+        Self {
+            state: "failed".to_string(),
+            desired_hash,
+            remote_url,
+            next_action: Some("rerun_apply_remote_settings".to_string()),
+            last_error: Some(error),
+            updated_at_unix: now_unix(),
+            ..Self::pending()
         }
     }
 }
@@ -319,6 +415,26 @@ impl ProductionState {
         Ok(found)
     }
 
+    pub(super) async fn update_remote_setup_status(
+        &self,
+        session_id: &str,
+        job_id: &str,
+        status: RemoteSetupStatus,
+    ) -> Result<Option<ProxySessionRecord>> {
+        let mut store = self.sessions.lock().await;
+        let mut found = None;
+        for record in store.sessions.values_mut() {
+            if record.session_id == session_id || record.job_id == job_id {
+                record.remote_setup = status.clone();
+                record.updated_at_unix = now_unix();
+                found = Some(record.clone());
+                break;
+            }
+        }
+        save_store(&self.sessions_path, &*store)?;
+        Ok(found)
+    }
+
     pub(super) async fn session_by_job(&self, job_id: &str) -> Option<ProxySessionRecord> {
         self.sessions
             .lock()
@@ -326,6 +442,16 @@ impl ProductionState {
             .sessions
             .values()
             .find(|session| session.job_id == job_id)
+            .cloned()
+    }
+
+    pub(super) async fn session_by_route(&self, route_id: &str) -> Option<ProxySessionRecord> {
+        self.sessions
+            .lock()
+            .await
+            .sessions
+            .values()
+            .find(|session| session.route_id == route_id)
             .cloned()
     }
 
@@ -420,6 +546,10 @@ fn job_health(job: &JobRecord) -> String {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -439,6 +569,7 @@ mod tests {
         ProxySessionSpec {
             target: "126".to_string(),
             workspace_id: Some("Window A".to_string()),
+            workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
             remote_port_policy: super::super::proxy_session::RemotePortPolicy {

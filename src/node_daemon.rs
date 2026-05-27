@@ -29,6 +29,7 @@ mod management;
 mod peers;
 mod proxy_session;
 mod quic_transport;
+mod remote_setup;
 mod routes;
 mod state;
 mod transport;

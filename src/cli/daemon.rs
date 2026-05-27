@@ -80,6 +80,56 @@ pub struct UpArgs {
     #[arg(long, help = "Stable route id; defaults to the workspace or target")]
     pub id: Option<String>,
 
+    #[arg(
+        long = "workspace-path",
+        help = "Remote workspace path used for daemon-owned Git workspace settings"
+    )]
+    pub workspace_paths: Vec<String>,
+
+    #[arg(long, default_value = ".vscode-server", help = "Remote VS Code server directory")]
+    pub server_dir: String,
+
+    #[arg(
+        long,
+        default_value = "localhost,127.0.0.1,::1",
+        help = "no_proxy value applied to daemon-owned remote setup"
+    )]
+    pub no_proxy: String,
+
+    #[arg(
+        long,
+        default_value = "override",
+        help = "proxy support mode written by daemon-owned remote setup"
+    )]
+    pub proxy_support: String,
+
+    #[arg(long, help = "Skip remote VS Code machine settings application")]
+    pub no_remote_machine_settings: bool,
+
+    #[arg(long, help = "Skip remote terminal environment setup")]
+    pub no_terminal_env: bool,
+
+    #[arg(long, help = "Skip remote server-env-setup management")]
+    pub no_server_env: bool,
+
+    #[arg(long, help = "Skip remote Git proxy config management")]
+    pub no_git: bool,
+
+    #[arg(long, help = "Skip global Git proxy config management")]
+    pub no_git_global: bool,
+
+    #[arg(long, help = "Skip workspace Git proxy config management")]
+    pub no_git_workspace: bool,
+
+    #[arg(long, help = "Skip force-replacing existing Git proxy config")]
+    pub no_git_force_override: bool,
+
+    #[arg(long, help = "Skip remote proxy status file management")]
+    pub no_remote_status_file: bool,
+
+    #[arg(long, help = "Skip remote port readiness verification")]
+    pub no_verify_remote_port: bool,
+
     #[arg(long, help = "Do not restore this proxy session after daemon restart")]
     pub volatile: bool,
 
@@ -191,6 +241,48 @@ pub struct VscodeUpArgs {
     #[arg(long, value_enum, default_value = "reverse-link")]
     pub connect_mode: RouteConnectMode,
 
+    #[arg(
+        long = "workspace-path",
+        help = "Remote workspace path used for daemon-owned Git workspace settings"
+    )]
+    pub workspace_paths: Vec<String>,
+
+    #[arg(long, default_value = ".vscode-server")]
+    pub server_dir: String,
+
+    #[arg(long, default_value = "localhost,127.0.0.1,::1")]
+    pub no_proxy: String,
+
+    #[arg(long, default_value = "override")]
+    pub proxy_support: String,
+
+    #[arg(long)]
+    pub no_remote_machine_settings: bool,
+
+    #[arg(long)]
+    pub no_terminal_env: bool,
+
+    #[arg(long)]
+    pub no_server_env: bool,
+
+    #[arg(long)]
+    pub no_git: bool,
+
+    #[arg(long)]
+    pub no_git_global: bool,
+
+    #[arg(long)]
+    pub no_git_workspace: bool,
+
+    #[arg(long)]
+    pub no_git_force_override: bool,
+
+    #[arg(long)]
+    pub no_remote_status_file: bool,
+
+    #[arg(long)]
+    pub no_verify_remote_port: bool,
+
     #[arg(long, default_value_t = control_socket::default_endpoint_string())]
     pub endpoint: String,
 
@@ -271,6 +363,19 @@ impl VscodeUpArgs {
             endpoint: self.endpoint,
             token: self.token,
             id: None,
+            workspace_paths: self.workspace_paths,
+            server_dir: self.server_dir,
+            no_proxy: self.no_proxy,
+            proxy_support: self.proxy_support,
+            no_remote_machine_settings: self.no_remote_machine_settings,
+            no_terminal_env: self.no_terminal_env,
+            no_server_env: self.no_server_env,
+            no_git: self.no_git,
+            no_git_global: self.no_git_global,
+            no_git_workspace: self.no_git_workspace,
+            no_git_force_override: self.no_git_force_override,
+            no_remote_status_file: self.no_remote_status_file,
+            no_verify_remote_port: self.no_verify_remote_port,
             volatile: true,
             json: self.json,
         }
