@@ -39,7 +39,7 @@ test('extracts route state from route start JSON', () => {
       connect_mode: 'reverse-link',
       remote_url: 'http://127.0.0.1:17890',
       fallback_reason: 'ssh-only topology',
-      cleanup_command: 'ssh_proxy node control stop-route vscode-remote-proxy-edge',
+      cleanup_command: 'ssh_proxy down --route-id vscode-remote-proxy-edge',
       health: { state: 'starting' },
     },
     proxy(),
@@ -59,10 +59,10 @@ test('falls back to deterministic route id and cleanup command', () => {
   const state = createSshProxyRouteState({}, proxy(), 'reverse-link');
 
   assert.match(state.routeId, /^vscode-remote-proxy-[0-9a-f]+$/);
-  assert.equal(state.cleanupCommand, `ssh_proxy node control stop-route ${state.routeId}`);
+  assert.equal(state.cleanupCommand, `ssh_proxy down --route-id ${state.routeId}`);
 });
 
-test('finds and merges live route health from node control routes output', () => {
+test('finds and merges live route health from daemon route output', () => {
   const state = createSshProxyRouteState(
     {
       route_id: 'route-1',

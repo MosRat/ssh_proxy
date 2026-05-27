@@ -31,7 +31,7 @@ function proxy(overrides = {}) {
 
 function kernelStatus() {
   return {
-    serviceStatus: {
+    daemonStatus: {
       ok: true,
       daemon: { reachable: true },
       health: {
@@ -43,9 +43,8 @@ function kernelStatus() {
         },
       },
     },
-    routeExplain: undefined,
-    routeStart: undefined,
-    routeStop: undefined,
+    sessionStart: undefined,
+    sessionStop: undefined,
     routeState: {
       routeId: 'vscode-remote-proxy-edge',
       owner: 'local',
@@ -53,7 +52,7 @@ function kernelStatus() {
       connectMode: 'reverse-link',
       fallbackReason: 'ssh-only topology',
       remoteUrl: 'http://127.0.0.1:17890',
-      cleanupCommand: 'ssh_proxy node control stop-route vscode-remote-proxy-edge',
+      cleanupCommand: 'ssh_proxy down --route-id vscode-remote-proxy-edge',
       health: {
         selected_protocol: 'ssh-native',
         control_health: 'healthy',
@@ -72,7 +71,6 @@ test('summarizes ssh_proxy daemon health for diagnostics and tooltip', () => {
     describeSshProxyDaemonHealth('ssh_proxy', kernelStatus()),
     'ok=true daemon=true control=true plain=true tls=true quic=false',
   );
-  assert.equal(describeSshProxyDaemonHealth('openssh', undefined), 'not applicable');
   assert.equal(describeSshProxyDaemonHealth('ssh_proxy', undefined), 'unknown');
 });
 
@@ -81,7 +79,6 @@ test('summarizes ssh_proxy route health from kernel link health', () => {
     describeSshProxyRouteHealth('ssh_proxy', kernelStatus()),
     'protocol=ssh-native control=healthy connections=1 streams=2 open_failures=0',
   );
-  assert.equal(describeSshProxyRouteHealth('openssh', undefined), 'not applicable');
   assert.equal(describeSshProxyRouteHealth('ssh_proxy', undefined), 'unknown');
 });
 
@@ -95,11 +92,8 @@ test('builds status lines with backend route transport fallback daemon and error
     detectedSource: 'remote authority',
     detectedConfidence: 'high',
     forwardSshHost: 'edge',
-    leaseMode: 'owner',
-    leaseDescription: 'owned owner=owner-1 target=edge',
     restartBackoff: 'ready',
     proxy: proxy(),
-    lease: undefined,
     kernelStatus: kernelStatus(),
     lastError: 'last failure',
   });

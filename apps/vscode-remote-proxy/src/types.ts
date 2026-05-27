@@ -1,11 +1,8 @@
 export type LocalProxyMode = 'auto' | 'env' | 'manual';
 export type ProxyScheme = 'http' | 'https' | 'socks4' | 'socks5';
 export type SupportedRemoteKind = 'ssh' | 'wsl' | 'dev-container' | 'none' | 'other';
-export type ForwardingBackendKind = 'auto' | 'ssh_proxy' | 'openssh';
-export type RemoteSetupMode = 'auto' | 'ssh_proxy' | 'openssh';
+export type ForwardingBackendKind = 'ssh_proxy';
 export type SshProxyConnectMode = 'auto' | 'reverse-link' | 'direct';
-export type SshProxyOpenSshFallbackPolicy = 'final' | 'disabled' | 'legacy-auto';
-export type SshProxyBrokerMode = 'auto' | 'persistent' | 'session-only' | 'disabled';
 
 export interface LocalProxy {
   readonly url: string;
@@ -36,35 +33,15 @@ export interface RemoteProxyConfig {
   readonly remotePortRangeSize: number;
   readonly remoteBindHost: string;
   readonly noProxy: string;
-  readonly sshExecutable: string;
   readonly sshHostOverride: string;
   readonly sshUseStorageFallback: boolean;
-  readonly sshArgs: readonly string[];
   readonly sshProxyExecutable: string;
-  readonly sshProxyAutoInstallLocalService: boolean;
-  readonly sshProxyAllowElevationPrompt: boolean;
-  readonly sshProxyPreferPersistentService: boolean;
-  readonly sshProxyOpenSshFallbackPolicy: SshProxyOpenSshFallbackPolicy;
-  readonly sshProxyBrokerMode: SshProxyBrokerMode;
   readonly sshProxyConnectMode: SshProxyConnectMode;
-  readonly sshProxyRouteVolatile: boolean;
-  readonly sshProxyRemoteSetup: RemoteSetupMode;
-  readonly sshBatchMode: boolean;
-  readonly sshConnectTimeout: number;
-  readonly sshServerAliveInterval: number;
-  readonly sshServerAliveCountMax: number;
-  readonly sshTcpKeepAlive: boolean;
-  readonly retryOnExit: boolean;
-  readonly retryDelaySeconds: number;
   readonly restartOnHostChange: boolean;
   readonly verifyAfterStart: boolean;
   readonly healthCheckEnabled: boolean;
   readonly healthCheckIntervalSeconds: number;
   readonly healthCheckFailureThreshold: number;
-  readonly restartBackoffMaxSeconds: number;
-  readonly singletonReuseEnabled: boolean;
-  readonly singletonLeaseTtlSeconds: number;
-  readonly singletonStartLockTimeoutSeconds: number;
   readonly applyVscodeSettings: boolean;
   readonly applyRemoteMachineSettings: boolean;
   readonly applyTerminalEnv: boolean;

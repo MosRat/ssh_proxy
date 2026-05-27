@@ -278,7 +278,7 @@
         "remoteProxy.forward.verifyAfterStart": {
           "type": "boolean",
           "default": true,
-          "description": "Verify that the remote forwarded port accepts TCP connections after starting ssh -R."
+          "description": "Ask the daemon to verify that the remote forwarded port accepts TCP connections."
         },
         "remoteProxy.forward.healthCheckEnabled": {
           "type": "boolean",
@@ -298,13 +298,6 @@
           "minimum": 1,
           "maximum": 10,
           "description": "Consecutive failed health checks required before restarting an active proxy route."
-        },
-        "remoteProxy.forward.restartBackoffMaxSeconds": {
-          "type": "number",
-          "default": 30,
-          "minimum": 5,
-          "maximum": 600,
-          "description": "Maximum exponential backoff delay before restarting after repeated health check failures."
         },
         "remoteProxy.apply.vscodeSettings": {
           "type": "boolean",
@@ -368,7 +361,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "kernel:stage": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/stage-vscode-extension-binaries.ps1",
-    "test": "npm run compile && node --test test/sshProxyRouteArgs.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/kernelRecoveryCoordinator.test.js test/packageConfig.test.js test/commandDefinitions.test.js test/proxyLeaseRecord.test.js test/proxyLease.test.js test/portPersistence.test.js test/reliabilityPolicy.test.js test/healthMonitor.test.js test/startupCoordinator.test.js test/remoteProxyMenu.test.js test/quickPickItems.test.js test/diagnosticsPresenter.test.js test/statusDisplay.test.js test/remoteSetupScripts.test.js test/remoteSetupReady.test.js test/remoteCommandRunnerUtils.test.js test/remoteSetupRunnerPolicy.test.js test/routeOwnership.test.js test/sshProxyDiscovery.test.js",
+    "test": "npm run compile && node --test test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/commandDefinitions.test.js test/reliabilityPolicy.test.js test/healthMonitor.test.js test/startupCoordinator.test.js test/remoteProxyMenu.test.js test/quickPickItems.test.js test/diagnosticsPresenter.test.js test/statusDisplay.test.js test/sshProxyDiscovery.test.js",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "package:with-kernel": "npm run kernel:stage && vsce package",

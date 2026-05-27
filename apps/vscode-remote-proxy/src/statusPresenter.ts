@@ -8,7 +8,6 @@ export interface RemoteProxyStatusPresentation {
   readonly status: ForwardingBackendStatus;
   readonly effectiveStatus: string;
   readonly backend: ForwardingBackendKind;
-  readonly leaseMode: string;
   readonly sshHost: string | undefined;
   readonly proxy: AppliedProxy | undefined;
   readonly kernelStatus: SshProxyKernelStatusSnapshot | undefined;
@@ -58,7 +57,6 @@ export function buildRemoteProxyStatusTooltip(input: RemoteProxyStatusPresentati
   markdown.appendMarkdown('**Remote Proxy**\n\n');
   markdown.appendMarkdown(`Status: \`${input.effectiveStatus}\`\n\n`);
   markdown.appendMarkdown(`Backend: \`${input.backend}\`\n\n`);
-  markdown.appendMarkdown(`Lease: \`${input.leaseMode}\`\n\n`);
   markdown.appendMarkdown(`SSH host: \`${input.sshHost ?? 'not active'}\`\n\n`);
   markdown.appendMarkdown(`Remote proxy: \`${proxy?.remoteUrl ?? 'not active'}\`\n\n`);
   markdown.appendMarkdown(`Route: \`${proxy?.routeId ?? 'not active'}\`\n\n`);

@@ -8,7 +8,6 @@ import {
   SshProxyRouteState,
 } from './sshProxyKernelStatus';
 import { resolveSshProxyExecutableCandidates, sshProxyUnavailableCandidatesMessage } from './sshProxyDiscovery';
-import { shouldStopSshProxyRoute } from './routeOwnership';
 import { AppliedProxy, RemoteProxyConfig } from './types';
 
 export class SshProxyKernelBackend implements ForwardingBackend {
@@ -22,7 +21,6 @@ export class SshProxyKernelBackend implements ForwardingBackend {
   private currentSelectedTransport: string | undefined;
   private currentFallbackReason: string | undefined;
   private currentConnectMode: string | undefined;
-  private ownsCurrentRoute = false;
   private snapshot: SshProxyKernelStatusSnapshot = emptySshProxyKernelStatusSnapshot();
   private currentCli: SshProxyCli | undefined;
 
@@ -60,33 +58,6 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     this.changeEmitter.fire();
   }
 
-  public adoptShared(sshHost: string, proxy: AppliedProxy): void {
-    this.currentSshHostValue = sshHost;
-    this.currentProxy = proxy;
-    this.childRouteId = proxy.routeId;
-    this.currentSelectedTransport = proxy.selectedTransport;
-    this.currentFallbackReason = proxy.fallbackReason;
-    this.currentConnectMode = proxy.connectMode;
-    this.ownsCurrentRoute = false;
-    this.snapshot = {
-      ...this.snapshot,
-      routeState: proxy.routeId ? {
-        routeId: proxy.routeId,
-        owner: proxy.routeOwner ?? proxy.backend,
-        selectedTransport: proxy.selectedTransport,
-        connectMode: proxy.connectMode,
-        fallbackReason: proxy.fallbackReason,
-        remoteUrl: proxy.remoteUrl,
-        cleanupCommand: proxy.cleanupCommand,
-        health: undefined,
-        liveRoute: undefined,
-      } : undefined,
-    };
-    this.lastErrorValue = undefined;
-    this.statusValue = 'running';
-    this.changeEmitter.fire();
-  }
-
   public async startAndWait(config: RemoteProxyConfig, sshHost: string, proxy: AppliedProxy, _waitMs: number): Promise<void> {
     await this.start(config, sshHost, proxy);
   }
@@ -96,7 +67,6 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     this.currentProxy = proxy;
     this.currentSshHostValue = sshHost;
     this.lastErrorValue = undefined;
-    this.ownsCurrentRoute = false;
     this.snapshot = emptySshProxyKernelStatusSnapshot();
     this.changeEmitter.fire();
 
@@ -129,7 +99,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
         throw new Error(`ssh_proxy daemon rejected the proxy session: ${prettyJson(started)}`);
       }
       const routeState = createSshProxyRouteState(started, proxy, config.sshProxyConnectMode);
-      this.setSnapshot({ routeStart: started, routeState });
+      this.setSnapshot({ sessionStart: started, routeState });
       await this.waitForProxySessionReadiness(
         cli,
         proxy.workspaceId ?? sshHost,
@@ -153,7 +123,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
 
   public async stop(clearIntent = true): Promise<void> {
     const routeId = this.childRouteId;
-    if (shouldStopSshProxyRoute(routeId, this.ownsCurrentRoute) && routeId) {
+    if (routeId || this.currentProxy?.workspaceId || this.currentSshHostValue) {
       try {
         const cli = this.cliForCurrent();
         if (cli) {
@@ -162,15 +132,13 @@ export class SshProxyKernelBackend implements ForwardingBackend {
             workspace: this.currentProxy?.workspaceId,
             target: this.currentSshHostValue,
           });
-          this.setSnapshot({ routeStop: stopped });
+          this.setSnapshot({ sessionStop: stopped });
           this.output.appendLine(`ssh_proxy down: ${prettyJson(stopped)}`);
         }
       } catch (error) {
         this.lastErrorValue = error instanceof Error ? error.message : String(error);
         this.output.appendLine(`ssh_proxy down failed: ${this.lastErrorValue}`);
       }
-    } else if (routeId) {
-      this.output.appendLine(`ssh_proxy route ${routeId} is shared or not owned by this window; detaching without stop-route`);
     }
 
     if (clearIntent) {
@@ -182,7 +150,6 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       this.currentSelectedTransport = undefined;
       this.currentFallbackReason = undefined;
       this.currentConnectMode = undefined;
-      this.ownsCurrentRoute = false;
       this.snapshot = emptySshProxyKernelStatusSnapshot();
       this.statusValue = 'stopped';
       this.changeEmitter.fire();
@@ -201,7 +168,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       return;
     }
     const status = await cli.vscodeStatusJson({ workspace, target: this.currentSshHostValue });
-    this.setSnapshot({ serviceStatus: status, lastRefreshAt: Date.now() });
+    this.setSnapshot({ daemonStatus: status, lastRefreshAt: Date.now() });
     const record = asRecord(status);
     const job = asRecord(record?.job);
     const route = asRecord(record?.route);
@@ -251,7 +218,6 @@ export class SshProxyKernelBackend implements ForwardingBackend {
 
   private applyRouteState(proxy: AppliedProxy, routeState: SshProxyRouteState): void {
     this.childRouteId = routeState.routeId;
-    this.ownsCurrentRoute = true;
     this.currentSelectedTransport = routeState.selectedTransport;
     this.currentFallbackReason = routeState.fallbackReason;
     this.currentConnectMode = routeState.connectMode;
@@ -286,7 +252,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     let lastError: string | undefined;
     while (Date.now() <= deadline) {
       const status = await cli.vscodeStatusJson({ workspace, target });
-      this.setSnapshot({ serviceStatus: status, lastRefreshAt: Date.now() });
+      this.setSnapshot({ daemonStatus: status, lastRefreshAt: Date.now() });
       const record = asRecord(status);
       const job = asRecord(record?.job);
       const route = asRecord(record?.route);

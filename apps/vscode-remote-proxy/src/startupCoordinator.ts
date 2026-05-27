@@ -33,11 +33,6 @@ export type RemoteActionPreflightDecision =
     readonly warningMessage: string;
   };
 
-export interface StartLockTimings {
-  readonly timeoutMs: number;
-  readonly staleMs: number;
-}
-
 export function planAutoStart(config: RemoteProxyConfig, remote: RemoteContext): AutoStartDecision {
   if (!config.enabled || !config.autoStart) {
     return {
@@ -103,11 +98,4 @@ export function checkApplySettingsPreflight(config: RemoteProxyConfig, remote: R
   }
 
   return { action: 'continue' };
-}
-
-export function startLockTimings(config: RemoteProxyConfig): StartLockTimings {
-  return {
-    timeoutMs: Math.max(1, config.singletonStartLockTimeoutSeconds) * 1000,
-    staleMs: Math.max(config.singletonLeaseTtlSeconds, config.sshConnectTimeout + 10) * 1000,
-  };
 }

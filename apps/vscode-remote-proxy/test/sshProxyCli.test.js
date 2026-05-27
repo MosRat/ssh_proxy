@@ -2,15 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-  buildSshProxyNodeControlShutdownArgs,
-  buildSshProxyNodeControlStatusArgs,
-  buildSshProxyNodeDaemonArgs,
   buildSshProxyDownArgs,
-  buildSshProxyServiceEnsureArgs,
-  buildSshProxyServiceInstallArgs,
-  buildSshProxyServiceStatusArgs,
-  buildSshProxyRoutesArgs,
-  buildSshProxyStopRouteArgs,
+  buildSshProxyVscodeApplySettingsArgs,
   buildSshProxyVscodeStatusArgs,
   buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
@@ -26,13 +19,6 @@ test('normalizes an empty ssh_proxy executable to the PATH command', () => {
 });
 
 test('builds JSON command shapes consumed by the extension', () => {
-  assert.deepEqual(buildSshProxyServiceStatusArgs(), ['service', '--json', 'status']);
-  assert.deepEqual(buildSshProxyServiceEnsureArgs(), ['service', '--scope', 'auto', '--json', 'ensure']);
-  assert.deepEqual(buildSshProxyServiceEnsureArgs('system', { elevate: true }), ['service', '--scope', 'system', '--json', '--elevate', 'ensure']);
-  assert.deepEqual(buildSshProxyServiceInstallArgs(), ['service', '--scope', 'auto', 'install']);
-  assert.deepEqual(buildSshProxyServiceInstallArgs('user'), ['service', '--scope', 'user', 'install']);
-  assert.deepEqual(buildSshProxyRoutesArgs(), ['node', 'control', '--json', 'routes']);
-  assert.deepEqual(buildSshProxyStopRouteArgs('route-1'), ['node', 'control', '--json', 'stop-route', 'route-1']);
   assert.deepEqual(
     buildSshProxyVscodeUpArgs({
       target: '126',
@@ -65,55 +51,26 @@ test('builds JSON command shapes consumed by the extension', () => {
     ['vscode', 'status', '--workspace', 'window-a', '--target', '126', '--json'],
   );
   assert.deepEqual(
-    buildSshProxyDownArgs({ routeId: 'v3-window-a', workspace: 'window-a', target: '126' }),
-    ['down', '--route-id', 'v3-window-a', '--workspace', 'window-a', '--target', '126', '--json'],
-  );
-});
-
-test('builds node control commands for a session daemon endpoint', () => {
-  const connection = {
-    endpoint: 'tcp://127.0.0.1:19181',
-    token: 'session-token',
-  };
-  assert.deepEqual(
-    buildSshProxyNodeControlStatusArgs(connection),
-    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'status'],
-  );
-  assert.deepEqual(
-    buildSshProxyRoutesArgs(connection),
-    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'routes'],
-  );
-  assert.deepEqual(
-    buildSshProxyStopRouteArgs('route-1', connection),
-    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'stop-route', 'route-1'],
-  );
-  assert.deepEqual(
-    buildSshProxyNodeControlShutdownArgs(connection),
-    ['node', 'control', '--endpoint', 'tcp://127.0.0.1:19181', '--token', 'session-token', '--json', 'shutdown'],
-  );
-});
-
-test('builds session daemon command shape', () => {
-  assert.deepEqual(
-    buildSshProxyNodeDaemonArgs({
-      control: 'tcp://127.0.0.1:19181',
-      transport: '127.0.0.1:19180',
-      token: 'session-token',
-      name: 'vscode-remote-proxy-session',
+    buildSshProxyVscodeApplySettingsArgs({
+      target: '126',
+      workspace: 'window-a',
+      proxyUrl: 'http://127.0.0.1:17890/',
     }),
     [
-      'node',
-      'daemon',
-      '--control',
-      'tcp://127.0.0.1:19181',
-      '--transport',
-      '127.0.0.1:19180',
-      '--token',
-      'session-token',
-      '--no-route-autostart',
-      '--name',
-      'vscode-remote-proxy-session',
+      'vscode',
+      'apply-settings',
+      '--target',
+      '126',
+      '--workspace',
+      'window-a',
+      '--proxy-url',
+      'http://127.0.0.1:17890/',
+      '--json',
     ],
+  );
+  assert.deepEqual(
+    buildSshProxyDownArgs({ routeId: 'v3-window-a', workspace: 'window-a', target: '126' }),
+    ['down', '--route-id', 'v3-window-a', '--workspace', 'window-a', '--target', '126', '--json'],
   );
 });
 

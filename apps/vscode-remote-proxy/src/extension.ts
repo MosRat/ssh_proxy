@@ -8,14 +8,12 @@ import {
 } from './diagnosticsPresenter';
 import { detectLocalProxy, findProbeCandidates, makeRemoteProxyUrl } from './proxyDetection';
 import { buildLocalProxyPickItems, buildSshHostPickItems, sshHostPickPlaceholder } from './quickPickItems';
-import { ProxyLeaseState } from './proxyLease';
 import { recordHealthCheckFailure } from './reliabilityPolicy';
 import { getRemoteContext } from './remoteContext';
 import { buildRemoteProxyMenuItems } from './remoteProxyMenu';
 import { readSshHostEntries } from './sshConfig';
 import { ForwardingBackend } from './forwardingBackend';
 import { healthCheckIntervalMs, shouldRunTimedCheck } from './healthMonitor';
-import { LeaseCoordinator, LeaseMode } from './leaseCoordinator';
 import { findAvailableSshProxyCli } from './sshProxyCli';
 import {
   describeSshProxyDiscovery,
@@ -43,8 +41,6 @@ interface StatusSnapshot {
   readonly detectedSource: string | undefined;
   readonly detectedConfidence: string;
   readonly proxy: AppliedProxy | undefined;
-  readonly lease: ProxyLeaseState | undefined;
-  readonly leaseMode: LeaseMode;
   readonly kernelStatus: SshProxyKernelStatusSnapshot | undefined;
 }
 
@@ -64,7 +60,6 @@ export function deactivate(): void {
 class RemoteProxyController implements vscode.Disposable {
   private readonly sshProxyBackend: SshProxyKernelBackend;
   private forwarder: ForwardingBackend;
-  private readonly leaseCoordinator: LeaseCoordinator;
   private readonly statusBar: vscode.StatusBarItem;
   private readonly monitorTimer: NodeJS.Timeout;
   private applying = false;
@@ -75,7 +70,6 @@ class RemoteProxyController implements vscode.Disposable {
   public constructor(private readonly output: vscode.OutputChannel, private readonly context: vscode.ExtensionContext) {
     this.sshProxyBackend = new SshProxyKernelBackend(output, context.extensionPath);
     this.forwarder = this.sshProxyBackend;
-    this.leaseCoordinator = new LeaseCoordinator(output);
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 30);
     this.statusBar.command = 'remoteProxy.openMenu';
     this.statusBar.tooltip = undefined;
@@ -181,7 +175,7 @@ class RemoteProxyController implements vscode.Disposable {
     this.applying = true;
     this.updateStatusBar('$(sync~spin) Proxy');
     try {
-      const targetKey = this.leaseCoordinator.getStableTargetKey(sshHost, this.lastResolvedTargetKey);
+      const targetKey = this.lastResolvedTargetKey ?? sshHost;
       config = applyHostProfile(config, readHostProfile([sshHost, targetKey]));
       const local = await detectLocalProxy(config);
       if (!local) {
@@ -211,7 +205,6 @@ class RemoteProxyController implements vscode.Disposable {
       await backend.startAndWait(config, sshHost, applied, 900);
       this.healthFailures = 0;
       this.lastHealthCheckAt = 0;
-      this.leaseCoordinator.resetHeartbeat();
       const active = backend.appliedProxy ?? applied;
       if (!active) {
         throw new Error('forwarding backend did not produce an applied proxy');
@@ -220,9 +213,6 @@ class RemoteProxyController implements vscode.Disposable {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.output.appendLine(`Start failed: ${message}`);
-      if (this.leaseCoordinator.mode === 'owner') {
-        await this.releaseLeaseAndStopForwarder();
-      }
       this.forwarder.fail(message);
       vscode.window.showErrorMessage(`Remote Proxy failed: ${message}`);
     } finally {
@@ -232,13 +222,13 @@ class RemoteProxyController implements vscode.Disposable {
   }
 
   public async stop(): Promise<void> {
-    await this.releaseLeaseAndStopForwarder({ rememberPreferredPort: true });
+    await this.stopForwarder();
     vscode.window.showInformationMessage('Remote Proxy stopped.');
     this.updateStatusBar();
   }
 
   public async restart(): Promise<void> {
-    await this.releaseLeaseAndStopForwarder({ rememberPreferredPort: true });
+    await this.stopForwarder();
     await this.start();
   }
 
@@ -268,7 +258,7 @@ class RemoteProxyController implements vscode.Disposable {
     }
 
     try {
-      await this.releaseLeaseAndStopForwarder();
+      await this.stopForwarder();
       vscode.window.showInformationMessage(`Remote Proxy cleanup requested through daemon on ${sshHost}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -296,12 +286,34 @@ class RemoteProxyController implements vscode.Disposable {
     }
 
     try {
-      if (this.forwarder === this.sshProxyBackend && this.forwarder.status === 'running') {
-        await this.sshProxyBackend.refreshStatus();
-        vscode.window.showInformationMessage('Remote Proxy settings are managed by the daemon for the active session.');
-      } else {
-        await this.start({ interactive: true });
+      const targetKey = this.lastResolvedTargetKey ?? sshHost;
+      config = applyHostProfile(config, readHostProfile([sshHost, targetKey]));
+      const activeProxy = this.forwarder.appliedProxy;
+      const local = activeProxy?.local ?? await detectLocalProxy(config);
+      if (!local) {
+        vscode.window.showWarningMessage('Remote Proxy settings need a detectable local proxy or an active daemon session.');
+        return;
       }
+      const proxyUrl = activeProxy?.remoteUrl ?? makeRemoteProxyUrl(local, config.remoteBindHost, config.remotePort);
+      const resolved = await findAvailableSshProxyCli(
+        config.sshProxyExecutable,
+        this.output,
+        { extensionPath: this.context.extensionPath },
+      );
+      if (!resolved) {
+        throw new Error(sshProxyUnavailableCandidatesMessage(resolveSshProxyExecutableCandidates(
+          config.sshProxyExecutable,
+          { extensionPath: this.context.extensionPath },
+        )));
+      }
+      const result = await resolved.cli.vscodeApplySettingsJson({
+        target: sshHost,
+        workspace: targetKey,
+        proxyUrl,
+      });
+      this.output.appendLine(`ssh_proxy vscode apply-settings: ${JSON.stringify(result)}`);
+      await this.sshProxyBackend.refreshStatus();
+      vscode.window.showInformationMessage(`Remote Proxy settings apply requested through daemon on ${sshHost}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.output.appendLine(`Apply settings failed: ${message}`);
@@ -441,7 +453,6 @@ class RemoteProxyController implements vscode.Disposable {
     const config = readConfig();
     const remote = getRemoteContext(config.sshHostOverride);
     const proxy = this.forwarder.appliedProxy;
-    const lease = await this.leaseCoordinator.readCurrent();
     const activeCommandHost = remote.sshHost ? undefined : await detectActiveSshRemoteCommand();
     const storageHost = remote.sshHost || activeCommandHost ? undefined : await detectSshHostFromVsCodeStorage(this.context, { includeGlobalStorage: true });
     const detectedHost = remote.sshHost ?? activeCommandHost?.host ?? storageHost?.host;
@@ -458,11 +469,8 @@ class RemoteProxyController implements vscode.Disposable {
       detectedSource,
       detectedConfidence,
       forwardSshHost: this.forwarder.currentSshHost,
-      leaseMode: this.leaseCoordinator.mode,
-      leaseDescription: this.leaseCoordinator.describe(lease),
       restartBackoff: 'daemon-managed',
       proxy,
-      lease,
       kernelStatus,
       lastError: this.forwarder.lastError,
     });
@@ -472,8 +480,6 @@ class RemoteProxyController implements vscode.Disposable {
       detectedSource,
       detectedConfidence,
       proxy,
-      lease,
-      leaseMode: this.leaseCoordinator.mode,
       kernelStatus,
     };
   }
@@ -489,7 +495,6 @@ class RemoteProxyController implements vscode.Disposable {
 
   public dispose(): void {
     clearInterval(this.monitorTimer);
-    void this.leaseCoordinator.releaseOwned();
     this.sshProxyBackend.dispose();
     this.statusBar.dispose();
   }
@@ -543,23 +548,23 @@ class RemoteProxyController implements vscode.Disposable {
     }
 
     if (!config.restartOnHostChange) {
-      await this.monitorHealthAndLease(config);
+      await this.monitorHealth(config);
       return;
     }
 
     const expectedHost = await this.resolveSshHost(config, false);
     const currentHost = this.forwarder.currentSshHost;
     if (!expectedHost || !currentHost || expectedHost === currentHost) {
-      await this.monitorHealthAndLease(config);
+      await this.monitorHealth(config);
       return;
     }
 
     this.output.appendLine(`Detected Remote SSH host change: ${currentHost} -> ${expectedHost}. Restarting proxy.`);
-    await this.releaseLeaseAndStopForwarder();
+    await this.stopForwarder();
     await this.start({ interactive: false });
   }
 
-  private async monitorHealthAndLease(config: RemoteProxyConfig): Promise<void> {
+  private async monitorHealth(config: RemoteProxyConfig): Promise<void> {
     if (!config.healthCheckEnabled || this.forwarder.status !== 'running') {
       return;
     }
@@ -592,17 +597,11 @@ class RemoteProxyController implements vscode.Disposable {
     }
   }
 
-  private async releaseLeaseAndStopForwarder(options: { rememberPreferredPort?: boolean } = {}): Promise<void> {
-    void options;
-    await this.leaseCoordinator.releaseOwned();
-    this.leaseCoordinator.clear();
+  private async stopForwarder(): Promise<void> {
     this.forwarder.stop();
   }
 
   private getEffectiveStatus(): string {
-    if (this.leaseCoordinator.mode === 'shared') {
-      return 'running(shared)';
-    }
     return this.forwarder.status;
   }
 
@@ -615,7 +614,6 @@ class RemoteProxyController implements vscode.Disposable {
       status: this.forwarder.status,
       effectiveStatus: this.getEffectiveStatus(),
       backend: this.getBackendName(),
-      leaseMode: this.leaseCoordinator.mode,
       sshHost: this.forwarder.currentSshHost,
       proxy: this.forwarder.appliedProxy,
       kernelStatus: this.getKernelStatus(),

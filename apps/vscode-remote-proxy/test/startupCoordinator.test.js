@@ -6,7 +6,6 @@ const {
   checkCleanupPreflight,
   checkStartPreflight,
   planAutoStart,
-  startLockTimings,
 } = require('../out/startupCoordinator');
 
 function config(overrides = {}) {
@@ -14,9 +13,6 @@ function config(overrides = {}) {
     enabled: true,
     autoStart: true,
     sshHostOverride: '',
-    singletonStartLockTimeoutSeconds: 15,
-    singletonLeaseTtlSeconds: 20,
-    sshConnectTimeout: 12,
     ...overrides,
   };
 }
@@ -80,26 +76,4 @@ test('checks cleanup and apply remote action preflight', () => {
   });
   assert.deepEqual(checkCleanupPreflight(config({ sshHostOverride: 'edge' }), unsupported), { action: 'continue' });
   assert.deepEqual(checkApplySettingsPreflight(config({ sshHostOverride: 'edge' }), unsupported), { action: 'continue' });
-});
-
-test('calculates start lock timeout and stale windows', () => {
-  assert.deepEqual(startLockTimings(config()), {
-    timeoutMs: 15_000,
-    staleMs: 22_000,
-  });
-  assert.deepEqual(startLockTimings(config({
-    singletonStartLockTimeoutSeconds: 0,
-    singletonLeaseTtlSeconds: 5,
-    sshConnectTimeout: 30,
-  })), {
-    timeoutMs: 1_000,
-    staleMs: 40_000,
-  });
-  assert.deepEqual(startLockTimings(config({
-    singletonLeaseTtlSeconds: 90,
-    sshConnectTimeout: 5,
-  })), {
-    timeoutMs: 15_000,
-    staleMs: 90_000,
-  });
 });
