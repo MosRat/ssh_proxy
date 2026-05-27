@@ -48,7 +48,13 @@ async fn main() -> Result<()> {
         }
         cli::Commands::Config(args) => config::run(args).await,
         cli::Commands::Control(args) => controller::control(args, app_config).await,
-        cli::Commands::Daemon(args) => controller::daemon(args, app_config).await,
+        cli::Commands::Daemon(args) => daemon::daemon(args, app_config).await,
+        cli::Commands::Up(args) => daemon::up(args, app_config).await,
+        cli::Commands::Down(args) => daemon::down(args, app_config).await,
+        cli::Commands::Status(args) => daemon::status(args, app_config).await,
+        cli::Commands::Events(args) => daemon::events(args, app_config).await,
+        cli::Commands::Doctor(args) => daemon::doctor(args, app_config).await,
+        cli::Commands::Vscode(args) => daemon::vscode(args, app_config).await,
         cli::Commands::Host(args) => deploy::host(args, app_config).await,
         cli::Commands::Service(args) => service::run(args, app_config).await,
     }
@@ -69,6 +75,7 @@ mod bridge;
 mod deploy;
 
 mod controller;
+mod daemon;
 
 mod socks;
 

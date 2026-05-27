@@ -18,7 +18,7 @@ pub struct ControlArgs {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub struct DaemonArgs {
+pub struct ControllerDaemonArgs {
     #[arg(short, long, default_value = "127.0.0.1:1081")]
     pub control_listen: SocketAddr,
 

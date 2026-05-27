@@ -105,3 +105,82 @@ fn node_control_accepts_json_flag() {
         other => panic!("unexpected command: {other:?}"),
     }
 }
+
+#[test]
+fn daemon_status_uses_v3_daemon_command() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "daemon",
+        "--scope",
+        "system",
+        "--json",
+        "status",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Daemon(args) => {
+            assert_eq!(args.scope, DaemonScope::System);
+            assert!(args.json);
+            assert!(matches!(args.command, DaemonCommand::Status));
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn up_accepts_proxy_session_shape() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "up",
+        "--target",
+        "126",
+        "--workspace",
+        "window-a",
+        "--local-proxy",
+        "http://127.0.0.1:10808/",
+        "--json",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Up(args) => {
+            assert_eq!(args.target, "126");
+            assert_eq!(args.workspace.as_deref(), Some("window-a"));
+            assert_eq!(args.local_proxy, "http://127.0.0.1:10808/");
+            assert_eq!(args.connect_mode, RouteConnectMode::ReverseLink);
+            assert!(args.json);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn vscode_up_accepts_workspace_session_shape() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "vscode",
+        "up",
+        "--target",
+        "126",
+        "--workspace",
+        "window-a",
+        "--local-proxy",
+        "http://127.0.0.1:10808/",
+        "--json",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Vscode(args) => match args.command {
+            VscodeCommand::Up(up) => {
+                assert_eq!(up.target, "126");
+                assert_eq!(up.workspace, "window-a");
+                assert_eq!(up.local_proxy, "http://127.0.0.1:10808/");
+                assert!(up.json);
+            }
+            other => panic!("unexpected vscode command: {other:?}"),
+        },
+        other => panic!("unexpected command: {other:?}"),
+    }
+}

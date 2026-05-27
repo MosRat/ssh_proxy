@@ -207,7 +207,7 @@ pub async fn control(mut args: cli::ControlArgs, config: config::AppConfig) -> R
     Ok(())
 }
 
-pub async fn daemon(mut args: cli::DaemonArgs, config: config::AppConfig) -> Result<()> {
+pub async fn daemon(mut args: cli::ControllerDaemonArgs, config: config::AppConfig) -> Result<()> {
     let default_addr = SocketAddr::from(([127, 0, 0, 1], 1081));
     if args.control.is_none() && args.control_listen == default_addr {
         if let Some(addr) = config.daemon.control_listen {

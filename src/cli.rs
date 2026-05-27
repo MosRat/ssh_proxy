@@ -6,7 +6,12 @@ pub use config::{
     ConfigProfileSetArgs,
 };
 mod control;
-pub use control::{ControlArgs, ControlCommand, DaemonArgs};
+pub use control::{ControlArgs, ControlCommand, ControllerDaemonArgs};
+mod daemon;
+pub use daemon::{
+    DaemonArgs, DaemonCommand, DaemonScope, DoctorArgs, DownArgs, EventsArgs, StatusArgs, UpArgs,
+    VscodeArgs, VscodeCommand,
+};
 mod host;
 pub use host::{HostArgs, HostCommand, HostExecArgs};
 mod install;
@@ -68,8 +73,20 @@ pub enum Commands {
     Config(ConfigArgs),
     #[command(about = "Talk to a running local ssh_proxy controller")]
     Control(ControlArgs),
-    #[command(about = "Run the local daemon control plane")]
+    #[command(about = "Manage or run the Docker-like local ssh_proxy daemon")]
     Daemon(DaemonArgs),
+    #[command(about = "Ensure a daemon-owned proxy session")]
+    Up(UpArgs),
+    #[command(about = "Stop a daemon-owned proxy session")]
+    Down(DownArgs),
+    #[command(about = "Show daemon-owned proxy state")]
+    Status(StatusArgs),
+    #[command(about = "Show daemon job events")]
+    Events(EventsArgs),
+    #[command(about = "Collect daemon diagnostics")]
+    Doctor(DoctorArgs),
+    #[command(about = "VS Code Remote SSH integration commands")]
+    Vscode(VscodeArgs),
     #[command(about = "Manage the remote host helper service through SSH")]
     Host(HostArgs),
     #[command(about = "Install or print local service integration commands")]

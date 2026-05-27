@@ -124,7 +124,7 @@ fn service_print_shows_daemon_command() {
         .expect("failed to run ssh_proxy");
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).expect("service output should be utf-8");
-    assert!(text.contains("node daemon --control"));
+    assert!(text.contains("daemon serve --control"));
 }
 
 #[test]

@@ -210,7 +210,7 @@ impl ServicePlan {
             .map(|endpoint| format!(" --report-to {}", command_quote(endpoint)))
             .collect::<String>();
         format!(
-            "{} node daemon --control {}{}{}{}{}{}{}{}{}",
+            "{} daemon serve --control {}{}{}{}{}{}{}{}{}",
             command_quote(&self.exe.display().to_string()),
             command_quote(&self.endpoint),
             transport,
