@@ -16,14 +16,14 @@ It is built for Remote SSH workflows where a machine behind SSH needs reliable a
 
 ## Quick Start
 
-Install or repair the persistent local service:
+Discover, reuse, or repair the persistent local service:
 
 ```powershell
-ssh_proxy service install
+ssh_proxy service --json ensure
 ssh_proxy service --json status
 ```
 
-`service install` now probes existing user/system service scopes first and reuses the highest available scope before it creates anything new.
+`service ensure` probes existing user/system service scopes first, reuses a healthy control endpoint when one exists, and only repairs or installs when no usable service is available. `service install` remains available for direct installs and accepts `--elevate` when an explicit elevated system install is intended.
 
 Bootstrap or refresh a remote peer through SSH:
 
@@ -79,10 +79,12 @@ Supported upstream egress proxy schemes:
 
 ## VS Code Extension
 
-The extension in `apps/vscode-remote-proxy` automatically exposes a local proxy inside a VS Code Remote SSH window. It can use either:
+The extension in `apps/vscode-remote-proxy` automatically exposes a local proxy inside a VS Code Remote SSH window. Its recovery order is:
 
-- `ssh_proxy` kernel mode, preferred for route ownership, health, session-daemon fallback, and diagnostics
-- OpenSSH reverse forwarding fallback for simple `ssh -R` compatibility
+1. reuse an existing `ssh_proxy` service/control endpoint
+2. repair or install a user service when allowed
+3. use a session-owned daemon when persistent service setup is unavailable
+4. fall back to OpenSSH reverse forwarding only after the kernel path is exhausted
 
 The extension remains a VS Code UI extension because it needs local access to proxy detection, SSH config, the `ssh_proxy` executable, and the local daemon/session process.
 
@@ -100,9 +102,9 @@ ssh_proxy node control --json routes
 Common checks:
 
 - If a remote shell returns `502 Bad Gateway`, verify the local upstream proxy URL and make sure the local proxy accepts CONNECT/SOCKS traffic.
-- If Windows service installation is denied, the VS Code extension first falls back to a session daemon and then to OpenSSH if the kernel path still cannot start.
+- If Windows service installation is denied, use `service --json status` to inspect `selected_control`, `candidates`, and `next_action`. The VS Code extension caches the denied scope for the current window, uses a session daemon, and only then considers OpenSSH.
 - If the remote port is occupied, use `remoteProxy.remote.autoPickPort` in the extension or choose another `--port`.
-- If a route stays in `starting`, inspect `node control routes` and remote listener reachability before applying proxy environment settings.
+- If a route stays in `accepted`, `bootstrapping_peer`, or `starting`, inspect `node control routes`; route readiness fields are additive diagnostics and the extension waits before applying remote proxy settings.
 
 More operational detail lives in [docs/operations.md](docs/operations.md).
 

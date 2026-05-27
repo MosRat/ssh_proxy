@@ -40,7 +40,9 @@ OpenSSH mode is the compatibility fallback:
 ssh -R remote:port:local-proxy-host:local-proxy-port
 ```
 
-Kernel mode is preferred because it exposes route ids, ownership, session-daemon fallback, structured health, and richer diagnostics. If kernel startup hits a service or route failure, the extension now falls back to the session daemon first and then OpenSSH before surfacing a hard failure.
+Kernel mode is preferred because it exposes route ids, ownership, session-daemon fallback, structured health, and richer diagnostics. The extension first asks `ssh_proxy service ensure` for a reusable control endpoint, so an already-running system or user service wins over a new install attempt. If persistent service setup is blocked, the session daemon is treated as a normal kernel fallback. OpenSSH is the final compatibility path.
+
+Auto-start never prompts for UAC or sudo elevation. Interactive commands can allow an elevation prompt when `remoteProxy.sshProxy.allowElevationPrompt=true`, but the extension still prefers reuse, repair, and session daemon fallback before asking for a privileged system service action.
 
 ## Quick Start
 
@@ -95,6 +97,8 @@ Remote port selection is sticky. The extension tries the current route, remember
 | `remoteProxy.remote.autoPickPort` | `true` | Try nearby ports if the preferred port is busy. |
 | `remoteProxy.sshProxy.executable` | `ssh_proxy` | Explicit binary, bundled binary, or PATH fallback. |
 | `remoteProxy.sshProxy.autoInstallLocalService` | `true` | Probe existing service scopes first, then repair/install before session daemon fallback. |
+| `remoteProxy.sshProxy.preferPersistentService` | `true` | Try service discovery before starting a session daemon. |
+| `remoteProxy.sshProxy.allowElevationPrompt` | `true` | Allow elevation prompts only from interactive commands. |
 | `remoteProxy.sshProxy.connectMode` | `reverse-link` | Preserve `ssh -R` style reachability by default. |
 | `remoteProxy.sshProxy.remoteSetup` | `auto` | Prefer `ssh_proxy host exec`, fallback to OpenSSH. |
 | `remoteProxy.forward.verifyAfterStart` | `true` | Verify remote listener readiness after route start. |
@@ -124,10 +128,11 @@ Run `Remote Proxy: Diagnose` first. It prints backend, detected SSH host, lease 
 Common failures:
 
 - `502 Bad Gateway`: the remote listener accepted the request but could not open the upstream path. Check the local proxy URL, including scheme and port, and confirm the local proxy accepts HTTP CONNECT or SOCKS5 traffic.
-- `Access is denied` during service install: Windows blocked scheduled task/service registration. The kernel path will cache that failure for the session, fall back to the session daemon, and then try OpenSSH if needed.
+- `Access is denied` during service install: Windows blocked scheduled task/service registration. The kernel path records that scope as blocked for the current VS Code window, falls back to the session daemon, and only tries OpenSSH if the kernel route still cannot become ready.
 - Remote port already in use: keep `remoteProxy.remote.autoPickPort=true`, or pick a different `remoteProxy.remote.port`.
 - Host unresolved in Extension Development Host: run `Remote Proxy: Pick SSH Host`, or enable storage fallback only if you understand it can be stale.
-- Route stuck in `starting`: open output, inspect `ssh_proxy node control routes`, and verify remote `127.0.0.1:<port>` reachability.
+- Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy node control routes`, and verify remote `127.0.0.1:<port>` reachability. The extension polls kernel readiness before remote verification and does not shut down a healthy session daemon on the first route startup timeout.
+- Repeated `Checking bundled ssh_proxy` after OpenSSH fallback: the active backend should force remote setup and health checks through OpenSSH. If it reappears, include the output channel and `Remote Proxy: Diagnose` result in the issue.
 
 Remote shell smoke test:
 
