@@ -28,6 +28,7 @@ pub struct RemoteInstallResult {
     pub remote_tls_transport: Option<SocketAddr>,
     pub remote_quic_transport: Option<SocketAddr>,
     pub remote_token: Option<String>,
+    pub descriptor: Option<Value>,
 }
 
 pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteInstallResult> {
@@ -84,6 +85,11 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
             );
         }
     }
+    let descriptor = if args.persist == cli::PersistMode::None {
+        None
+    } else {
+        Some(wait_remote_peer_descriptor(&client, &remote_path, &mut args).await?)
+    };
     Ok(RemoteInstallResult {
         target: args.target,
         remote_node_id: args.remote_node_id,
@@ -94,6 +100,7 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
         remote_tls_transport: args.remote_tls_transport,
         remote_quic_transport: args.remote_quic_transport,
         remote_token: args.remote_token,
+        descriptor,
     })
 }
 
@@ -396,6 +403,41 @@ pub(crate) async fn refresh_remote_peer_descriptor(
         remote_token: args.remote_token,
         descriptor,
     })
+}
+
+async fn wait_remote_peer_descriptor(
+    client: &ssh_client::Client,
+    remote_path: &str,
+    args: &mut cli::InstallRemoteArgs,
+) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(12);
+    loop {
+        let command = remote_node_control_command(
+            remote_path,
+            args.remote_control,
+            args.remote_token.as_deref(),
+            "descriptor",
+        );
+        let last_error = match client.exec_output(command).await {
+            Ok(output) => match serde_json::from_str::<Value>(&output) {
+                Ok(descriptor) if descriptor["ok"] == true => {
+                    apply_descriptor_to_install_args(&descriptor, args);
+                    return Ok(descriptor);
+                }
+                Ok(descriptor) => Some(format!("remote descriptor returned not ok: {descriptor}")),
+                Err(err) => Some(format!("failed to parse remote descriptor: {err}")),
+            },
+            Err(err) => Some(err.to_string()),
+        };
+
+        if Instant::now() >= deadline {
+            bail!(
+                "remote peer service did not become ready after install: {}",
+                last_error.unwrap_or_else(|| "descriptor unavailable".to_string())
+            );
+        }
+        time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 pub(crate) async fn rotate_remote_peer_token(
@@ -886,30 +928,84 @@ pub(crate) fn record_remote_install_profile(
     if let Some(token) = &result.remote_token {
         profile.remote_token = Some(token.clone());
     }
+    let descriptor = result.descriptor.as_ref();
+    let node_id = descriptor
+        .and_then(|descriptor| descriptor.get("node_id"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| result.remote_node_id.clone());
+    let node_name = descriptor
+        .and_then(|descriptor| descriptor.get("node_name"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| result.remote_node_name.clone());
+    let version = descriptor
+        .and_then(|descriptor| descriptor_string_field(descriptor, "version"))
+        .or_else(|| Some(env!("CARGO_PKG_VERSION").to_string()));
+    let control_api_version = descriptor
+        .and_then(|descriptor| descriptor_u16_field(descriptor, "control_api_version"))
+        .or_else(|| Some(node_daemon::control_api_version()));
+    let peer_protocol_version = descriptor
+        .and_then(|descriptor| descriptor_u16_field(descriptor, "peer_protocol_version"))
+        .or_else(|| Some(node_daemon::peer_protocol_version()));
+    let features = descriptor
+        .map(|descriptor| descriptor_string_array_field(descriptor, "features"))
+        .filter(|features| !features.is_empty())
+        .unwrap_or_else(node_daemon::peer_protocol_features);
+    let control_endpoint = descriptor
+        .and_then(|descriptor| descriptor.pointer("/endpoints/control"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("tcp://{}", result.remote_control));
+    let transport_protocols = descriptor
+        .and_then(descriptor_protocols)
+        .unwrap_or_else(|| remote_transport_protocols(result));
     config.record_peer(
         profile_name,
         config::PeerRecord {
-            node_id: result.remote_node_id.clone(),
-            node_name: result.remote_node_name.clone(),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            control_api_version: Some(node_daemon::control_api_version()),
-            peer_protocol_version: Some(node_daemon::peer_protocol_version()),
-            features: node_daemon::peer_protocol_features(),
-            os: None,
-            arch: None,
+            node_id,
+            node_name,
+            service_instance_id: descriptor
+                .and_then(|descriptor| descriptor_string_field(descriptor, "service_instance_id")),
+            version,
+            control_api_version,
+            peer_protocol_version,
+            features,
+            os: descriptor.and_then(|descriptor| descriptor_string_field(descriptor, "os")),
+            arch: descriptor.and_then(|descriptor| descriptor_string_field(descriptor, "arch")),
+            os_user: descriptor
+                .and_then(|descriptor| descriptor_string_field(descriptor, "os_user")),
+            data_dir: descriptor
+                .and_then(|descriptor| descriptor_string_field(descriptor, "data_dir"))
+                .map(Into::into),
             target: Some(result.target.clone()),
             trust: Some("ssh-bootstrap".to_string()),
             remote_path: Some(result.remote_path.clone()),
-            control_endpoint: Some(format!("tcp://{}", result.remote_control)),
+            control_endpoint: Some(control_endpoint),
             transport: Some(result.remote_tcp),
             tls_transport: result.remote_tls_transport,
             quic_transport: result.remote_quic_transport,
-            transport_protocols: remote_transport_protocols(result),
+            transport_protocols,
             token: result.remote_token.clone(),
             token_metadata: result
-                .remote_token
+                .descriptor
                 .as_ref()
-                .map(|_| config::TokenMetadata::new("peer-control-transport")),
+                .and_then(|descriptor| descriptor.pointer("/auth/token_metadata"))
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .or_else(|| {
+                    result
+                        .remote_token
+                        .as_ref()
+                        .map(|_| config::TokenMetadata::new("peer-control-transport"))
+                }),
+            tls_server_cert_fingerprint: descriptor
+                .and_then(|descriptor| descriptor.pointer("/auth/tls_server_cert_fingerprint"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            tls_client_ca_fingerprint: descriptor
+                .and_then(|descriptor| descriptor.pointer("/auth/tls_client_ca_fingerprint"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             ..Default::default()
         },
     );

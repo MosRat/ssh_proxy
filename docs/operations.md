@@ -94,6 +94,19 @@ If the daemon restarts, it restores `jobs.json`, `sessions.json`, `peers.json`,
 and `routes.json`, quarantines corrupt state files, then reconciles unfinished
 jobs instead of leaving orphaned local state.
 
+## Target Peer Service
+
+Remote SSH targets run a managed peer service. On Linux, the daemon prefers the
+user systemd unit `ssh-proxy-helper.service`; when user systemd is unavailable,
+it falls back to the managed nohup supervisor under `~/.ssh_proxy/run`.
+
+Bootstrap and update are considered successful only after the remote
+`descriptor` control request succeeds. The descriptor records the real control
+endpoint, transport endpoint, protocol versions, service instance id, remote
+user, data directory, and advertised transports. Re-running bootstrap repairs an
+existing systemd unit, restarts it, then refreshes the descriptor before local
+state is updated.
+
 ## OpenSSH Policy
 
 OpenSSH is not a normal fallback. The Rust SSH client and Rust transport engine
