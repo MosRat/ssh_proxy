@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use sha2::Digest;
 
 use super::inventory::ServiceInventory;
-use crate::{cli, config, control_socket};
+use crate::{cli, config, control_socket, peer_lifecycle};
 
 pub(crate) struct ServicePlan {
     pub(crate) command: cli::ServiceCommand,
@@ -265,6 +265,58 @@ impl ServicePlan {
             fs::set_permissions(&self.exe, permissions)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn lifecycle_spec(&self) -> peer_lifecycle::spec::PeerLifecycleSpec {
+        let provider = lifecycle_provider_for_scope(self.scope);
+        let state_dir = self
+            .config_path
+            .parent()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| ".".to_string());
+        peer_lifecycle::spec::PeerLifecycleSpec::local_daemon(
+            "local",
+            self.exe.display().to_string(),
+            provider,
+            platform_service_name(self.scope),
+            Some(self.endpoint.clone()),
+            self.transport,
+            self.token.clone(),
+            state_dir,
+        )
+    }
+}
+
+pub(crate) fn lifecycle_provider_for_scope(
+    scope: ServiceScope,
+) -> peer_lifecycle::service_provider::ServiceProviderKind {
+    if cfg!(windows) {
+        match scope {
+            ServiceScope::System => {
+                peer_lifecycle::service_provider::ServiceProviderKind::WindowsScmSystem
+            }
+            ServiceScope::User => {
+                peer_lifecycle::service_provider::ServiceProviderKind::WindowsScheduledTaskUser
+            }
+        }
+    } else if cfg!(target_os = "macos") {
+        match scope {
+            ServiceScope::System => {
+                peer_lifecycle::service_provider::ServiceProviderKind::LaunchdSystem
+            }
+            ServiceScope::User => {
+                peer_lifecycle::service_provider::ServiceProviderKind::LaunchdUser
+            }
+        }
+    } else {
+        match scope {
+            ServiceScope::System => {
+                peer_lifecycle::service_provider::ServiceProviderKind::SystemdSystem
+            }
+            ServiceScope::User => {
+                peer_lifecycle::service_provider::ServiceProviderKind::SystemdUser
+            }
+        }
     }
 }
 

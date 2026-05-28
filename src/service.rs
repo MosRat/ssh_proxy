@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
 
-use crate::{cli, config, install_report, repair};
+use crate::{cli, config, install_report, peer_lifecycle, repair};
 
 mod broker;
 mod inventory;
@@ -108,16 +108,44 @@ fn install_failure_report(plan: &ServicePlan, err: &anyhow::Error) -> Value {
 }
 
 fn enrich_install_report(mut report: Value, plan: &ServicePlan) -> Value {
+    let lifecycle = local_service_lifecycle_report(plan, &report);
+    let service_manager = plan.lifecycle_spec().provider.manager_name().to_string();
     if let Some(object) = report.as_object_mut() {
         object.insert("installed_binary".to_string(), json!(plan.exe));
         object.insert("control".to_string(), json!(plan.endpoint));
         object.insert("scope".to_string(), json!(service_scope_name(plan.scope)));
+        object.insert("service_manager".to_string(), json!(service_manager));
+        object.insert("lifecycle".to_string(), lifecycle);
         object.insert(
             "requested_scope".to_string(),
             json!(cli_service_scope_name(plan.requested_scope)),
         );
     }
     report
+}
+
+fn local_service_lifecycle_report(plan: &ServicePlan, report: &Value) -> Value {
+    let spec = plan.lifecycle_spec();
+    let state = report
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let phase = match state {
+        "healthy" => peer_lifecycle::workflow::PeerLifecyclePhase::Healthy,
+        "cancelled" => peer_lifecycle::workflow::PeerLifecyclePhase::Rollback,
+        "failed" => peer_lifecycle::workflow::PeerLifecyclePhase::Failed,
+        _ => peer_lifecycle::workflow::PeerLifecyclePhase::InstallService,
+    };
+    let mut lifecycle = peer_lifecycle::workflow::phase_report(&spec, phase);
+    lifecycle.blocker = report
+        .get("blocker")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    lifecycle.last_error = report
+        .get("message")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    lifecycle.to_redacted_value()
 }
 
 fn is_cancelled_install_error(error: &str) -> bool {
@@ -381,8 +409,11 @@ async fn service_status_summary(plan: &ServicePlan) -> Result<Value> {
 
 fn service_manager_summary(plan: &ServicePlan, daemon_reachable: bool, platform_ok: bool) -> Value {
     let fallback_recommended = !daemon_reachable;
+    let lifecycle = plan.lifecycle_spec();
     json!({
         "kind": persistent_manager_kind(plan.scope),
+        "lifecycle_provider": lifecycle.provider.manager_name(),
+        "lifecycle_role": lifecycle.role,
         "service_name": platform_service_name(plan.scope),
         "requested_scope": cli_service_scope_name(plan.requested_scope),
         "selected_scope": service_scope_name(plan.scope),
