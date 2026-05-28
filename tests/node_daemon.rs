@@ -43,6 +43,66 @@ fn run_control_with_token(endpoint: &str, token: &str, args: &[&str]) -> std::pr
     command.output().expect("run node control")
 }
 
+struct ChildGuard {
+    child: Option<Child>,
+}
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn shutdown_with_control(mut self, endpoint: &str, token: Option<&str>) {
+        self.request_shutdown(endpoint, token);
+        self.wait_or_kill(Duration::from_secs(2));
+    }
+
+    fn request_shutdown(&self, endpoint: &str, token: Option<&str>) {
+        let _ = match token {
+            Some(token) => run_control_with_token(endpoint, token, &["shutdown"]),
+            None => run_control(endpoint, &["shutdown"]),
+        };
+    }
+
+    fn wait_or_kill(&mut self, grace: Duration) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => thread::sleep(Duration::from_millis(100)),
+                Err(_) => break,
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+impl std::ops::Deref for ChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        self.child.as_ref().expect("child guard still owns child")
+    }
+}
+
+impl std::ops::DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.child.as_mut().expect("child guard still owns child")
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if self.child.is_some() {
+            self.wait_or_kill(Duration::from_millis(0));
+        }
+    }
+}
+
 fn wait_for_status(endpoint: &str) {
     for _ in 0..40 {
         let output = run_control(endpoint, &["status"]);
@@ -85,7 +145,7 @@ fn wait_tcp(addr: SocketAddr) {
     panic!("{addr} did not become ready");
 }
 
-fn start_daemon(endpoint: &str, transport: SocketAddr, routes_path: &PathBuf) -> Child {
+fn start_daemon(endpoint: &str, transport: SocketAddr, routes_path: &PathBuf) -> ChildGuard {
     let home = temp_dir("daemon-home");
     let mut command = Command::new(env!("CARGO_BIN_EXE_ssh_proxy"));
     command
@@ -106,6 +166,7 @@ fn start_daemon(endpoint: &str, transport: SocketAddr, routes_path: &PathBuf) ->
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start node daemon")
 }
 
@@ -114,7 +175,7 @@ fn start_daemon_with_home(
     transport: SocketAddr,
     routes_path: &PathBuf,
     home: &PathBuf,
-) -> Child {
+) -> ChildGuard {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ssh_proxy"));
     command
         .args([
@@ -136,6 +197,7 @@ fn start_daemon_with_home(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start node daemon")
 }
 
@@ -145,7 +207,7 @@ fn start_daemon_with_token(
     routes_path: &PathBuf,
     token: &str,
     home: &PathBuf,
-) -> Child {
+) -> ChildGuard {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ssh_proxy"));
     command
         .args([
@@ -169,31 +231,16 @@ fn start_daemon_with_token(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start node daemon")
 }
 
-fn stop_child(mut child: Child, endpoint: &str) {
-    let _ = run_control(endpoint, &["shutdown"]);
-    for _ in 0..20 {
-        if child.try_wait().expect("poll daemon").is_some() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
+fn stop_child(child: ChildGuard, endpoint: &str) {
+    child.shutdown_with_control(endpoint, None);
 }
 
-fn stop_child_with_token(mut child: Child, endpoint: &str, token: &str) {
-    let _ = run_control_with_token(endpoint, token, &["shutdown"]);
-    for _ in 0..20 {
-        if child.try_wait().expect("poll daemon").is_some() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    let _ = child.kill();
-    let _ = child.wait();
+fn stop_child_with_token(child: ChildGuard, endpoint: &str, token: &str) {
+    child.shutdown_with_control(endpoint, Some(token));
 }
 
 fn route_store_path(name: &str) -> PathBuf {
@@ -384,6 +431,7 @@ fn node_daemon_returns_json_errors_and_preflights_route_ports() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start node daemon");
 
     wait_for_status(&endpoint);
@@ -980,6 +1028,7 @@ fn run_quic_proxy_case(remote_transport: &str, body: &'static str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start quic daemon");
     wait_for_status(&endpoint);
     thread::sleep(Duration::from_millis(200));
@@ -1019,6 +1068,7 @@ fn run_quic_proxy_case(remote_transport: &str, body: &'static str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start quic proxy");
     wait_tcp(socks);
 
@@ -1090,6 +1140,7 @@ fn run_quic_proxy_fixed_target_case(remote_transport: &str, body: &'static str) 
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start quic fixed daemon");
     wait_for_status(&endpoint);
     thread::sleep(Duration::from_millis(200));
@@ -1123,6 +1174,7 @@ fn run_quic_proxy_fixed_target_case(remote_transport: &str, body: &'static str) 
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start quic fixed proxy");
     wait_tcp(socks);
 
@@ -1192,6 +1244,7 @@ fn mtls_transport_can_proxy_with_client_certificate() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start mtls daemon");
     wait_for_status(&endpoint);
     wait_tcp(tls);
@@ -1225,6 +1278,7 @@ fn mtls_transport_can_proxy_with_client_certificate() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start mtls proxy");
     wait_tcp(socks);
 
@@ -1338,7 +1392,7 @@ fn start_plain_tcp_proxy(
     remote_transport: &str,
     allow_plain_tcp: bool,
     token: Option<&str>,
-) -> (Child, Child, String, SocketAddr, PathBuf, String) {
+) -> (ChildGuard, ChildGuard, String, SocketAddr, PathBuf, String) {
     start_plain_tcp_proxy_with_target(remote_transport, allow_plain_tcp, token, None)
 }
 
@@ -1347,7 +1401,7 @@ fn start_plain_tcp_proxy_with_target(
     allow_plain_tcp: bool,
     token: Option<&str>,
     tcp_target: Option<String>,
-) -> (Child, Child, String, SocketAddr, PathBuf, String) {
+) -> (ChildGuard, ChildGuard, String, SocketAddr, PathBuf, String) {
     let control = free_addr();
     let transport = free_addr();
     let routes_path = route_store_path("plain-routes");
@@ -1374,6 +1428,7 @@ fn start_plain_tcp_proxy_with_target(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start plain tcp daemon");
     wait_for_status_with_token(&endpoint, effective_token);
     wait_tcp(transport);
@@ -1409,6 +1464,7 @@ fn start_plain_tcp_proxy_with_target(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start plain tcp proxy");
     wait_tcp(socks);
     (
@@ -1455,6 +1511,7 @@ fn run_tls_proxy_case(remote_transport: &str, body: &'static str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start tls daemon");
     wait_for_status(&endpoint);
     wait_tcp(tls);
@@ -1484,6 +1541,7 @@ fn run_tls_proxy_case(remote_transport: &str, body: &'static str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
+        .map(ChildGuard::new)
         .expect("start tls proxy");
     wait_tcp(socks);
 

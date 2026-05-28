@@ -3,6 +3,7 @@ param(
     [switch]$SkipVscode,
     [switch]$InstallNodeModules,
     [switch]$NoSccache,
+    [switch]$NoProcessCleanup,
     [switch]$Full,
     [switch]$Transport,
     [switch]$Contracts
@@ -47,10 +48,31 @@ function Invoke-CargoChecked {
     Invoke-NativeChecked $Name { cargo @cargoConfigArgs @Arguments }
 }
 
+function Stop-StaleRustTestProcesses {
+    param([string]$Reason)
+
+    if ($NoProcessCleanup -or $env:OS -ne "Windows_NT") {
+        return
+    }
+
+    $debugBinary = [System.IO.Path]::GetFullPath((Join-Path $root "target\debug\ssh_proxy.exe"))
+    $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "ssh_proxy.exe" -and
+            $_.ExecutablePath -and
+            ([System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $debugBinary)
+        }
+    foreach ($process in $processes) {
+        Write-Host "Stopping stale Rust test process $($process.ProcessId) before $Reason"
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Push-Location $root
 try {
     if (-not $SkipRust) {
         $env:SSH_PROXY_ALLOW_MISSING_SIDECAR = if ($null -ne $oldAllowMissingSidecar) { $oldAllowMissingSidecar } else { "1" }
+        Stop-StaleRustTestProcesses "fast check"
 
         if (-not $NoSccache -and -not $env:RUSTC_WRAPPER -and (Get-Command sccache -ErrorAction SilentlyContinue)) {
             $env:RUSTC_WRAPPER = "sccache"
@@ -97,6 +119,8 @@ try {
     }
 }
 finally {
+    Stop-StaleRustTestProcesses "fast check cleanup"
+
     if ($null -eq $oldAllowMissingSidecar) {
         Remove-Item Env:\SSH_PROXY_ALLOW_MISSING_SIDECAR -ErrorAction SilentlyContinue
     } else {

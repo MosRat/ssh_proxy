@@ -11,6 +11,7 @@ SKIP_RUST=0
 SKIP_VSCODE=0
 INSTALL_NODE_MODULES=0
 NO_SCCACHE=0
+NO_PROCESS_CLEANUP=0
 FULL=0
 TRANSPORT=0
 CONTRACTS=0
@@ -22,6 +23,7 @@ for arg in "$@"; do
     --skip-vscode) SKIP_VSCODE=1 ;;
     --install-node-modules) INSTALL_NODE_MODULES=1 ;;
     --no-sccache) NO_SCCACHE=1 ;;
+    --no-process-cleanup) NO_PROCESS_CLEANUP=1 ;;
     --full) FULL=1 ;;
     --transport) TRANSPORT=1 ;;
     --contracts) CONTRACTS=1 ;;
@@ -29,7 +31,32 @@ for arg in "$@"; do
   esac
 done
 
+cleanup_test_binaries() {
+  if [ "$NO_PROCESS_CLEANUP" = "1" ] || ! command -v pgrep >/dev/null 2>&1; then
+    return
+  fi
+  pattern="$ROOT/target/debug/ssh_proxy"
+  pids="$(pgrep -f "$pattern" 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return
+  fi
+  echo "$pids" | while IFS= read -r pid; do
+    [ -z "$pid" ] && continue
+    [ "$pid" = "$$" ] && continue
+    echo "Stopping stale Rust test process $pid"
+    kill "$pid" 2>/dev/null || true
+  done
+  sleep 1
+  pids="$(pgrep -f "$pattern" 2>/dev/null || true)"
+  echo "$pids" | while IFS= read -r pid; do
+    [ -z "$pid" ] && continue
+    [ "$pid" = "$$" ] && continue
+    kill -9 "$pid" 2>/dev/null || true
+  done
+}
+
 cleanup() {
+  cleanup_test_binaries
   if [ -z "$OLD_ALLOW_MISSING_SIDECAR" ]; then
     unset SSH_PROXY_ALLOW_MISSING_SIDECAR
   else
@@ -52,6 +79,7 @@ cd "$ROOT"
 
 if [ "$SKIP_RUST" != "1" ]; then
   export SSH_PROXY_ALLOW_MISSING_SIDECAR="${SSH_PROXY_ALLOW_MISSING_SIDECAR:-1}"
+  cleanup_test_binaries
   if [ "$NO_SCCACHE" != "1" ] && [ -z "${RUSTC_WRAPPER-}" ] && command -v sccache >/dev/null 2>&1; then
     export RUSTC_WRAPPER=sccache
     export CARGO_INCREMENTAL=0

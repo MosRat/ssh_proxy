@@ -15,6 +15,9 @@
 
 ## Check
 
+For testing strategy and day-to-day gate selection, see
+[`docs/testing.md`](testing.md).
+
 For fast local iteration, run the fast gate:
 
 ```powershell
@@ -42,7 +45,8 @@ scripts/check-fast.sh
 ```
 
 Unix options mirror PowerShell: `--contracts`, `--transport`, `--full`,
-`--skip-rust`, `--skip-vscode`, `--install-node-modules`, and `--no-sccache`.
+`--skip-rust`, `--skip-vscode`, `--install-node-modules`, `--no-sccache`, and
+`--no-process-cleanup`.
 
 For the full local gate, run:
 
@@ -51,7 +55,8 @@ pwsh -NoProfile -File scripts/check-all.ps1
 ```
 
 The check script sets `SSH_PROXY_ALLOW_MISSING_SIDECAR=1` for non-release Rust
-checks, then runs:
+checks, stops stale workspace debug test processes before and after Rust tests,
+then runs:
 
 - `cargo fmt -- --check`
 - `cargo check`
