@@ -23,7 +23,8 @@ pub use runner::run;
 #[cfg(test)]
 pub(crate) use selection::local_peer_addr;
 pub(crate) use selection::{RemoteUsePlan, remote_use_decision};
-pub(crate) use transport::{parse_remote_transport, remote_transport_name};
+#[cfg(test)]
+pub(crate) use transport::parse_remote_transport;
 
 #[cfg(test)]
 mod tests;

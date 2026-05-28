@@ -2,16 +2,9 @@ use std::net::SocketAddr;
 
 use anyhow::{Result, bail};
 
-use crate::{cli, config};
+use crate::{cli, config, peer_lifecycle};
 
-use super::{parse_remote_transport, remote_transport_name};
-
-#[derive(Debug, Clone)]
-pub(crate) struct TransportSelection {
-    pub(crate) transport: cli::RemoteTransport,
-    pub(crate) source: String,
-    pub(crate) reason: String,
-}
+pub(crate) use peer_lifecycle::connection::TransportSelection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteUsePlan {
@@ -35,103 +28,16 @@ pub(crate) fn transport_selection_policy(
     remote_side_listens: bool,
     persistent_peer_ready: bool,
 ) -> Result<TransportSelection> {
-    if args.remote_transport != cli::RemoteTransport::Auto {
-        return Ok(TransportSelection {
-            transport: args.remote_transport,
-            source: "cli".to_string(),
-            reason: format!(
-                "selected by --remote-transport {}",
-                remote_transport_name(args.remote_transport)
-            ),
-        });
-    }
-
-    if let Some(value) = profile.and_then(|profile| profile.remote_transport.as_deref()) {
-        let transport = parse_remote_transport(value)?;
-        if transport != cli::RemoteTransport::Auto {
-            return Ok(TransportSelection {
-                transport,
-                source: "profile".to_string(),
-                reason: "selected by target profile remote_transport".to_string(),
-            });
-        }
-    }
-
-    if let Some(addr) = remote_tls {
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::TlsTcp,
-            source: "topology".to_string(),
-            reason: format!(
-                "direct TLS/TCP peer endpoint {addr} is configured; TLS is the production direct default"
-            ),
-        });
-    }
-
-    if let Some(addr) = remote_quic {
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::Quic,
-            source: "topology".to_string(),
-            reason: format!(
-                "direct QUIC peer endpoint {addr} is configured; framed QUIC is selected while quic-native remains opt-in"
-            ),
-        });
-    }
-
-    if let Some(value) = defaults.remote_transport.as_deref() {
-        let transport = parse_remote_transport(value)?;
-        match transport {
-            cli::RemoteTransport::Auto => {}
-            cli::RemoteTransport::PlainTcp if allow_plain_tcp => {
-                let source = plain_tcp_auto_source(args, profile, defaults)
-                    .unwrap_or("benchmark-tuned default");
-                return Ok(TransportSelection {
-                    transport,
-                    source: source.to_string(),
-                    reason: plain_tcp_selection_reason(source),
-                });
-            }
-            cli::RemoteTransport::PlainTcp => {}
-            _ => {
-                return Ok(TransportSelection {
-                    transport,
-                    source: "defaults".to_string(),
-                    reason: "selected by [defaults].remote_transport".to_string(),
-                });
-            }
-        }
-    }
-
-    if allow_plain_tcp {
-        let source = plain_tcp_auto_source(args, profile, defaults).unwrap_or("cli");
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::PlainTcp,
-            source: source.to_string(),
-            reason: plain_tcp_selection_reason(source),
-        });
-    }
-
-    if persistent_peer_ready {
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::Tcp,
-            source: "peer-default".to_string(),
-            reason: "persistent remote peer is recorded; using SPX over Rust SSH direct-tcpip to the peer transport".to_string(),
-        });
-    }
-
-    let workload = if args.tcp_target.is_some() {
-        "fixed --tcp-target route"
-    } else if remote_side_listens {
-        "remote-owned proxy route"
-    } else {
-        "SOCKS/HTTP proxy route"
-    };
-    Ok(TransportSelection {
-        transport: cli::RemoteTransport::SshNative,
-        source: "topology".to_string(),
-        reason: format!(
-            "no reachable direct peer transport is configured for this {workload}; using ssh-native direct-tcpip as the SSH-only simple egress default"
-        ),
-    })
+    peer_lifecycle::connection::transport_selection_policy(
+        args,
+        profile,
+        defaults,
+        remote_quic,
+        remote_tls,
+        allow_plain_tcp,
+        remote_side_listens,
+        persistent_peer_ready,
+    )
 }
 
 pub(crate) fn route_deploy_mode(
@@ -206,28 +112,6 @@ pub(crate) fn local_peer_addr(
         );
     }
     Ok(addr)
-}
-
-fn plain_tcp_auto_source(
-    args: &cli::RouteArgs,
-    profile: Option<&config::ProxyProfile>,
-    defaults: &config::ProxyProfile,
-) -> Option<&'static str> {
-    if args.allow_plain_tcp {
-        Some("cli")
-    } else if profile.and_then(|profile| profile.allow_plain_tcp) == Some(true) {
-        Some("profile")
-    } else if defaults.allow_plain_tcp == Some(true) {
-        Some("benchmark-tuned default")
-    } else {
-        None
-    }
-}
-
-fn plain_tcp_selection_reason(source: &str) -> String {
-    format!(
-        "plain TCP peer transport is enabled by {source}; use only for lab or private trusted links"
-    )
 }
 
 fn parse_deploy(value: &str) -> Result<cli::DeployMode> {

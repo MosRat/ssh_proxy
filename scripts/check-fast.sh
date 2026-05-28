@@ -99,6 +99,12 @@ if [ "$SKIP_RUST" != "1" ]; then
     fi
   else
     # shellcheck disable=SC2086
+    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy peer_lifecycle
+    # shellcheck disable=SC2086
+    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy remote_config_write
+    # shellcheck disable=SC2086
+    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy remote_resolve_defaults
+    # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy node_daemon::handoff
     # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test --test node_daemon node_daemon_reuses_duplicate_route_start_for_same_spec -- --test-threads=1

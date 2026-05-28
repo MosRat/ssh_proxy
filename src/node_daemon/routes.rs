@@ -15,7 +15,7 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::{cli, config, controller, quic_native, reverse, ssh_native};
+use crate::{cli, config, controller, peer_lifecycle, quic_native, reverse, ssh_native};
 
 use super::{NodeManager, NodeRequest, response_line};
 
@@ -282,16 +282,7 @@ fn runtime_decision_chain(proxy: &cli::ProxyArgs) -> serde_json::Value {
 }
 
 fn remote_transport_name(transport: cli::RemoteTransport) -> &'static str {
-    match transport {
-        cli::RemoteTransport::Auto => "auto",
-        cli::RemoteTransport::SshNative => "ssh-native",
-        cli::RemoteTransport::QuicNative => "quic-native",
-        cli::RemoteTransport::Quic => "quic",
-        cli::RemoteTransport::TlsTcp => "tls-tcp",
-        cli::RemoteTransport::PlainTcp => "plain-tcp",
-        cli::RemoteTransport::Exec => "ssh-exec",
-        cli::RemoteTransport::Tcp => "ssh-direct-tcpip",
-    }
+    peer_lifecycle::connection::remote_transport_name(transport)
 }
 
 fn direct_transport_policy(transport: cli::RemoteTransport) -> serde_json::Value {

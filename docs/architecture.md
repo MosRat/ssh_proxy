@@ -28,6 +28,33 @@ The daemon owns these persistent stores:
 State writes use atomic temp-file plus rename. Startup reconciliation adopts
 known sessions and routes, refreshes peers, and resumes unfinished jobs.
 
+## Symmetric Peer Lifecycle
+
+Local daemons and remote peer servers share the same lifecycle vocabulary:
+
+```text
+prepare -> inspect_descriptor -> dependency_check -> stage_binary
+  -> write_config -> install_service -> start_service -> health_probe
+  -> record -> healthy | repairing | rollback | failed
+```
+
+The implementation keeps platform differences behind small adapters:
+
+- `LocalExecutor` and `SshExecutor` run the same lifecycle against local files
+  or Rust SSH exec/upload/direct-tcpip.
+- Service providers render platform operations for Windows SCM, Windows user
+  scheduled tasks, systemd, launchd, and the managed nohup supervisor.
+- Rust materializes peer `config.toml`, `peer_state.json`,
+  `install_report.json`, `health.json`, and `routes.json`; remote shell usage is
+  limited to minimal file writes and platform service commands.
+
+`service-manager` is useful as an interface reference, but the production path
+keeps the existing `windows-service` + elevated worker transaction until a
+separate compatibility pass proves it can preserve versioned binaries, UAC
+logging, rollback behavior, and remote provider command rendering.
+See `docs/service-provider-evaluation.md` for the provider contract and adoption
+gate.
+
 ## Public CLI Surface
 
 Production commands are:
@@ -86,13 +113,14 @@ order:
 
 Normal transport preference is:
 
-1. Existing reachable TLS/TCP peer transport.
-2. Existing reachable QUIC peer transport.
-3. Explicitly trusted plain TCP peer transport.
-4. Rust SSH `direct-tcpip` to the persistent peer transport.
-5. Rust reverse-link when topology requires it.
-6. Explicit `ssh-exec` compatibility only when requested.
-7. Explicit emergency external SSH only when the daemon reports why it is required.
+1. Explicit CLI or profile transport.
+2. Existing reachable TLS/TCP peer transport.
+3. Existing reachable QUIC peer transport.
+4. Explicitly trusted plain TCP peer transport.
+5. Rust SSH `direct-tcpip` to the persistent peer transport.
+6. Rust reverse-link when topology requires it.
+7. Explicit `ssh-exec` compatibility only when requested.
+8. Explicit emergency external SSH only when the daemon reports why it is required.
 
 OpenSSH subprocess fallback is not part of the normal VS Code path.
 

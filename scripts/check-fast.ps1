@@ -95,6 +95,9 @@ try {
                 Invoke-CargoChecked "cargo test --tests" @("test", "--tests", "--", "--test-threads=1")
             }
         } else {
+            Invoke-CargoChecked "cargo test --bin ssh_proxy peer_lifecycle" @("test", "--bin", "ssh_proxy", "peer_lifecycle")
+            Invoke-CargoChecked "cargo test --bin ssh_proxy remote peer config" @("test", "--bin", "ssh_proxy", "remote_config_write")
+            Invoke-CargoChecked "cargo test --bin ssh_proxy remote resolve defaults" @("test", "--bin", "ssh_proxy", "remote_resolve_defaults")
             Invoke-CargoChecked "cargo test --bin ssh_proxy handoff" @("test", "--bin", "ssh_proxy", "node_daemon::handoff")
             Invoke-CargoChecked "cargo test --test node_daemon route smoke" @("test", "--test", "node_daemon", "node_daemon_reuses_duplicate_route_start_for_same_spec", "--", "--test-threads=1")
             if ($Contracts) {

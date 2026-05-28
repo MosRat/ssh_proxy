@@ -14,6 +14,7 @@ pwsh -NoProfile -File scripts/check-fast.ps1 -SkipVscode
 This runs:
 
 - `cargo check --tests`
+- peer lifecycle/config/provider contract tests
 - handoff unit tests
 - one daemon route lifecycle smoke test
 
@@ -24,9 +25,10 @@ long-lived local daemon/proxy processes and binds ephemeral ports.
 
 Add targeted Rust tests instead of the full suite when only one subsystem moved:
 
-- remote peer provider command rendering: `cargo test remote_ --lib`;
-- transport selection policy: `cargo test route::tests --lib`;
-- repair/report schema: `cargo test repair diagnostics --lib`;
+- peer lifecycle schema/provider/config: `cargo test --bin ssh_proxy peer_lifecycle`;
+- remote peer file command rendering: `cargo test --bin ssh_proxy remote_config_write`;
+- transport selection policy: `cargo test --bin ssh_proxy route::tests`;
+- repair/report schema: `cargo test --bin ssh_proxy repair diagnostics`;
 - extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
 
 Run the VS Code tests separately when extension code changes:

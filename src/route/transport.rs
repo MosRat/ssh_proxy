@@ -1,19 +1,10 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
-use crate::cli;
+use crate::{cli, peer_lifecycle};
 
 pub(crate) fn remote_transport_name(transport: cli::RemoteTransport) -> &'static str {
-    match transport {
-        cli::RemoteTransport::Auto => "auto",
-        cli::RemoteTransport::SshNative => "ssh-native",
-        cli::RemoteTransport::QuicNative => "quic-native",
-        cli::RemoteTransport::Quic => "quic",
-        cli::RemoteTransport::TlsTcp => "tls-tcp",
-        cli::RemoteTransport::PlainTcp => "plain-tcp",
-        cli::RemoteTransport::Exec => "ssh-exec",
-        cli::RemoteTransport::Tcp => "ssh-direct-tcpip",
-    }
+    peer_lifecycle::connection::remote_transport_name(transport)
 }
 
 pub(crate) fn direct_transport_policy(transport: cli::RemoteTransport) -> Value {
@@ -108,22 +99,7 @@ pub(crate) fn parse_remote_os(value: &str) -> Result<cli::RemoteOs> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_remote_transport(value: &str) -> Result<cli::RemoteTransport> {
-    match value.to_ascii_lowercase().as_str() {
-        "auto" => Ok(cli::RemoteTransport::Auto),
-        "quic-native" | "quic_native" | "native-quic" | "native_quic" => {
-            Ok(cli::RemoteTransport::QuicNative)
-        }
-        "ssh-native" | "ssh_native" | "native-ssh" | "native_ssh" => {
-            Ok(cli::RemoteTransport::SshNative)
-        }
-        "quic" => Ok(cli::RemoteTransport::Quic),
-        "tls-tcp" | "tls_tcp" | "tls" => Ok(cli::RemoteTransport::TlsTcp),
-        "plain-tcp" | "plain_tcp" | "direct-tcp" | "direct_tcp" => {
-            Ok(cli::RemoteTransport::PlainTcp)
-        }
-        "exec" => Ok(cli::RemoteTransport::Exec),
-        "tcp" => Ok(cli::RemoteTransport::Tcp),
-        other => bail!("invalid remote_transport value {other:?}"),
-    }
+    peer_lifecycle::connection::parse_remote_transport(value)
 }
