@@ -17,6 +17,19 @@ pub(crate) enum ServiceProviderKind {
 }
 
 impl ServiceProviderKind {
+    pub(crate) fn from_manager_name(name: &str) -> Option<Self> {
+        match name {
+            "windows_scm_system" => Some(Self::WindowsScmSystem),
+            "windows_schtasks_user" => Some(Self::WindowsScheduledTaskUser),
+            "systemd_user" => Some(Self::SystemdUser),
+            "systemd_system" => Some(Self::SystemdSystem),
+            "launchd_user" => Some(Self::LaunchdUser),
+            "launchd_system" => Some(Self::LaunchdSystem),
+            "nohup_supervisor" => Some(Self::NohupSupervisor),
+            _ => None,
+        }
+    }
+
     pub(crate) fn manager_name(self) -> &'static str {
         match self {
             Self::WindowsScmSystem => "windows_scm_system",
@@ -108,6 +121,15 @@ pub(crate) fn provider_for_remote_os(
     }
 }
 
+pub(crate) fn provider_for_remote_report(
+    service_manager: &str,
+    remote_os: cli::RemoteOs,
+    persist: cli::PersistMode,
+) -> ServiceProviderKind {
+    ServiceProviderKind::from_manager_name(service_manager)
+        .unwrap_or_else(|| provider_for_remote_os(remote_os, persist))
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteServiceInstallPlan {
     pub(crate) provider: ServiceProviderPlan,
@@ -156,6 +178,11 @@ mod tests {
 
     #[test]
     fn provider_kind_reports_stable_manager_names() {
+        assert_eq!(
+            ServiceProviderKind::from_manager_name("windows_scm_system"),
+            Some(ServiceProviderKind::WindowsScmSystem)
+        );
+        assert_eq!(ServiceProviderKind::from_manager_name("auto"), None);
         assert_eq!(
             ServiceProviderKind::WindowsScmSystem.manager_name(),
             "windows_scm_system"
