@@ -136,7 +136,8 @@ fn local_service_lifecycle_report(plan: &ServicePlan, report: &Value) -> Value {
         "failed" => peer_lifecycle::workflow::PeerLifecyclePhase::Failed,
         _ => peer_lifecycle::workflow::PeerLifecyclePhase::InstallService,
     };
-    let mut lifecycle = peer_lifecycle::workflow::phase_report(&spec, phase);
+    let mut lifecycle =
+        peer_lifecycle::workflow::phase_report_for_operation(&spec, service_operation(plan), phase);
     lifecycle.blocker = report
         .get("blocker")
         .and_then(Value::as_str)
@@ -146,6 +147,18 @@ fn local_service_lifecycle_report(plan: &ServicePlan, report: &Value) -> Value {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
     lifecycle.to_redacted_value()
+}
+
+fn service_operation(plan: &ServicePlan) -> peer_lifecycle::workflow::LifecycleOperation {
+    match plan.command {
+        cli::ServiceCommand::Install => peer_lifecycle::workflow::LifecycleOperation::Install,
+        cli::ServiceCommand::Ensure => peer_lifecycle::workflow::LifecycleOperation::Ensure,
+        cli::ServiceCommand::Start => peer_lifecycle::workflow::LifecycleOperation::Start,
+        cli::ServiceCommand::Stop => peer_lifecycle::workflow::LifecycleOperation::Stop,
+        cli::ServiceCommand::Status => peer_lifecycle::workflow::LifecycleOperation::Status,
+        cli::ServiceCommand::Uninstall => peer_lifecycle::workflow::LifecycleOperation::Rollback,
+        cli::ServiceCommand::Print => peer_lifecycle::workflow::LifecycleOperation::Status,
+    }
 }
 
 fn is_cancelled_install_error(error: &str) -> bool {
