@@ -1,9 +1,14 @@
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use crate::{cli, config, control_socket, node_daemon, service};
+use crate::{
+    cli, config, control_socket, diagnostics, install_report, node_daemon, repair, service,
+};
 
 pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<()> {
     match args.command {
@@ -114,6 +119,114 @@ pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<
             )
             .await
         }
+    }
+}
+
+pub async fn daemon_install_worker(
+    args: cli::DaemonInstallWorkerArgs,
+    config: config::AppConfig,
+) -> Result<()> {
+    install_worker(
+        args.scope,
+        args.json,
+        args.no_copy,
+        args.install_log,
+        config,
+    )
+    .await
+}
+
+async fn install_worker(
+    scope: cli::DaemonScope,
+    json_output: bool,
+    no_copy: bool,
+    log: PathBuf,
+    config: config::AppConfig,
+) -> Result<()> {
+    let install_id = format!("install-{}-{}", std::process::id(), now_unix());
+    install_report::append_install_event(
+        &log,
+        &install_id,
+        "running",
+        "prepare",
+        "preparing elevated daemon install",
+        None,
+    )?;
+    let install_result = service::run(
+        service_args(scope, false, false, no_copy, cli::ServiceCommand::Install),
+        config,
+    )
+    .await;
+    if let Err(err) = install_result {
+        install_report::append_install_event(
+            &log,
+            &install_id,
+            "failed",
+            "install_service",
+            &err.to_string(),
+            Some("requires_elevation"),
+        )?;
+        return Err(err);
+    }
+    install_report::append_install_event(
+        &log,
+        &install_id,
+        "running",
+        "health_check",
+        "waiting for daemon control endpoint health",
+        None,
+    )?;
+    match wait_for_daemon_health().await {
+        Ok(()) => {
+            install_report::append_install_event(
+                &log,
+                &install_id,
+                "healthy",
+                "healthy",
+                "daemon installed and control endpoint is healthy",
+                None,
+            )?;
+            if json_output {
+                print_json(false, install_report::install_report_from_log(&log))?;
+            }
+            Ok(())
+        }
+        Err(err) => {
+            install_report::append_install_event(
+                &log,
+                &install_id,
+                "failed",
+                "health_check",
+                &err.to_string(),
+                Some("daemon_unavailable"),
+            )?;
+            Err(err)
+        }
+    }
+}
+
+async fn wait_for_daemon_health() -> Result<()> {
+    let endpoint =
+        control_socket::ControlEndpoint::parse(&control_socket::default_endpoint_string())?;
+    let request = node_daemon::NodeRequest::command("status")
+        .to_value()
+        .context("failed to encode daemon status request")?;
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(20);
+    loop {
+        match control_socket::request(&endpoint, &format!("{request}\n")).await {
+            Ok(response) => {
+                let value = serde_json::from_str::<Value>(&response).unwrap_or(Value::Null);
+                if value.get("ok").and_then(Value::as_bool) == Some(true) {
+                    return Ok(());
+                }
+            }
+            Err(_) if tokio::time::Instant::now() < deadline => {}
+            Err(err) => return Err(err).context("daemon health check failed after install"),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!("daemon health check timed out after install");
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
 }
 
@@ -258,30 +371,49 @@ pub async fn doctor(args: cli::DoctorArgs, config: config::AppConfig) -> Result<
     let request = node_daemon::NodeRequest::command("status")
         .to_value()
         .context("failed to encode status request")?;
-    request_daemon_or_report(
-        &args.endpoint,
-        args.token.as_deref(),
-        &config,
-        request,
-        args.json,
-        || {
-            json!({
-                "ok": false,
-                "kind": "daemon_doctor",
-                "daemon_api": "v0.3",
-                "version": env!("CARGO_PKG_VERSION"),
-                "checks": [{
-                    "name": "daemon_control",
+    let endpoint = control_socket::ControlEndpoint::parse(&args.endpoint)?;
+    let mut request = request;
+    node_daemon::attach_auth_token(
+        &mut request,
+        args.token.as_deref().or(config.daemon.token.as_deref()),
+    );
+    match control_socket::request(&endpoint, &format!("{request}\n")).await {
+        Ok(response) if args.report => {
+            let status = serde_json::from_str::<Value>(&response).unwrap_or_else(|_| {
+                json!({
                     "ok": false,
-                    "blocker": "daemon_unavailable",
-                    "next_action": "ssh_proxy daemon install --scope system --elevate",
-                    "retry_after_ms": 1000
-                }],
-                "requires_elevation": true,
-            })
-        },
-    )
-    .await
+                    "kind": "daemon_status",
+                    "error": "failed to parse daemon status response"
+                })
+            });
+            let report = diagnostics::doctor_report(&config, Some(status.clone()));
+            print_json(
+                args.json,
+                json!({
+                    "ok": status.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                    "kind": "daemon_doctor",
+                    "daemon_api": "v0.3",
+                    "status": diagnostics::redact_value(&status),
+                    "dependencies": report.get("dependencies").cloned().unwrap_or_else(|| json!([])),
+                    "report": report,
+                }),
+            )
+        }
+        Ok(response) => {
+            if let Some(value) = normalize_daemon_response(&response) {
+                print_json(args.json, value)
+            } else {
+                print!("{response}");
+                Ok(())
+            }
+        }
+        Err(err) => {
+            let mut value = daemon_unavailable_doctor(&config, args.report);
+            annotate_control_error(&mut value, &err);
+            attach_top_level_repair_action(&mut value);
+            print_json(args.json, value)
+        }
+    }
 }
 
 pub async fn vscode(args: cli::VscodeArgs, config: config::AppConfig) -> Result<()> {
@@ -344,12 +476,39 @@ pub async fn vscode(args: cli::VscodeArgs, config: config::AppConfig) -> Result<
                     endpoint: args.endpoint,
                     token: args.token,
                     json: args.json,
+                    report: args.report,
                 },
                 config,
             )
             .await
         }
     }
+}
+
+fn daemon_unavailable_doctor(config: &config::AppConfig, include_report: bool) -> Value {
+    let mut value = json!({
+        "ok": false,
+        "kind": "daemon_doctor",
+        "daemon_api": "v0.3",
+        "version": env!("CARGO_PKG_VERSION"),
+        "checks": [{
+            "name": "daemon_control",
+            "ok": false,
+            "blocker": "daemon_unavailable",
+            "next_action": "ssh_proxy daemon install --scope system --elevate",
+            "repair_action": repair::action_value_for_blocker("daemon_unavailable"),
+            "retry_after_ms": 1000
+        }],
+        "dependencies": diagnostics::daemon_dependency_report(config, None),
+        "blocker": "daemon_unavailable",
+        "next_action": "ssh_proxy daemon install --scope system --elevate",
+        "repair_action": repair::action_value_for_blocker("daemon_unavailable"),
+        "requires_elevation": true,
+    });
+    if include_report {
+        value["report"] = diagnostics::doctor_report(config, None);
+    }
+    value
 }
 
 fn service_args(
@@ -400,15 +559,53 @@ async fn request_daemon_or_report(
     node_daemon::attach_auth_token(&mut request, token.or(config.daemon.token.as_deref()));
     match control_socket::request(&endpoint, &format!("{request}\n")).await {
         Ok(response) => {
-            print!("{response}");
-            Ok(())
+            if let Some(value) = normalize_daemon_response(&response) {
+                print_json(compact_json, value)
+            } else {
+                print!("{response}");
+                Ok(())
+            }
         }
         Err(err) => {
             let mut value = unavailable();
             annotate_control_error(&mut value, &err);
+            attach_top_level_repair_action(&mut value);
             print_json(compact_json, value)
         }
     }
+}
+
+fn normalize_daemon_response(response: &str) -> Option<Value> {
+    let mut value = serde_json::from_str::<Value>(response).ok()?;
+    let code = value.get("code").and_then(Value::as_str);
+    let error = value
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let blocker = match (code, error) {
+        (Some("unauthorized"), error) if error.contains("node control token is required") => {
+            "node_control_token_required"
+        }
+        (Some("unauthorized"), error) if error.contains("invalid node control token") => {
+            "invalid_node_control_token"
+        }
+        _ => return None,
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.insert("code".to_string(), json!(blocker));
+        object.insert("blocker".to_string(), json!(blocker));
+        object.insert("requires_elevation".to_string(), json!(true));
+        object.insert(
+            "message".to_string(),
+            json!("ssh_proxy daemon configuration is stale and needs repair"),
+        );
+        object.insert(
+            "next_action".to_string(),
+            json!("ssh_proxy daemon install --scope system --elevate"),
+        );
+        repair::attach_repair_action(object, blocker);
+    }
+    Some(value)
 }
 
 fn annotate_control_error(value: &mut Value, err: &anyhow::Error) {
@@ -436,14 +633,36 @@ fn annotate_control_error(value: &mut Value, err: &anyhow::Error) {
     );
     object.insert("requires_elevation".to_string(), json!(true));
     object.insert("retry_after_ms".to_string(), json!(1000));
+    repair::attach_repair_action(object, "daemon_pipe_access_denied");
     if let Some(job) = object.get_mut("job").and_then(Value::as_object_mut) {
         job.insert("state".to_string(), json!("blocked"));
         job.insert("phase".to_string(), json!("daemon_pipe_access_denied"));
         job.insert("blocker".to_string(), json!("daemon_pipe_access_denied"));
+        repair::attach_repair_action(job, "daemon_pipe_access_denied");
         job.insert(
             "message".to_string(),
             json!("daemon pipe denied this user; reinstall or restart daemon to repair pipe ACL"),
         );
+    }
+}
+
+fn attach_top_level_repair_action(value: &mut Value) {
+    let blocker = value
+        .get("blocker")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let (Some(blocker), Some(object)) = (blocker, value.as_object_mut()) {
+        repair::attach_repair_action(object, &blocker);
+    }
+    if let Some(job) = value.get_mut("job").and_then(Value::as_object_mut) {
+        let job_blocker = job
+            .get("blocker")
+            .and_then(Value::as_str)
+            .or_else(|| job.get("phase").and_then(Value::as_str))
+            .map(str::to_string);
+        if let Some(job_blocker) = job_blocker {
+            repair::attach_repair_action(job, &job_blocker);
+        }
     }
 }
 
@@ -452,14 +671,16 @@ fn is_access_denied(error: &std::io::Error) -> bool {
 }
 
 fn job_status(id: &str, kind: &str, state: &str, phase: &str, message: &str) -> Value {
+    let blocker = (state == "blocked").then_some(phase);
     json!({
         "id": id,
         "kind": kind,
         "state": state,
         "phase": phase,
         "progress": 0,
-        "blocker": Value::Null,
+        "blocker": blocker,
         "next_action": Value::Null,
+        "repair_action": blocker.map(repair::action_value_for_blocker).unwrap_or(Value::Null),
         "last_error": Value::Null,
         "message": message,
     })
@@ -482,6 +703,13 @@ fn print_json(compact: bool, value: Value) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&value)?);
     }
     Ok(())
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]

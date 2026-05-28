@@ -1,8 +1,9 @@
-use std::{fs, net::SocketAddr, path::PathBuf, process::Command};
+use std::{fs, io::Read, net::SocketAddr, path::PathBuf, process::Command};
 #[cfg(windows)]
 use std::{thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
+use sha2::Digest;
 
 use super::inventory::ServiceInventory;
 use crate::{cli, config, control_socket};
@@ -45,9 +46,14 @@ impl ServicePlan {
             cli::ServiceCommand::Ensure | cli::ServiceCommand::Install | cli::ServiceCommand::Print
         );
         let copy_exe = !args.no_copy;
+        let probe_chain = super::inventory::collect_service_inventory();
+        let resolution = super::inventory::resolve_service_inventory(args.scope, probe_chain);
+        let scope = resolution
+            .selected_scope
+            .unwrap_or_else(preferred_install_scope);
         let exe = if copy_exe {
             args.install_dir
-                .unwrap_or(default_local_install_dir()?)
+                .unwrap_or(default_install_dir(scope, &source_exe)?)
                 .join(executable_name())
         } else {
             source_exe.clone()
@@ -156,11 +162,6 @@ impl ServicePlan {
             .map(config::expand_path)
             .unwrap_or(config::routes_path()?);
         let config_to_save = should_materialize_config.then_some(config);
-        let probe_chain = super::inventory::collect_service_inventory();
-        let resolution = super::inventory::resolve_service_inventory(args.scope, probe_chain);
-        let scope = resolution
-            .selected_scope
-            .unwrap_or_else(preferred_install_scope);
         Ok(Self {
             command: args.command,
             requested_scope: args.scope,
@@ -302,6 +303,21 @@ fn copy_binary(source: &PathBuf, target: &PathBuf) -> Result<()> {
     }
 }
 
+fn default_install_dir(scope: ServiceScope, source_exe: &PathBuf) -> Result<PathBuf> {
+    #[cfg(windows)]
+    if matches!(scope, ServiceScope::System) {
+        let root = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        let hash = short_file_hash(source_exe).unwrap_or_else(|_| "unknown".to_string());
+        return Ok(root
+            .join("ssh_proxy")
+            .join("bin")
+            .join(format!("{}-{hash}", env!("CARGO_PKG_VERSION"))));
+    }
+    default_local_install_dir()
+}
+
 fn default_local_install_dir() -> Result<PathBuf> {
     #[cfg(windows)]
     {
@@ -317,6 +333,27 @@ fn default_local_install_dir() -> Result<PathBuf> {
             .join(".local")
             .join("bin"))
     }
+}
+
+fn short_file_hash(path: &PathBuf) -> Result<String> {
+    let mut file =
+        fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        sha2::Digest::update(&mut hasher, &buffer[..read]);
+    }
+    let hash = sha2::Digest::finalize(hasher)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(hash.chars().take(12).collect())
 }
 
 fn executable_name() -> &'static str {

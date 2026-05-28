@@ -27,7 +27,7 @@ ssh_proxy up --target <ssh-host> --local-proxy http://127.0.0.1:10808/ --json
 ssh_proxy status --workspace <workspace-id> --json
 ssh_proxy events --job <job-id> --json
 ssh_proxy down --workspace <workspace-id> --json
-ssh_proxy doctor --json
+ssh_proxy doctor --json --report
 ```
 
 VS Code uses the same daemon surface through:
@@ -41,13 +41,17 @@ ssh_proxy vscode diagnose --workspace <workspace-id> --json
 
 ## Permission Behavior
 
-Windows production installs use a system daemon. Interactive install or update
-commands may request elevation with `--elevate`. Background and auto-start paths
-do not pop UAC. They return structured blockers:
+Windows production installs use a system daemon. Interactive install commands
+use a native elevated worker that writes a structured JSONL install log and
+stages the binary under `%ProgramData%\ssh_proxy\bin\<version-hash>`. The service
+ImagePath points at that versioned binary, so reinstall/update does not copy over
+a running executable. Background and auto-start paths do not pop UAC. They return
+structured blockers and `repair_action`:
 
 - `requires_elevation`
 - `daemon_unavailable`
-- `permission_denied`
+- `daemon_pipe_access_denied`
+- `node_control_token_required`
 - `requires_external_ssh`
 
 User-facing repair commands should point at `ssh_proxy daemon install`,
@@ -121,7 +125,7 @@ Start with daemon JSON:
 ```powershell
 ssh_proxy daemon status --json
 ssh_proxy status --json
-ssh_proxy doctor --json
+ssh_proxy doctor --json --report
 ```
 
 For a VS Code window:
@@ -136,10 +140,13 @@ Common cases:
 - `502 Bad Gateway`: verify the local proxy URL, scheme, port, and upstream proxy health.
 - `daemon_unavailable`: install or start the system daemon interactively.
 - `requires_elevation`: run the suggested daemon install/update command with `--elevate`.
+- `node_control_token_required`: the running daemon is stale or token-backed; use the interactive repair action to reinstall/migrate the daemon.
 - `remote_port_occupied`: keep automatic port picking enabled or select another preferred port.
 - `starting` or `bootstrapping_peer`: inspect events; slow bootstrap is not a reason to switch to OpenSSH.
 
 ## Reporting
 
-When reporting issues, redact host aliases, private addresses, SSH key paths,
-daemon tokens, peer tokens, proxy credentials, and certificate private keys.
+Prefer `ssh_proxy doctor --json --report` or `Remote Proxy: Diagnose`. Reports
+redact daemon tokens, peer tokens, proxy credentials, and SSH identity paths by
+default, while keeping phases, blockers, install logs, handoff probes, route
+health, peer state, and dependency classification.

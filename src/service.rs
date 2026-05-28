@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
 
-use crate::{cli, config};
+use crate::{cli, config, install_report, repair};
 
 mod broker;
 mod inventory;
@@ -27,12 +27,109 @@ pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()
     match plan.command {
         cli::ServiceCommand::Print => print_service(&plan),
         cli::ServiceCommand::Ensure => ensure_service(&plan, json).await,
-        cli::ServiceCommand::Install => install_service(&plan),
+        cli::ServiceCommand::Install => {
+            match install_service(&plan) {
+                Ok(()) => {
+                    if json {
+                        println!("{}", serde_json::to_string(&install_success_report(&plan))?);
+                    }
+                    Ok(())
+                }
+                Err(err) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&install_failure_report(&plan, &err))?
+                        );
+                    }
+                    Err(err)
+                }
+            }
+        }
         cli::ServiceCommand::Uninstall => platform::platform_uninstall(&plan),
         cli::ServiceCommand::Start => platform::platform_start(&plan),
         cli::ServiceCommand::Stop => platform::platform_stop(&plan),
         cli::ServiceCommand::Status => status_service(&plan, json).await,
     }
+}
+
+fn install_success_report(plan: &ServicePlan) -> Value {
+    let mut report = install_report::install_report_for_current_process();
+    if report.get("state").and_then(Value::as_str) == Some("unknown") {
+        report = json!({
+            "ok": true,
+            "kind": "daemon_install",
+            "daemon_api": "v0.3",
+            "state": "healthy",
+            "phase": "healthy",
+            "install_id": serde_json::Value::Null,
+            "log_path": serde_json::Value::Null,
+            "blocker": serde_json::Value::Null,
+            "repair_action": serde_json::Value::Null,
+            "health_check": {
+                "state": "passed"
+            },
+        });
+    }
+    enrich_install_report(report, plan)
+}
+
+fn install_failure_report(plan: &ServicePlan, err: &anyhow::Error) -> Value {
+    let mut report = install_report::install_report_for_current_process();
+    if report.get("state").and_then(Value::as_str) == Some("unknown") {
+        let error = err.to_string();
+        let blocker = if is_cancelled_install_error(&error) {
+            "cancelled_by_user"
+        } else if requires_elevation(plan, &error) {
+            "requires_elevation"
+        } else {
+            "daemon_install_failed"
+        };
+        let state = if blocker == "cancelled_by_user" {
+            "cancelled"
+        } else {
+            "failed"
+        };
+        report = json!({
+            "ok": false,
+            "kind": "daemon_install",
+            "daemon_api": "v0.3",
+            "state": state,
+            "phase": blocker,
+            "install_id": serde_json::Value::Null,
+            "log_path": install_report::install_log_path_for_pid(std::process::id()),
+            "message": error,
+            "blocker": blocker,
+            "repair_action": repair::action_value_for_blocker(blocker),
+            "health_check": {
+                "state": if blocker == "cancelled_by_user" { "skipped" } else { "failed" }
+            },
+        });
+    }
+    enrich_install_report(report, plan)
+}
+
+fn enrich_install_report(mut report: Value, plan: &ServicePlan) -> Value {
+    if let Some(object) = report.as_object_mut() {
+        object.insert("installed_binary".to_string(), json!(plan.exe));
+        object.insert("control".to_string(), json!(plan.endpoint));
+        object.insert("scope".to_string(), json!(service_scope_name(plan.scope)));
+        object.insert(
+            "requested_scope".to_string(),
+            json!(cli_service_scope_name(plan.requested_scope)),
+        );
+    }
+    report
+}
+
+fn is_cancelled_install_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("cancelled_by_user")
+        || lower.contains("code 1223")
+        || lower.contains("operation was canceled")
+        || lower.contains("operation was cancelled")
+        || lower.contains("the operation was canceled by the user")
+        || lower.contains("0xc000013a")
 }
 
 async fn ensure_service(plan: &ServicePlan, json_output: bool) -> Result<()> {

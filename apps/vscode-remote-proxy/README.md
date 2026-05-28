@@ -45,8 +45,8 @@ Typical phases are `resolve_target`, `ensure_peer`, `start_route`, `wait_route_r
 
 When no daemon is reachable, auto-start reports the blocker in the status bar.
 Interactive `Remote Proxy: Start` offers an `Install Daemon` action, runs
-`ssh_proxy daemon install --scope system --elevate`, then retries the daemon
-session after installation. Background startup does not open an elevation
+`ssh_proxy daemon install --scope system --elevate --json`, then retries the
+daemon session after installation. Background startup does not open an elevation
 prompt.
 
 ## Quick Start
@@ -115,12 +115,13 @@ Use `remoteProxy.hostProfiles` for SSH-host specific overrides. Keys can be SSH 
 
 ## Troubleshooting
 
-Run `Remote Proxy: Diagnose` first. It prints the detected SSH host, local proxy, remote proxy URL, daemon job phase, route id, transport, daemon health, route health, blocker, next action, and latest error.
+Run `Remote Proxy: Diagnose` first. It prints the detected SSH host, local proxy, remote proxy URL, daemon job phase, route id, transport, daemon health, route health, blocker, repair action, and latest error, then offers to copy the redacted daemon report.
 
 Common failures:
 
 - `502 Bad Gateway`: the remote listener accepted the request but could not open the upstream path. Check the local proxy URL, including scheme and port, and confirm the local proxy accepts HTTP CONNECT or SOCKS5 traffic.
-- `Access is denied` during daemon install: Windows blocked service registration. Auto-start will not pop UAC; run an interactive daemon install/update command or inspect `ssh_proxy doctor --json`.
+- `Access is denied` during daemon install: Windows blocked service registration or named-pipe ACL repair. Auto-start will not pop UAC; run an interactive daemon install/update command or inspect `ssh_proxy doctor --json --report`.
+- `node_control_token_required`: an old token-backed daemon/config is still running. Use the Diagnose repair action or reinstall the system daemon interactively.
 - Remote port already in use: keep `remoteProxy.remote.autoPickPort=true`, or pick a different `remoteProxy.remote.port`.
 - Host unresolved in Extension Development Host: run `Remote Proxy: Pick SSH Host`, or enable storage fallback only if you understand it can be stale.
 - Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy vscode status --workspace <id> --json` and `ssh_proxy events --job <job-id> --json`, and verify remote `127.0.0.1:<port>` reachability.

@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import {
   buildSshProxyDaemonInstallArgs,
+  buildSshProxyDoctorArgs,
   buildSshProxyDownArgs,
   buildSshProxyVscodeApplySettingsArgs,
   buildSshProxyVscodeStatusArgs,
@@ -125,9 +126,16 @@ export class SshProxyCli {
   }
 
   public async installDaemonElevated(): Promise<CommandResult> {
-    return this.run(buildSshProxyDaemonInstallArgs({ scope: 'system', elevate: true }), undefined, {
+    return this.run(buildSshProxyDaemonInstallArgs({ scope: 'system', elevate: true, json: true }), undefined, {
       label: 'ssh_proxy daemon install',
       timeoutMs: DAEMON_INSTALL_TIMEOUT_MS,
+    });
+  }
+
+  public async doctorReportJson(): Promise<unknown> {
+    return this.runJson(buildSshProxyDoctorArgs({ report: true, json: true }), undefined, {
+      label: 'ssh_proxy doctor',
+      timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
     });
   }
 

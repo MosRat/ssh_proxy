@@ -165,6 +165,10 @@ test('classifies cancelled elevated daemon installs', () => {
     true,
   );
   assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('ssh_proxy daemon install cancelled_by_user'),
+    true,
+  );
+  assert.equal(
     isSshProxyDaemonInstallCancelledMessage('failed to copy binary because it is in use'),
     false,
   );

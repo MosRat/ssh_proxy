@@ -18,7 +18,7 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::{cli, config, control_socket, controller, paths, peer_transport, sidecar};
+use crate::{cli, config, control_socket, controller, diagnostics, paths, peer_transport, sidecar};
 
 mod args;
 mod control_client;
@@ -351,7 +351,7 @@ impl NodeManager {
             .map(jobs::JobRecord::to_value)
             .collect::<Vec<_>>();
         let reports = self.peer_reports.lock().await.clone();
-        let (node_id, node_name, profiles, peers, token_metadata) = {
+        let (node_id, node_name, profiles, peers, token_metadata, config_snapshot) = {
             let config = self.config.lock().await;
             (
                 config.identity.node_id.clone(),
@@ -363,6 +363,7 @@ impl NodeManager {
                 config.profiles.keys().cloned().collect::<Vec<_>>(),
                 config.peers.keys().cloned().collect::<Vec<_>>(),
                 config.daemon.token_metadata.clone(),
+                config.clone(),
             )
         };
         let os_user = whoami::username().unwrap_or_else(|_| "unknown-user".to_string());
@@ -393,6 +394,13 @@ impl NodeManager {
         );
         let proxy_sessions = self.state.sessions_value().await;
         let peer_store = self.state.peers_value().await;
+        let dependencies = diagnostics::daemon_dependency_report(
+            &config_snapshot,
+            Some(&json!({
+                "ok": true,
+                "control": self.control_endpoint.to_string(),
+            })),
+        );
         Ok(json!({
             "api_version": control_protocol::NODE_CONTROL_VERSION,
             "ok": true,
@@ -446,6 +454,7 @@ impl NodeManager {
             "routes": running_routes,
             "route_store": self.route_store_path,
             "peer_store": peer_store,
+            "dependencies": dependencies,
             "route_autostart": self.route_autostart,
             "report_to": self.report_to,
             "peer_reports": reports,

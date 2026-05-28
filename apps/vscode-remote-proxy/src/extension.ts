@@ -433,6 +433,10 @@ class RemoteProxyController implements vscode.Disposable {
     if (error.nextAction) {
       this.output.appendLine(`Daemon repair action: ${error.nextAction}`);
     }
+    const repairLabel = asString(asRecord(error.repairAction)?.label);
+    if (repairLabel) {
+      this.output.appendLine(`Daemon repair suggestion: ${repairLabel}`);
+    }
     this.forwarder.fail(message);
 
     if (!options.interactive) {
@@ -486,7 +490,10 @@ class RemoteProxyController implements vscode.Disposable {
           cancellable: false,
         },
         async () => {
-          await resolved.cli.installDaemonElevated();
+          const result = await resolved.cli.installDaemonElevated();
+          if (result.stdout.trim()) {
+            this.output.appendLine(`ssh_proxy daemon install result: ${result.stdout.trim()}`);
+          }
         },
       );
       this.output.appendLine('ssh_proxy daemon install completed; retrying proxy session.');
@@ -526,6 +533,32 @@ class RemoteProxyController implements vscode.Disposable {
       }
     } else {
       this.output.appendLine(REMOTE_PROXY_DIAGNOSTICS_SKIP_LINE);
+    }
+
+    const config = readConfig();
+    try {
+      const resolved = await findAvailableSshProxyCli(
+        config.sshProxyExecutable,
+        this.output,
+        { extensionPath: this.context.extensionPath },
+      );
+      if (resolved) {
+        const report = await resolved.cli.doctorReportJson();
+        const text = JSON.stringify(report, null, 2);
+        this.output.appendLine('Remote Proxy report');
+        this.output.appendLine(text);
+        void vscode.window.showInformationMessage('Remote Proxy diagnostics collected.', 'Copy Report', 'Show Output')
+          .then(async (action) => {
+            if (action === 'Copy Report') {
+              await vscode.env.clipboard.writeText(text);
+            } else if (action === 'Show Output') {
+              this.output.show(true);
+            }
+          });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.output.appendLine(`Doctor report collection failed: ${message}`);
     }
 
     this.output.show(true);
@@ -767,6 +800,14 @@ class RemoteProxyController implements vscode.Disposable {
     }, text);
   }
 
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function delay(ms: number): Promise<void> {

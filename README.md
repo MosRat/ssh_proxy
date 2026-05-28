@@ -20,7 +20,7 @@ Install or inspect the local daemon:
 
 ```powershell
 ssh_proxy daemon --json status
-ssh_proxy daemon --scope system install --elevate
+ssh_proxy daemon install --scope system --elevate --json
 ```
 
 The daemon is the normal production path. CLI commands submit intent to the private named pipe or Unix socket; they do not directly own long-running routes. Non-interactive commands report `requires_elevation` instead of opening a UAC or sudo prompt.
@@ -40,7 +40,7 @@ Inspect the daemon-owned job and route state:
 ```powershell
 ssh_proxy status --json
 ssh_proxy events --job <job-id> --json
-ssh_proxy doctor --json
+ssh_proxy doctor --json --report
 ```
 
 ## Daemon Job Workflow
@@ -99,7 +99,7 @@ ssh_proxy doctor --json
 Common checks:
 
 - If a remote shell returns `502 Bad Gateway`, verify the local upstream proxy URL and make sure the local proxy accepts CONNECT/SOCKS traffic.
-- If Windows daemon installation is denied, use `ssh_proxy daemon --json status` and `ssh_proxy doctor --json`. Auto-start does not pop UAC; interactive commands can install or update the daemon explicitly.
+- If Windows daemon installation is denied, use `ssh_proxy daemon status --json` and `ssh_proxy doctor --json --report`. Auto-start does not pop UAC; interactive commands use the structured elevated installer and return a repair action.
 - If the remote port is occupied, keep `remoteProxy.remote.autoPickPort` enabled in the extension or choose another `--remote-port`.
 - If a route stays in `accepted`, `bootstrapping_peer`, or `starting`, inspect `ssh_proxy status --workspace <id> --json` and `ssh_proxy events --job <job-id> --json`; readiness is represented as daemon job progress.
 

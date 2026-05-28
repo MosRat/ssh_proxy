@@ -125,6 +125,7 @@ fn cli_help_exposes_only_production_daemon_commands() {
         "control",
         "host",
         "service",
+        "daemon-install-worker",
     ] {
         assert!(
             !help.contains(&format!("  {hidden}")),

@@ -710,7 +710,7 @@ impl NodeManager {
         )
         .await?;
 
-        let response = self.handle_route_intent(route_request).await;
+        let response = self.handle_route_intent(route_request.clone()).await;
         match response {
             Ok(response) => {
                 let parsed = serde_json::from_str::<Value>(&response).unwrap_or(Value::Null);
@@ -735,12 +735,77 @@ impl NodeManager {
                     .await?;
             }
             Err(err) => {
-                let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
-                    .failed(err.to_string(), Some("route_start_failed".to_string()));
-                let job = self.jobs.upsert(job, "route intent failed").await?;
-                self.state
-                    .upsert_session_from_job(&spec, &job, None)
-                    .await?;
+                let error = err.to_string();
+                if route_start_conflict_is_repairable(&error) {
+                    let job = self
+                        .jobs
+                        .upsert(
+                            job_for_phase(&spec, &job_id, JobPhase::StartRoute, 68)
+                                .transition(JobState::WaitingRetry, JobPhase::StartRoute, 68)
+                                .with_next_action("restart_conflicting_route")
+                                .with_retry_after_ms(250)
+                                .with_recovery_attempts(1),
+                            "route conflict detected; restarting daemon-owned route",
+                        )
+                        .await?;
+                    self.state
+                        .upsert_session_from_job(&spec, &job, None)
+                        .await?;
+                    let _ = self
+                        .stop_route(NodeRequest::route_stop(spec.route_id()))
+                        .await;
+                    time::sleep(Duration::from_millis(250)).await;
+                    match self.handle_route_intent(route_request).await {
+                        Ok(response) => {
+                            let parsed =
+                                serde_json::from_str::<Value>(&response).unwrap_or(Value::Null);
+                            let remote_url = parsed
+                                .get("remote_url")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .or_else(|| Some(spec.remote_url()));
+                            self.jobs
+                                .upsert(
+                                    job_for_phase(&spec, &job_id, JobPhase::StartRoute, 70)
+                                        .with_remote_url(remote_url.clone())
+                                        .with_recovery_attempts(1),
+                                    "route conflict repaired and route intent accepted",
+                                )
+                                .await?;
+                            if let Some(job) = self.jobs.get(&job_id).await {
+                                self.state
+                                    .upsert_session_from_job(&spec, &job, None)
+                                    .await?;
+                            }
+                            self.wait_for_proxy_route_ready(&spec, &job_id, remote_url)
+                                .await?;
+                        }
+                        Err(retry_err) => {
+                            let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
+                                .with_recovery_attempts(1)
+                                .failed(
+                                    retry_err.to_string(),
+                                    Some("route_already_running_different_spec".to_string()),
+                                )
+                                .with_next_action("ssh_proxy down --target <target> --json");
+                            let job = self
+                                .jobs
+                                .upsert(job, "route conflict repair failed")
+                                .await?;
+                            self.state
+                                .upsert_session_from_job(&spec, &job, None)
+                                .await?;
+                        }
+                    }
+                } else {
+                    let blocker = route_start_blocker(&error);
+                    let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
+                        .failed(error, Some(blocker));
+                    let job = self.jobs.upsert(job, "route intent failed").await?;
+                    self.state
+                        .upsert_session_from_job(&spec, &job, None)
+                        .await?;
+                }
             }
         }
         Ok(())
@@ -977,6 +1042,25 @@ impl NodeManager {
             }
             time::sleep(Duration::from_millis(250)).await;
         }
+    }
+}
+
+fn route_start_conflict_is_repairable(error: &str) -> bool {
+    error.contains("is already running with a different spec")
+}
+
+fn route_start_blocker(error: &str) -> String {
+    if route_start_conflict_is_repairable(error) {
+        "route_already_running_different_spec".to_string()
+    } else if error.contains("SSH authentication failed") {
+        "ssh_auth_failed".to_string()
+    } else if error.contains("ProxyCommand")
+        || error.contains("unsupported --ssh-arg")
+        || error.contains("unsupported -o")
+    {
+        "ssh_config_unsupported".to_string()
+    } else {
+        "route_start_failed".to_string()
     }
 }
 

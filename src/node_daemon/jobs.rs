@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::config;
+use crate::{config, repair};
 
 const JOB_STORE_VERSION: u32 = 1;
 const MAX_EVENTS: usize = 256;
@@ -72,9 +72,13 @@ pub(super) struct JobRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) next_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) repair_action: Option<repair::RepairAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) retry_after_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) recovery_attempts: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,8 +102,10 @@ impl JobRecord {
             progress: 0,
             blocker: None,
             next_action: None,
+            repair_action: None,
             last_error: None,
             retry_after_ms: None,
+            recovery_attempts: 0,
             target: None,
             workspace_id: None,
             route_id: None,
@@ -153,11 +159,17 @@ impl JobRecord {
         self
     }
 
+    pub(super) fn with_recovery_attempts(mut self, recovery_attempts: u32) -> Self {
+        self.recovery_attempts = recovery_attempts;
+        self
+    }
+
     pub(super) fn failed(mut self, error: impl Into<String>, blocker: Option<String>) -> Self {
         self.state = JobState::Failed;
         self.phase = JobPhase::Failed;
         self.progress = 100;
         self.last_error = Some(error.into());
+        self.repair_action = blocker.as_deref().and_then(repair::action_for_blocker);
         self.blocker = blocker;
         self.retry_after_ms = None;
         self.updated_at_unix = now_unix();
@@ -400,6 +412,10 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[cfg(test)]

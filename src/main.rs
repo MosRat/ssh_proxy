@@ -10,19 +10,27 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod cli;
 mod control_socket;
+mod diagnostics;
+mod install_report;
 mod logging;
 mod node_daemon;
 mod paths;
 mod peer_transport;
+mod repair;
 mod reverse;
 mod service;
 mod sidecar;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = cli::Cli::parse();
     logging::init(&cli.log)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async_main(cli))
+}
 
+async fn async_main(cli: cli::Cli) -> Result<()> {
     let app_config = config::AppConfig::load_default().unwrap_or_else(|err| {
         warn!(error = %err, "failed to load local config; using CLI values only");
         config::AppConfig::default()
@@ -59,6 +67,9 @@ async fn main() -> Result<()> {
         cli::Commands::Vscode(args) => daemon::vscode(args, app_config).await,
         cli::Commands::Host(args) => deploy::host(args, app_config).await,
         cli::Commands::Service(args) => service::run(args, app_config).await,
+        cli::Commands::DaemonInstallWorker(args) => {
+            daemon::daemon_install_worker(args, app_config).await
+        }
     }
 }
 

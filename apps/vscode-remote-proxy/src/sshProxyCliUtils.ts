@@ -172,10 +172,28 @@ export function buildSshProxyVscodeApplySettingsArgs(options: {
 export function buildSshProxyDaemonInstallArgs(options: {
   readonly scope: 'system' | 'user';
   readonly elevate?: boolean;
+  readonly json?: boolean;
 }): string[] {
   const args = ['daemon', 'install', '--scope', options.scope];
   if (options.elevate) {
     args.push('--elevate');
+  }
+  if (options.json) {
+    args.push('--json');
+  }
+  return args;
+}
+
+export function buildSshProxyDoctorArgs(options: {
+  readonly report?: boolean;
+  readonly json?: boolean;
+} = {}): string[] {
+  const args = ['doctor'];
+  if (options.report) {
+    args.push('--report');
+  }
+  if (options.json) {
+    args.push('--json');
   }
   return args;
 }
@@ -183,6 +201,7 @@ export function buildSshProxyDaemonInstallArgs(options: {
 export function isSshProxyDaemonInstallCancelledMessage(message: string): boolean {
   const lower = message.toLowerCase();
   return lower.includes('0xc000013a')
+    || lower.includes('cancelled_by_user')
     || lower.includes('exit code 1223')
     || lower.includes('code 1223')
     || lower.includes('operation was canceled')

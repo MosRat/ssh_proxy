@@ -624,7 +624,9 @@ fn apply_config(target: &mut Target, config_path: Option<&Path>) -> Result<()> {
                 }
             }
             "proxycommand" => {
-                warn!(directive = %key, "OpenSSH ProxyCommand is not implemented in russh mode");
+                bail!(
+                    "unsupported OpenSSH ProxyCommand requires explicit external SSH compatibility"
+                );
             }
             _ => {}
         }

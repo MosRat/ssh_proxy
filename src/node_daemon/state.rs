@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::config;
+use crate::{config, repair};
 
 use super::{
     handoff::HandoffProbeStatus,
@@ -46,10 +46,14 @@ pub(super) struct ProxySessionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) next_action: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) repair_action: Option<repair::RepairAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_error: Option<String>,
     pub(super) remote_setup: RemoteSetupStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) handoff_probe: Option<HandoffProbeStatus>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) recovery_attempts: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) route: Option<Value>,
     pub(super) created_at_unix: u64,
@@ -76,9 +80,11 @@ impl ProxySessionRecord {
             health: job_health(job),
             blocker: job.blocker.clone(),
             next_action: job.next_action.clone(),
+            repair_action: job.repair_action.clone(),
             last_error: job.last_error.clone(),
             remote_setup: RemoteSetupStatus::pending(),
             handoff_probe: None,
+            recovery_attempts: job.recovery_attempts,
             route: None,
             created_at_unix: job.created_at_unix,
             updated_at_unix: job.updated_at_unix,
@@ -101,6 +107,7 @@ impl ProxySessionRecord {
         self.health = job_health(job);
         self.blocker = job.blocker.clone();
         self.next_action = job.next_action.clone();
+        self.repair_action = job.repair_action.clone();
         self.last_error = job.last_error.clone();
         self.updated_at_unix = job.updated_at_unix;
         if self.phase == "apply_remote_settings" {
@@ -111,6 +118,7 @@ impl ProxySessionRecord {
             self.remote_setup = RemoteSetupStatus::required();
             self.remote_setup.updated_at_unix = job.updated_at_unix;
         }
+        self.recovery_attempts = job.recovery_attempts;
     }
 
     pub(super) fn to_value(&self) -> Value {
@@ -648,6 +656,10 @@ fn job_health(job: &JobRecord) -> String {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 fn now_unix() -> u64 {

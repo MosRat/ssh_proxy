@@ -9,8 +9,8 @@ mod control;
 pub use control::{ControlArgs, ControlCommand};
 mod daemon;
 pub use daemon::{
-    DaemonArgs, DaemonCommand, DaemonScope, DoctorArgs, DownArgs, EventsArgs, StatusArgs, UpArgs,
-    VscodeArgs, VscodeCommand,
+    DaemonArgs, DaemonCommand, DaemonInstallWorkerArgs, DaemonScope, DoctorArgs, DownArgs,
+    EventsArgs, StatusArgs, UpArgs, VscodeArgs, VscodeCommand,
 };
 mod host;
 pub use host::{HostArgs, HostCommand, HostExecArgs};
@@ -95,6 +95,12 @@ pub enum Commands {
     Host(HostArgs),
     #[command(hide = true, about = "Internal service compatibility entrypoint")]
     Service(ServiceArgs),
+    #[command(
+        name = "daemon-install-worker",
+        hide = true,
+        about = "Internal elevated daemon install worker"
+    )]
+    DaemonInstallWorker(DaemonInstallWorkerArgs),
 }
 
 #[cfg(test)]

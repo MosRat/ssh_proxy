@@ -30,12 +30,7 @@ pub(super) async fn apply_remote_settings(
     let desired_hash = setup_hash(&payload);
 
     if spec.apply_policy.vscode_settings {
-        run_script(
-            &client,
-            &build_remote_settings_script(&payload)?,
-            "patch remote VS Code machine settings",
-        )
-        .await?;
+        apply_remote_machine_settings(&client, &payload).await?;
     }
 
     if spec.apply_policy.server_env {
@@ -92,6 +87,21 @@ pub(super) async fn cleanup_remote_settings(
     let install_args = remote_ssh::install_args_from_spec(config, spec)
         .context("failed to build SSH target for remote cleanup")?;
     let client = ssh_client::Client::connect_install_args(&install_args).await?;
+    cleanup_remote_machine_settings(
+        &client,
+        &spec.apply_policy.server_dir,
+        &[
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+        ],
+    )
+    .await?;
     run_script(
         &client,
         &build_cleanup_script(&spec.apply_policy.server_dir, &spec.workspace_paths),
@@ -190,115 +200,219 @@ async fn run_script(client: &ssh_client::Client, script: &str, label: &str) -> R
     Ok(())
 }
 
-fn build_remote_settings_script(payload: &Value) -> Result<String> {
-    let payload_text = serde_json::to_string(payload)?;
-    let payload_js = serde_json::to_string(&payload_text)?;
+async fn apply_remote_machine_settings(client: &ssh_client::Client, payload: &Value) -> Result<()> {
     let server_dir = payload
         .get("server_dir")
         .and_then(Value::as_str)
         .unwrap_or(".vscode-server");
-    Ok(format!(
+    let current = read_remote_machine_settings(client, server_dir).await?;
+    let mut settings = parse_settings_object(&current);
+    let values = payload
+        .get("values")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("remote settings payload is missing values"))?;
+    for (key, value) in values {
+        if key.starts_with("terminal.integrated.env.") {
+            let mut merged = settings
+                .get(key)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(env) = value.as_object() {
+                for (env_key, env_value) in env {
+                    merged.insert(env_key.clone(), env_value.clone());
+                }
+            }
+            settings.insert(key.clone(), Value::Object(merged));
+        } else {
+            settings.insert(key.clone(), value.clone());
+        }
+    }
+    write_remote_machine_settings(client, server_dir, &Value::Object(settings)).await
+}
+
+async fn cleanup_remote_machine_settings(
+    client: &ssh_client::Client,
+    server_dir: &str,
+    env_keys: &[&str],
+) -> Result<()> {
+    let current = read_remote_machine_settings(client, server_dir).await?;
+    if current.trim().is_empty() {
+        return Ok(());
+    }
+    let mut settings = parse_settings_object(&current);
+    settings.remove("http.proxy");
+    settings.remove("http.proxySupport");
+    for key in [
+        "terminal.integrated.env.linux",
+        "terminal.integrated.env.osx",
+        "terminal.integrated.env.windows",
+    ] {
+        if let Some(Value::Object(mut env)) = settings.remove(key) {
+            for env_key in env_keys {
+                env.remove(*env_key);
+            }
+            if !env.is_empty() {
+                settings.insert(key.to_string(), Value::Object(env));
+            }
+        }
+    }
+    write_remote_machine_settings(client, server_dir, &Value::Object(settings)).await
+}
+
+async fn read_remote_machine_settings(
+    client: &ssh_client::Client,
+    server_dir: &str,
+) -> Result<String> {
+    let script = format!(
         r#"
 set -eu
-node_bin="$(command -v node || true)"
 server_dir={server_dir}
-if [ -z "$node_bin" ]; then
-  for candidate in "$HOME/$server_dir"/bin/*/node "$HOME/$server_dir"/cli/servers/*/server/node; do
-    if [ -x "$candidate" ]; then
-      node_bin="$candidate"
-      break
-    fi
-  done
+settings="$HOME/$server_dir/data/Machine/settings.json"
+if [ -f "$settings" ]; then
+  cat "$settings"
 fi
-if [ -z "$node_bin" ]; then
-  echo "remote-proxy: node not found on remote; skipped machine settings" >&2
-  exit 0
-fi
-"$node_bin" <<'NODE'
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const payload = JSON.parse({payload_js});
-const settingsPath = path.join(os.homedir(), payload.server_dir, 'data', 'Machine', 'settings.json');
-fs.mkdirSync(path.dirname(settingsPath), {{ recursive: true }});
-
-function stripJsonComments(input) {{
-  let output = '';
-  let inString = false;
-  let quote = '';
-  let escaped = false;
-  for (let index = 0; index < input.length; index += 1) {{
-    const char = input[index];
-    const next = input[index + 1];
-    if (inString) {{
-      output += char;
-      if (escaped) {{
-        escaped = false;
-      }} else if (char === '\\\\') {{
-        escaped = true;
-      }} else if (char === quote) {{
-        inString = false;
-      }}
-      continue;
-    }}
-    if (char === '"' || char === "'") {{
-      inString = true;
-      quote = char;
-      output += char;
-      continue;
-    }}
-    if (char === '/' && next === '/') {{
-      while (index < input.length && input[index] !== '\n') {{
-        index += 1;
-      }}
-      output += '\n';
-      continue;
-    }}
-    if (char === '/' && next === '*') {{
-      index += 2;
-      while (index < input.length && !(input[index] === '*' && input[index + 1] === '/')) {{
-        index += 1;
-      }}
-      index += 1;
-      continue;
-    }}
-    output += char;
-  }}
-  return output;
-}}
-
-function parseSettings(raw) {{
-  if (!raw.trim()) {{
-    return {{}};
-  }}
-  try {{
-    return JSON.parse(raw);
-  }} catch {{}}
-  try {{
-    return JSON.parse(stripJsonComments(raw).replace(/,\s*([}}\]])/g, '$1'));
-  }} catch {{
-    return {{}};
-  }}
-}}
-
-const raw = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf8') : '';
-if (raw.trim()) {{
-  fs.copyFileSync(settingsPath, settingsPath + '.vscode-remote-proxy.bak');
-}}
-const settings = parseSettings(raw);
-for (const [key, value] of Object.entries(payload.values)) {{
-  if (key.startsWith('terminal.integrated.env.')) {{
-    settings[key] = {{ ...(settings[key] || {{}}), ...value }};
-  }} else {{
-    settings[key] = value;
-  }}
-}}
-fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-console.log('remote-proxy: patched ' + settingsPath);
-NODE
 "#,
         server_dir = shell_quote(server_dir),
-    ))
+    );
+    let output = client
+        .exec_capture("sh -s".to_string(), Some(script.into_bytes()))
+        .await
+        .context("read remote VS Code machine settings failed to start")?;
+    if output.exit_status != 0 {
+        return Err(anyhow!(
+            "read remote VS Code machine settings failed with status {}: {}",
+            output.exit_status,
+            output.stderr.trim()
+        ));
+    }
+    Ok(output.stdout)
+}
+
+async fn write_remote_machine_settings(
+    client: &ssh_client::Client,
+    server_dir: &str,
+    settings: &Value,
+) -> Result<()> {
+    let text = serde_json::to_string_pretty(settings)? + "\n";
+    let script = format!(
+        r#"
+set -eu
+server_dir={server_dir}
+settings="$HOME/$server_dir/data/Machine/settings.json"
+mkdir -p "$(dirname "$settings")"
+if [ -f "$settings" ]; then
+  cp "$settings" "$settings.vscode-remote-proxy.bak" || true
+fi
+tmp="$settings.tmp.$$"
+cat > "$tmp" <<'JSON'
+{settings_json}
+JSON
+chmod 600 "$tmp"
+mv "$tmp" "$settings"
+echo "remote-proxy: patched $settings"
+"#,
+        server_dir = shell_quote(server_dir),
+        settings_json = text,
+    );
+    run_script(client, &script, "write remote VS Code machine settings").await
+}
+
+fn parse_settings_object(raw: &str) -> serde_json::Map<String, Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return serde_json::Map::new();
+    }
+    serde_json::from_str::<Value>(trimmed)
+        .or_else(|_| {
+            serde_json::from_str::<Value>(&strip_json_comments_and_trailing_commas(trimmed))
+        })
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn strip_json_comments_and_trailing_commas(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    output.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut previous = '\0';
+            for next in chars.by_ref() {
+                if previous == '*' && next == '/' {
+                    break;
+                }
+                previous = next;
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    remove_trailing_json_commas(&output)
+}
+
+fn remove_trailing_json_commas(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+        if ch == ',' {
+            let mut lookahead = chars.clone();
+            while matches!(lookahead.peek(), Some(next) if next.is_whitespace()) {
+                lookahead.next();
+            }
+            if matches!(lookahead.peek(), Some('}' | ']')) {
+                continue;
+            }
+        }
+        output.push(ch);
+    }
+    output
 }
 
 fn build_server_env_setup_script(server_dir: &str, env: &BTreeMap<String, String>) -> String {
@@ -498,118 +612,6 @@ if [ -f "$env_file" ]; then
   mv "$tmp" "$env_file"
 fi
 
-node_bin="$(command -v node || true)"
-if [ -z "$node_bin" ]; then
-  for candidate in "$HOME/$server_dir"/bin/*/node "$HOME/$server_dir"/cli/servers/*/server/node; do
-    if [ -x "$candidate" ]; then
-      node_bin="$candidate"
-      break
-    fi
-  done
-fi
-if [ -z "$node_bin" ]; then
-  echo "remote-proxy: node not found on remote; skipped machine settings cleanup" >&2
-  exit 0
-fi
-
-"$node_bin" <<'NODE'
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const envKeys = JSON.parse({env_keys});
-const settingsPath = path.join(os.homedir(), {js_server_dir}, 'data', 'Machine', 'settings.json');
-
-function stripJsonComments(input) {{
-  let output = '';
-  let inString = false;
-  let quote = '';
-  let escaped = false;
-  for (let index = 0; index < input.length; index += 1) {{
-    const char = input[index];
-    const next = input[index + 1];
-    if (inString) {{
-      output += char;
-      if (escaped) {{
-        escaped = false;
-      }} else if (char === '\\\\') {{
-        escaped = true;
-      }} else if (char === quote) {{
-        inString = false;
-      }}
-      continue;
-    }}
-    if (char === '"' || char === "'") {{
-      inString = true;
-      quote = char;
-      output += char;
-      continue;
-    }}
-    if (char === '/' && next === '/') {{
-      while (index < input.length && input[index] !== '\n') {{
-        index += 1;
-      }}
-      output += '\n';
-      continue;
-    }}
-    if (char === '/' && next === '*') {{
-      index += 2;
-      while (index < input.length && !(input[index] === '*' && input[index + 1] === '/')) {{
-        index += 1;
-      }}
-      index += 1;
-      continue;
-    }}
-    output += char;
-  }}
-  return output;
-}}
-
-function parseSettings(raw) {{
-  if (!raw.trim()) {{
-    return {{}};
-  }}
-  try {{
-    return JSON.parse(raw);
-  }} catch {{}}
-  try {{
-    return JSON.parse(stripJsonComments(raw).replace(/,\s*([}}\]])/g, '$1'));
-  }} catch {{
-    return {{}};
-  }}
-}}
-
-function cleanupTerminalEnv(settings, key) {{
-  const value = settings[key];
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {{
-    return;
-  }}
-  for (const envKey of envKeys) {{
-    delete value[envKey];
-  }}
-  if (Object.keys(value).length === 0) {{
-    delete settings[key];
-  }} else {{
-    settings[key] = value;
-  }}
-}}
-
-if (!fs.existsSync(settingsPath)) {{
-  console.log('remote-proxy: machine settings not found');
-  process.exit(0);
-}}
-
-const raw = fs.readFileSync(settingsPath, 'utf8');
-const settings = parseSettings(raw);
-fs.copyFileSync(settingsPath, settingsPath + '.vscode-remote-proxy.cleanup.bak');
-delete settings['http.proxy'];
-delete settings['http.proxySupport'];
-cleanupTerminalEnv(settings, 'terminal.integrated.env.linux');
-cleanupTerminalEnv(settings, 'terminal.integrated.env.osx');
-cleanupTerminalEnv(settings, 'terminal.integrated.env.windows');
-fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-console.log('remote-proxy: cleaned ' + settingsPath);
-NODE
-
 echo "remote-proxy: cleanup complete"
 "#,
         shell_server_dir = shell_quote(server_dir),
@@ -619,19 +621,6 @@ echo "remote-proxy: cleanup complete"
         } else {
             workspace_lines
         },
-        env_keys = serde_json::to_string(&vec![
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "NO_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-            "no_proxy",
-        ])
-        .map(|value| serde_json::to_string(&value).unwrap())
-        .unwrap(),
-        js_server_dir = serde_json::to_string(server_dir).unwrap(),
     )
 }
 
@@ -702,5 +691,7 @@ mod tests {
         assert!(!setup_source.contains(&["nc", " -z"].concat()));
         assert!(!setup_source.contains(&["/dev", "/tcp"].concat()));
         assert!(!setup_source.contains(&["socket", ".create_connection"].concat()));
+        assert!(!setup_source.contains(&["command -v ", "node"].concat()));
+        assert!(!setup_source.contains(&["node", "_bin"].concat()));
     }
 }

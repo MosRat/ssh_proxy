@@ -44,6 +44,21 @@ pub enum DaemonCommand {
     Serve(NodeDaemonArgs),
 }
 
+#[derive(Debug, Clone, Parser)]
+pub struct DaemonInstallWorkerArgs {
+    #[arg(long, value_enum, default_value = "system")]
+    pub scope: DaemonScope,
+
+    #[arg(long, help = "Emit machine-readable JSON output")]
+    pub json: bool,
+
+    #[arg(long = "install-log", help = "Structured JSONL install log path")]
+    pub install_log: PathBuf,
+
+    #[arg(long, help = "Do not copy the binary into the service install dir")]
+    pub no_copy: bool,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum DaemonScope {
     Auto,
@@ -238,6 +253,9 @@ pub struct DoctorArgs {
 
     #[arg(long, help = "Emit machine-readable JSON output")]
     pub json: bool,
+
+    #[arg(long, help = "Include a redacted support report")]
+    pub report: bool,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -406,6 +424,9 @@ pub struct VscodeDiagnoseArgs {
 
     #[arg(long)]
     pub json: bool,
+
+    #[arg(long, help = "Include a redacted support report")]
+    pub report: bool,
 }
 
 impl DaemonScope {

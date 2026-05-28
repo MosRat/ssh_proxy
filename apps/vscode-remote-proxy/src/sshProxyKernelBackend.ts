@@ -14,6 +14,7 @@ export class SshProxyDaemonRejectedError extends Error {
   public readonly payload: unknown;
   public readonly blocker: string | undefined;
   public readonly nextAction: string | undefined;
+  public readonly repairAction: Record<string, unknown> | undefined;
   public readonly requiresDaemon: boolean;
   public readonly requiresElevation: boolean;
   public readonly retryAfterMs: number | undefined;
@@ -22,12 +23,17 @@ export class SshProxyDaemonRejectedError extends Error {
     const record = asRecord(payload);
     const job = asRecord(record?.job);
     const blocker = asString(record?.blocker) ?? asString(job?.phase) ?? 'daemon_rejected';
-    const detail = asString(record?.error) ?? asString(job?.message) ?? asString(record?.last_error);
+    const repairAction = asRecord(record?.repair_action) ?? asRecord(job?.repair_action);
+    const detail = asString(record?.message)
+      ?? asString(record?.error)
+      ?? asString(job?.message)
+      ?? asString(record?.last_error);
     super(`ssh_proxy daemon blocked (${blocker})${detail ? `: ${detail}` : ''}`);
     this.name = 'SshProxyDaemonRejectedError';
     this.payload = payload;
     this.blocker = blocker;
     this.nextAction = asString(record?.next_action) ?? asString(job?.next_action);
+    this.repairAction = repairAction;
     this.requiresDaemon = record?.requires_daemon === true;
     this.requiresElevation = record?.requires_elevation === true;
     const retryAfterMs = record?.retry_after_ms;
@@ -40,6 +46,9 @@ export class SshProxyDaemonRejectedError extends Error {
     }
     if (this.blocker === 'daemon_pipe_access_denied') {
       return 'ssh_proxy daemon is running but its control pipe denied this user; reinstall or restart the daemon to repair permissions';
+    }
+    if (this.blocker === 'node_control_token_required' || this.blocker === 'invalid_node_control_token') {
+      return 'ssh_proxy daemon configuration is stale and needs repair';
     }
     return this.message;
   }

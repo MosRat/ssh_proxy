@@ -54,7 +54,8 @@ Long work is represented as daemon jobs:
 
 Jobs move through `queued`, `running`, `waiting_retry`, `healthy`, `failed`, and
 `cancelled`. Each job records `phase`, `progress`, `blocker`, `next_action`,
-`last_error`, timestamps, and recent events.
+structured `repair_action`, `last_error`, retry timing, recovery attempts,
+timestamps, and recent events.
 
 ## Proxy Sessions
 
@@ -100,7 +101,9 @@ Remote setup is daemon-owned. The daemon applies and repairs:
 - `~/.vscode-server/remote-proxy-status.json`.
 
 The VS Code extension calls `ssh_proxy vscode apply-settings` rather than
-running remote setup scripts itself.
+running remote setup scripts itself. VS Code Machine settings are read and
+rendered by Rust, then written through a minimal SSH shell file operation; remote
+`node` is diagnostic-only and is not required for the normal settings path.
 
 ## Updates
 
@@ -137,6 +140,7 @@ JSON errors and blockers use:
 
 - `blocker`
 - `next_action`
+- `repair_action`
 - `last_error`
 - `requires_elevation`
 - `requires_external_ssh`
@@ -144,6 +148,10 @@ JSON errors and blockers use:
 
 Clients should display these fields directly and avoid inventing their own
 fallback chain.
+
+`ssh_proxy doctor --json --report` adds dependency classification, redacted daemon
+state, recent install logs, handoff probes, route health, peer state, and remote
+setup state for issue reports.
 
 ## Build Notes
 

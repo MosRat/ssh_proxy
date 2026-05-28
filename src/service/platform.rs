@@ -3,6 +3,8 @@ use std::process::Command;
 #[cfg(windows)]
 use std::{
     ffi::{OsStr, OsString},
+    os::windows::ffi::OsStrExt,
+    path::Path,
     thread,
     time::Duration,
 };
@@ -24,11 +26,22 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, GetLastError},
+    System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
+    UI::{
+        Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW},
+        WindowsAndMessaging::SW_HIDE,
+    },
+};
 
 use super::inventory::{ServiceProbeState, ServiceProbeSummary};
 #[cfg(windows)]
 use super::plan::command_quote;
 use super::plan::{ServicePlan, ServiceScope, ensure_admin, platform_service_name};
+#[cfg(windows)]
+use crate::install_report;
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "local.ssh-proxy.daemon";
 
@@ -773,72 +786,126 @@ pub(super) fn platform_uninstall(plan: &ServicePlan) -> Result<()> {
 
 #[cfg(windows)]
 pub(super) fn platform_install_elevated(plan: &ServicePlan) -> Result<()> {
-    let log_path = std::env::temp_dir().join(format!(
-        "ssh_proxy-daemon-install-{}.log",
-        std::process::id()
-    ));
-    let mut args = vec![
-        "-NoProfile".to_string(),
-        "-ExecutionPolicy".to_string(),
-        "Bypass".to_string(),
-        "-Command".to_string(),
-    ];
+    let log_path = install_report::install_log_path_for_pid(std::process::id());
     let mut service_args = vec![
-        "service".to_string(),
+        "daemon-install-worker".to_string(),
         "--scope".to_string(),
         "system".to_string(),
-        "--control".to_string(),
-        plan.endpoint.clone(),
+        "--json".to_string(),
+        "--install-log".to_string(),
+        log_path.display().to_string(),
     ];
-    if let Some(transport) = plan.transport {
-        service_args.push("--transport".to_string());
-        service_args.push(transport.to_string());
-    } else {
-        service_args.push("--no-transport".to_string());
-    }
-    if let Some(token) = &plan.token {
-        service_args.push("--token".to_string());
-        service_args.push(token.clone());
-    }
     if !plan.copy_exe {
         service_args.push("--no-copy".to_string());
     }
-    service_args.push("install".to_string());
+    let exit_code = match run_elevated_process(&plan.source_exe, &service_args) {
+        Ok(code) => code,
+        Err(native_err) => {
+            let fallback = run_powershell_elevated(&plan.source_exe, &service_args)?;
+            if fallback != 0 {
+                return elevated_install_failed(&log_path, fallback, Some(native_err.to_string()));
+            }
+            fallback
+        }
+    };
+    if exit_code == 0 {
+        return Ok(());
+    }
+    elevated_install_failed(&log_path, exit_code, None)
+}
 
+#[cfg(windows)]
+fn run_elevated_process(exe: &Path, args: &[String]) -> Result<u32> {
+    let verb = wide("runas");
+    let file = wide_os(exe.as_os_str());
+    let parameters = wide(&join_windows_args(args));
+    let mut info = SHELLEXECUTEINFOW::default();
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = parameters.as_ptr();
+    info.nShow = SW_HIDE;
+    let launched = unsafe { ShellExecuteExW(&mut info) };
+    if launched == 0 {
+        let code = unsafe { GetLastError() };
+        if code == 1223 {
+            return Ok(1223);
+        }
+        bail!("ShellExecuteW runas failed with Windows error {code}");
+    }
+    unsafe {
+        WaitForSingleObject(info.hProcess, INFINITE);
+        let mut exit_code = 1_u32;
+        if GetExitCodeProcess(info.hProcess, &mut exit_code) == 0 {
+            let code = GetLastError();
+            CloseHandle(info.hProcess);
+            bail!("GetExitCodeProcess failed with Windows error {code}");
+        }
+        CloseHandle(info.hProcess);
+        Ok(exit_code)
+    }
+}
+
+#[cfg(windows)]
+fn run_powershell_elevated(exe: &Path, service_args: &[String]) -> Result<u32> {
     let elevated_args = vec![
         "-NoProfile".to_string(),
         "-ExecutionPolicy".to_string(),
         "Bypass".to_string(),
         "-Command".to_string(),
         format!(
-            "$ErrorActionPreference = 'Continue'; $log = {}; Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue; & {} {} *> $log; $code = $LASTEXITCODE; if ($null -eq $code) {{ $code = 0 }}; exit $code",
-            powershell_quote(&log_path.display().to_string()),
-            powershell_quote(&plan.source_exe.display().to_string()),
-            powershell_array(&service_args),
+            "& {} {}; $code = $LASTEXITCODE; if ($null -eq $code) {{ $code = 0 }}; exit $code",
+            powershell_quote(&exe.display().to_string()),
+            powershell_array(service_args),
         ),
     ];
     let command = format!(
         "$p = Start-Process -FilePath 'powershell.exe' -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; if ($null -eq $p.ExitCode) {{ exit 1223 }}; exit $p.ExitCode",
         powershell_quote(&join_windows_args(&elevated_args)),
     );
-    args.push(command);
     let output = Command::new("powershell.exe")
-        .args(args.iter().map(String::as_str))
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &command,
+        ])
         .output()
-        .context("failed to run elevated PowerShell installer")?;
-    if output.status.success() {
-        return Ok(());
+        .context("failed to run elevated PowerShell installer fallback")?;
+    Ok(output.status.code().unwrap_or(1) as u32)
+}
+
+#[cfg(windows)]
+fn elevated_install_failed(
+    log_path: &Path,
+    exit_code: u32,
+    native_error: Option<String>,
+) -> Result<()> {
+    if exit_code == 1223 {
+        let install_id = format!("install-{}-cancelled", std::process::id());
+        let _ = install_report::append_install_event(
+            log_path,
+            &install_id,
+            "cancelled",
+            "cancelled_by_user",
+            "elevated daemon install was cancelled by the user",
+            Some("cancelled_by_user"),
+        );
+        let report = install_report::install_report_from_log(log_path);
+        bail!(
+            "ssh_proxy daemon install cancelled_by_user; elevated installer report: {}",
+            serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())
+        );
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let elevated_log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    let report = install_report::install_report_from_log(log_path);
     bail!(
-        "powershell.exe exited with status {}\nstdout: {}\nstderr: {}\nelevated installer log ({}): {}",
-        output.status,
-        stdout.trim(),
-        stderr.trim(),
-        log_path.display(),
-        elevated_log.trim()
+        "ssh_proxy daemon install failed with code {exit_code}; elevated installer report: {}{}",
+        serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()),
+        native_error
+            .map(|error| format!("; native launcher error: {error}"))
+            .unwrap_or_default()
     )
 }
 
@@ -1121,6 +1188,16 @@ fn is_elevated_for_platform() -> bool {
 #[cfg(windows)]
 fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(windows)]
+fn wide(value: &str) -> Vec<u16> {
+    OsStr::new(value).encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(windows)]
+fn wide_os(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(Some(0)).collect()
 }
 
 #[cfg(windows)]
