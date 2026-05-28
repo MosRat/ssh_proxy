@@ -4,7 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::repair;
 
-use super::workflow::PeerLifecyclePhase;
+use super::{
+    spec::PeerLifecycleSpec,
+    workflow::{LifecycleOperation, PeerLifecyclePhase},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DependencyStatus {
@@ -62,7 +65,23 @@ pub(crate) struct PeerLifecycleReport {
     pub(crate) state: String,
     pub(crate) phase: PeerLifecyclePhase,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) platform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) operation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) service_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) service_manager: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) artifacts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) health_probe: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) dependencies: Vec<DependencyStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,7 +100,15 @@ impl PeerLifecycleReport {
             target: target.into(),
             state: phase.as_str().to_string(),
             phase,
+            role: None,
+            platform: None,
+            scope: None,
+            operation: None,
+            provider: None,
+            service_name: None,
             service_manager: None,
+            artifacts: Vec::new(),
+            health_probe: None,
             dependencies: Vec::new(),
             blocker: None,
             last_error: None,
@@ -91,9 +118,26 @@ impl PeerLifecycleReport {
         }
     }
 
+    pub(crate) fn apply_spec(&mut self, spec: &PeerLifecycleSpec, operation: LifecycleOperation) {
+        self.role = Some(enum_json_name(&spec.role));
+        self.platform = Some(enum_json_name(&spec.platform));
+        self.scope = Some(enum_json_name(&spec.scope));
+        self.operation = Some(operation.as_str().to_string());
+        self.provider = Some(spec.provider.manager_name().to_string());
+        self.service_manager = Some(spec.provider.manager_name().to_string());
+        self.service_name = Some(spec.service_name.clone());
+    }
+
     pub(crate) fn to_redacted_value(&self) -> Value {
         redact_value(&serde_json::to_value(self).unwrap_or_else(|_| Value::Null))
     }
+}
+
+fn enum_json_name<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn now_unix() -> u64 {
@@ -184,5 +228,34 @@ mod tests {
 
         assert_eq!(status.blocker.as_deref(), Some("daemon_unavailable"));
         assert!(status.repair_action.is_some());
+    }
+
+    #[test]
+    fn lifecycle_report_includes_symmetric_spec_fields() {
+        let spec = crate::peer_lifecycle::spec::PeerLifecycleSpec::local_daemon(
+            "local",
+            "ssh_proxy",
+            crate::peer_lifecycle::service_provider::ServiceProviderKind::SystemdUser,
+            "ssh_proxy",
+            None,
+            None,
+            None,
+            "$HOME/.ssh_proxy",
+        );
+        let mut report = PeerLifecycleReport::new(
+            "local",
+            crate::peer_lifecycle::workflow::PeerLifecyclePhase::InstallService,
+        );
+
+        report.apply_spec(
+            &spec,
+            crate::peer_lifecycle::workflow::LifecycleOperation::Install,
+        );
+        let value = serde_json::to_value(report).unwrap();
+
+        assert_eq!(value["role"], "local_daemon");
+        assert_eq!(value["operation"], "install");
+        assert_eq!(value["provider"], "systemd_user");
+        assert_eq!(value["service_name"], "ssh_proxy");
     }
 }

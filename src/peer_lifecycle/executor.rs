@@ -1,8 +1,9 @@
-use std::{fs, future::Future, path::Path, pin::Pin, process::Command};
+use std::{fs, future::Future, net::SocketAddr, path::Path, pin::Pin, process::Command};
 
 use anyhow::{Context, Result, bail};
+use tokio::net::TcpStream;
 
-use crate::{ssh_client, ssh_client::ExecOutput};
+use crate::{peer_lifecycle::artifacts::PeerArtifact, ssh_client, ssh_client::ExecOutput};
 
 pub(crate) type BoxExecutorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
@@ -14,6 +15,37 @@ pub(crate) trait PeerExecutor {
     ) -> BoxExecutorFuture<'a, ExecOutput>;
 
     fn upload_bytes<'a>(&'a self, command: String, bytes: Vec<u8>) -> BoxExecutorFuture<'a, ()>;
+
+    fn write_artifact<'a>(
+        &'a self,
+        target: String,
+        artifact: PeerArtifact,
+        bytes: Vec<u8>,
+    ) -> BoxExecutorFuture<'a, ()> {
+        let _ = artifact;
+        self.upload_bytes(target, bytes)
+    }
+
+    fn read_artifact<'a>(&'a self, target: String) -> BoxExecutorFuture<'a, Vec<u8>> {
+        Box::pin(
+            async move { bail!("reading lifecycle artifact is not supported for target {target}") },
+        )
+    }
+
+    fn stage_binary<'a>(&'a self, source: String, target: String) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move {
+            bail!("binary staging from {source} to {target} is not supported by this executor")
+        })
+    }
+
+    fn probe_tcp<'a>(&'a self, addr: SocketAddr) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move {
+            TcpStream::connect(addr)
+                .await
+                .with_context(|| format!("failed to probe TCP endpoint {addr}"))?;
+            Ok(())
+        })
+    }
 }
 
 pub(crate) struct SshExecutor<'a> {
@@ -37,6 +69,17 @@ impl PeerExecutor for SshExecutor<'_> {
 
     fn upload_bytes<'a>(&'a self, command: String, bytes: Vec<u8>) -> BoxExecutorFuture<'a, ()> {
         Box::pin(async move { self.client.exec_upload(command, bytes).await })
+    }
+
+    fn probe_tcp<'a>(&'a self, addr: SocketAddr) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move {
+            let _stream = self
+                .client
+                .direct_tcpip_stream(addr.ip().to_string(), addr.port())
+                .await
+                .with_context(|| format!("failed to probe remote TCP endpoint {addr}"))?;
+            Ok(())
+        })
     }
 }
 
@@ -75,6 +118,38 @@ impl PeerExecutor for LocalExecutor {
     fn upload_bytes<'a>(&'a self, path: String, bytes: Vec<u8>) -> BoxExecutorFuture<'a, ()> {
         Box::pin(async move { write_local_file(Path::new(&path), &bytes, false) })
     }
+
+    fn write_artifact<'a>(
+        &'a self,
+        path: String,
+        artifact: PeerArtifact,
+        bytes: Vec<u8>,
+    ) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(
+            async move { write_local_file(Path::new(&path), &bytes, artifact.preserve_existing()) },
+        )
+    }
+
+    fn read_artifact<'a>(&'a self, path: String) -> BoxExecutorFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            fs::read(&path).with_context(|| format!("failed to read lifecycle artifact {path}"))
+        })
+    }
+
+    fn stage_binary<'a>(&'a self, source: String, target: String) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move {
+            if source == target {
+                return Ok(());
+            }
+            if let Some(parent) = Path::new(&target).parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            fs::copy(&source, &target)
+                .with_context(|| format!("failed to stage binary from {source} to {target}"))?;
+            Ok(())
+        })
+    }
 }
 
 pub(crate) fn write_local_file(path: &Path, bytes: &[u8], preserve_existing: bool) -> Result<()> {
@@ -107,6 +182,7 @@ pub(crate) fn write_local_file(path: &Path, bytes: &[u8], preserve_existing: boo
 pub(crate) struct FakeExecutor {
     pub(crate) outputs: std::sync::Mutex<Vec<ExecOutput>>,
     pub(crate) commands: std::sync::Mutex<Vec<String>>,
+    pub(crate) artifacts: std::sync::Mutex<Vec<(String, PeerArtifact, Vec<u8>)>>,
 }
 
 #[cfg(test)]
@@ -117,6 +193,10 @@ impl FakeExecutor {
 
     pub(crate) fn commands(&self) -> Vec<String> {
         self.commands.lock().unwrap().clone()
+    }
+
+    pub(crate) fn artifacts(&self) -> Vec<(String, PeerArtifact, Vec<u8>)> {
+        self.artifacts.lock().unwrap().clone()
     }
 }
 
@@ -140,6 +220,31 @@ impl PeerExecutor for FakeExecutor {
     fn upload_bytes<'a>(&'a self, command: String, _bytes: Vec<u8>) -> BoxExecutorFuture<'a, ()> {
         Box::pin(async move {
             self.commands.lock().unwrap().push(command);
+            Ok(())
+        })
+    }
+
+    fn write_artifact<'a>(
+        &'a self,
+        target: String,
+        artifact: PeerArtifact,
+        bytes: Vec<u8>,
+    ) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move {
+            self.artifacts
+                .lock()
+                .unwrap()
+                .push((target, artifact, bytes));
+            Ok(())
+        })
+    }
+
+    fn stage_binary<'a>(&'a self, source: String, target: String) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move {
+            self.commands
+                .lock()
+                .unwrap()
+                .push(format!("stage_binary {source} {target}"));
             Ok(())
         })
     }
@@ -177,5 +282,27 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn fake_executor_records_structured_artifacts_and_stage() {
+        let executor = FakeExecutor::default();
+
+        executor
+            .write_artifact(
+                "config.toml".to_string(),
+                PeerArtifact::Config,
+                b"config".to_vec(),
+            )
+            .await
+            .unwrap();
+        executor
+            .stage_binary("source".to_string(), "target".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(executor.artifacts()[0].0, "config.toml");
+        assert_eq!(executor.artifacts()[0].1, PeerArtifact::Config);
+        assert_eq!(executor.commands(), vec!["stage_binary source target"]);
     }
 }
