@@ -207,7 +207,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     if (!cli || !workspace || !this.currentSshHostValue) {
       return;
     }
-    const status = await cli.vscodeStatusJson({ workspace, target: this.currentSshHostValue });
+    const status = await cli.vscodeStatusJson({ workspace, target: this.currentSshHostValue }, { logCommand: false });
     this.setSnapshot({ daemonStatus: status, lastRefreshAt: Date.now() });
     const record = asRecord(status);
     const job = asRecord(record?.job);
@@ -291,7 +291,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     let lastPhase = 'queued';
     let lastError: string | undefined;
     while (Date.now() <= deadline) {
-      const status = await cli.vscodeStatusJson({ workspace, target });
+      const status = await cli.vscodeStatusJson({ workspace, target }, { logCommand: false });
       this.setSnapshot({ daemonStatus: status, lastRefreshAt: Date.now() });
       const record = asRecord(status);
       const job = asRecord(record?.job);

@@ -27,6 +27,7 @@ export interface CommandResult {
 
 export interface SshProxyRunOptions {
   readonly label?: string;
+  readonly logCommand?: boolean;
   readonly timeoutMs?: number;
 }
 
@@ -93,9 +94,10 @@ export class SshProxyCli {
   public async vscodeStatusJson(options: {
     readonly workspace?: string;
     readonly target?: string;
-  }): Promise<unknown> {
+  }, runOptions: Pick<SshProxyRunOptions, 'logCommand'> = {}): Promise<unknown> {
     return this.runJson(buildSshProxyVscodeStatusArgs(options), undefined, {
       label: 'ssh_proxy vscode status',
+      logCommand: runOptions.logCommand,
       timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
     });
   }
@@ -153,7 +155,9 @@ export class SshProxyCli {
         resolve(result ?? { exitCode: 0, stdout: '', stderr: '' });
       };
 
-      this.output.appendLine(command);
+      if (options.logCommand !== false) {
+        this.output.appendLine(command);
+      }
       const child = spawn(this.executable, [...args], {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],

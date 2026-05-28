@@ -66,6 +66,7 @@ class RemoteProxyController implements vscode.Disposable {
   private applying = false;
   private lastResolvedTargetKey: string | undefined;
   private lastResolvedSshTarget: SshTargetConfig | undefined;
+  private lastLoggedSshHostResolution: string | undefined;
   private lastHealthCheckAt = 0;
   private healthFailures = 0;
 
@@ -613,7 +614,13 @@ class RemoteProxyController implements vscode.Disposable {
 
     const activeCommandHost = await detectActiveSshRemoteCommand();
     if (activeCommandHost) {
-      this.output.appendLine(`Resolved SSH host from Remote SSH active command: ${activeCommandHost.host} (${activeCommandHost.source})`);
+      this.logSshHostResolution(
+        'Remote SSH active command',
+        activeCommandHost.host,
+        activeCommandHost.source,
+        activeCommandHost.targetKey,
+        interactive,
+      );
       this.lastResolvedTargetKey = activeCommandHost.targetKey ?? activeCommandHost.host;
       this.lastResolvedSshTarget = activeCommandHost.sshTarget;
       return activeCommandHost.host;
@@ -621,13 +628,25 @@ class RemoteProxyController implements vscode.Disposable {
 
     const storageHost = await detectSshHostFromVsCodeStorage(this.context, { includeGlobalStorage: config.sshUseStorageFallback });
     if (storageHost?.confidence === 'high') {
-      this.output.appendLine(`Resolved SSH host from VS Code storage: ${storageHost.host} (${storageHost.source})`);
+      this.logSshHostResolution(
+        'VS Code storage',
+        storageHost.host,
+        storageHost.source,
+        storageHost.targetKey,
+        interactive,
+      );
       this.lastResolvedTargetKey = storageHost.targetKey ?? storageHost.host;
       this.lastResolvedSshTarget = storageHost.sshTarget;
       return storageHost.host;
     }
     if (storageHost) {
-      this.output.appendLine(`Ignored low-confidence SSH host candidate from VS Code storage: ${storageHost.host} (${storageHost.source})`);
+      this.logSshHostResolution(
+        'low-confidence VS Code storage',
+        storageHost.host,
+        storageHost.source,
+        storageHost.targetKey,
+        interactive,
+      );
     }
 
     if (!interactive) {
@@ -638,6 +657,25 @@ class RemoteProxyController implements vscode.Disposable {
     this.lastResolvedTargetKey = picked;
     this.lastResolvedSshTarget = undefined;
     return picked;
+  }
+
+  private logSshHostResolution(
+    sourceLabel: string,
+    host: string,
+    source: string,
+    targetKey: string | undefined,
+    interactive: boolean,
+  ): void {
+    const signature = `${sourceLabel}\n${host}\n${source}\n${targetKey ?? ''}`;
+    if (!interactive && this.lastLoggedSshHostResolution === signature) {
+      return;
+    }
+    this.lastLoggedSshHostResolution = signature;
+    if (sourceLabel === 'low-confidence VS Code storage') {
+      this.output.appendLine(`Ignored low-confidence SSH host candidate from VS Code storage: ${host} (${source})`);
+      return;
+    }
+    this.output.appendLine(`Resolved SSH host from ${sourceLabel}: ${host} (${source})`);
   }
 
   private async monitorHostChange(): Promise<void> {
