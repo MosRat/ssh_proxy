@@ -27,25 +27,23 @@ pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()
     match plan.command {
         cli::ServiceCommand::Print => print_service(&plan),
         cli::ServiceCommand::Ensure => ensure_service(&plan, json).await,
-        cli::ServiceCommand::Install => {
-            match install_service(&plan) {
-                Ok(()) => {
-                    if json {
-                        println!("{}", serde_json::to_string(&install_success_report(&plan))?);
-                    }
-                    Ok(())
+        cli::ServiceCommand::Install => match install_service(&plan) {
+            Ok(()) => {
+                if json {
+                    println!("{}", serde_json::to_string(&install_success_report(&plan))?);
                 }
-                Err(err) => {
-                    if json {
-                        println!(
-                            "{}",
-                            serde_json::to_string(&install_failure_report(&plan, &err))?
-                        );
-                    }
-                    Err(err)
-                }
+                Ok(())
             }
-        }
+            Err(err) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&install_failure_report(&plan, &err))?
+                    );
+                }
+                Err(err)
+            }
+        },
         cli::ServiceCommand::Uninstall => platform::platform_uninstall(&plan),
         cli::ServiceCommand::Start => platform::platform_start(&plan),
         cli::ServiceCommand::Stop => platform::platform_stop(&plan),
