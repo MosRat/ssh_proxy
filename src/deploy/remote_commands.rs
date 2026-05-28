@@ -123,33 +123,12 @@ printf 'transport=%s\ncontrol=%s\nnode_id=%s\nnode_name=%s\nconfig=%s\n' "$trans
     }
 }
 
-pub(super) fn remote_systemd_install_command(
-    remote_path: &str,
-    args: &cli::InstallRemoteArgs,
-) -> String {
-    commands::remote_systemd_install_command(remote_path, args)
-}
-
-pub(super) fn remote_launchd_install_command(
-    remote_path: &str,
-    args: &cli::InstallRemoteArgs,
-) -> String {
-    commands::remote_launchd_install_command(remote_path, args)
-}
-
 pub(super) fn remote_nohup_start_command(
     remote_path: &str,
     args: &cli::InstallRemoteArgs,
     stop_existing: bool,
 ) -> String {
     commands::remote_nohup_start_command(remote_path, args, stop_existing)
-}
-
-pub(super) fn remote_schtasks_install_command(
-    remote_path: &str,
-    args: &cli::InstallRemoteArgs,
-) -> String {
-    commands::remote_schtasks_install_command(remote_path, args)
 }
 
 pub(super) fn remote_stop_command(remote_tcp: SocketAddr) -> String {
@@ -321,7 +300,7 @@ mod tests {
     fn remote_systemd_install_restarts_existing_service() {
         let args = install_args(cli::PersistMode::Systemd);
 
-        let command = remote_systemd_install_command("/home/me/bin/ssh_proxy", &args);
+        let command = commands::remote_systemd_install_command("/home/me/bin/ssh_proxy", &args);
 
         assert!(
             command.contains("systemctl --user daemon-reload"),
@@ -346,7 +325,7 @@ mod tests {
     fn remote_launchd_install_uses_keepalive() {
         let args = install_args(cli::PersistMode::Launchd);
 
-        let command = remote_launchd_install_command("/Users/me/bin/ssh_proxy", &args);
+        let command = commands::remote_launchd_install_command("/Users/me/bin/ssh_proxy", &args);
 
         assert!(command.contains("com.ssh-proxy.helper.plist"), "{command}");
         assert!(command.contains("<key>KeepAlive</key><true/>"), "{command}");
@@ -359,8 +338,10 @@ mod tests {
         let mut args = install_args(cli::PersistMode::Schtasks);
         args.remote_os = cli::RemoteOs::Windows;
 
-        let command =
-            remote_schtasks_install_command(r"%LOCALAPPDATA%\ssh_proxy\bin\ssh_proxy.exe", &args);
+        let command = commands::remote_schtasks_install_command(
+            r"%LOCALAPPDATA%\ssh_proxy\bin\ssh_proxy.exe",
+            &args,
+        );
 
         assert!(command.contains("schtasks /Create"), "{command}");
         assert!(command.contains("/TN ssh_proxy_helper"), "{command}");
