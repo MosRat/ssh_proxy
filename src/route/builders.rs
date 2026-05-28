@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 
-use crate::{cli, config, peer_transport};
+use crate::{cli, config, peer_lifecycle, peer_transport};
 
 use super::policy::{quic_transport_policy, ssh_session_pool_policy, transport_pool_policy};
 use super::selection::{route_deploy_mode, transport_selection_policy};
@@ -181,13 +181,7 @@ pub(crate) fn node_forward_from_route(
         remote_tls,
         allow_plain_tcp,
         remote_side_listens,
-        config.peers.get(&args.target).is_some_and(|peer| {
-            peer.remote_path.is_some()
-                && peer.control_endpoint.is_some()
-                && (peer.transport.is_some()
-                    || peer.tls_transport.is_some()
-                    || peer.quic_transport.is_some())
-        }),
+        peer_lifecycle::connection::persistent_peer_ready(config.peers.get(&args.target)),
     )?;
     Ok(cli::NodeForwardArgs {
         target,

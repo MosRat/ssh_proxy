@@ -15,6 +15,7 @@ mod install_report;
 mod logging;
 mod node_daemon;
 mod paths;
+mod peer_lifecycle;
 mod peer_transport;
 mod repair;
 mod reverse;

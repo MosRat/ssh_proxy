@@ -78,66 +78,44 @@ pub(super) fn remote_auto_install_command(
     )
 }
 
-pub(super) fn remote_write_config_command_for_os(
-    preferred_transport: SocketAddr,
-    preferred_control: SocketAddr,
-    token: &str,
-    local_node_id: Option<&str>,
-    local_node_name: Option<&str>,
-    local_control_endpoint: Option<&str>,
-    local_transport: Option<SocketAddr>,
-    remote_os: cli::RemoteOs,
-) -> String {
-    match remote_os {
-        cli::RemoteOs::Windows => remote_write_config_powershell_command(
-            preferred_transport,
-            preferred_control,
-            token,
-            local_node_id,
-            local_node_name,
-            local_control_endpoint,
-            local_transport,
-        ),
-        cli::RemoteOs::Unix | cli::RemoteOs::Auto => remote_write_config_command(
-            preferred_transport,
-            preferred_control,
-            token,
-            local_node_id,
-            local_node_name,
-            local_control_endpoint,
-            local_transport,
-        ),
+#[derive(Debug, Clone, Copy)]
+pub(super) enum RemotePeerFile {
+    Config,
+    PeerState,
+    InstallReport,
+    Health,
+    Routes,
+}
+
+impl RemotePeerFile {
+    pub(super) fn file_name(self) -> &'static str {
+        match self {
+            Self::Config => "config.toml",
+            Self::PeerState => "peer_state.json",
+            Self::InstallReport => "install_report.json",
+            Self::Health => "health.json",
+            Self::Routes => "routes.json",
+        }
+    }
+
+    fn is_routes(self) -> bool {
+        matches!(self, Self::Routes)
     }
 }
 
-pub(super) fn remote_write_config_command(
+pub(super) fn remote_resolve_peer_defaults_command(
     preferred_transport: SocketAddr,
     preferred_control: SocketAddr,
-    token: &str,
-    local_node_id: Option<&str>,
-    local_node_name: Option<&str>,
-    local_control_endpoint: Option<&str>,
-    local_transport: Option<SocketAddr>,
+    remote_os: cli::RemoteOs,
 ) -> String {
-    let peer_table = local_node_id
-            .map(|node_id| {
-                let node_name = toml_quote(local_node_name.unwrap_or("local"));
-                let control = local_control_endpoint
-                    .map(toml_quote)
-                    .map(|value| format!("control_endpoint = {value}\n"))
-                    .unwrap_or_default();
-                let transport = local_transport
-                    .map(|addr| toml_quote(&addr.to_string()))
-                    .map(|value| format!("transport = {value}\n"))
-                    .unwrap_or_default();
-                format!(
-                    "\n[peers.bootstrap-local]\nnode_id = {node_id}\nnode_name = {node_name}\ntrust = \"ssh-bootstrap\"\n{control}{transport}",
-                    node_id = toml_quote(node_id),
-                )
-            })
-            .unwrap_or_default();
-    format!(
-        r#"set -eu
+    match remote_os {
+        cli::RemoteOs::Windows => format!(
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; $home=[Environment]::GetFolderPath('UserProfile'); $dir=Join-Path $home '.ssh_proxy'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $config=Join-Path $dir 'config.toml'; $nodeId=''; $nodeName=\\\"$env:USERNAME@$env:COMPUTERNAME\\\"; if (Test-Path -LiteralPath $config) {{ Get-Content -LiteralPath $config | ForEach-Object {{ if ($_ -match '^node_id = \\\\\\\"([^\\\\\\\"]+)\\\\\\\"') {{ $nodeId=$Matches[1] }}; if ($_ -match '^node_name = \\\\\\\"([^\\\\\\\"]+)\\\\\\\"') {{ $nodeName=$Matches[1] }} }} }}; Write-Output \\\"transport=127.0.0.1:{transport_port}\\\"; Write-Output \\\"control=127.0.0.1:{control_port}\\\"; Write-Output \\\"node_id=$nodeId\\\"; Write-Output \\\"node_name=$nodeName\\\"; Write-Output \\\"config=$config\\\"\"",
+            transport_port = preferred_transport.port(),
+            control_port = preferred_control.port(),
+        ),
+        cli::RemoteOs::Unix | cli::RemoteOs::Auto => format!(
+            r#"set -eu
 mkdir -p "$HOME/.ssh_proxy"
 is_free() {{
   port="$1"
@@ -172,86 +150,43 @@ if [ -f "$config_file" ]; then
 fi
 node_name="$(id -un 2>/dev/null || printf unknown)@$(hostname 2>/dev/null || printf unknown)"
 node_id=""
-if command -v od >/dev/null 2>&1; then
-  node_id="spx-$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
-fi
-if [ -z "$node_id" ]; then
-  node_id="spx-$(date +%s)-$$"
-fi
 if [ -n "$existing_node_id" ]; then node_id="$existing_node_id"; fi
 if [ -n "$existing_node_name" ]; then node_name="$existing_node_name"; fi
-created_at_unix="$(date +%s 2>/dev/null || printf 0)"
-if [ -f "$config_file" ]; then
-  cp "$config_file" "$HOME/.ssh_proxy/config.toml.bak" 2>/dev/null || true
-fi
-cat > "$config_file" <<EOF
-[identity]
-node_id = "$node_id"
-node_name = "$node_name"
-secret = {token}
-
-[daemon]
-control_endpoint = "tcp://$control"
-transport_listen = "$transport"
-token = {token}
-route_autostart = true
-
-[daemon.token_metadata]
-created_at_unix = $created_at_unix
-scope = "daemon-control-transport"
-{peer_table}
-EOF
-chmod 600 "$config_file" 2>/dev/null || true
-cat > "$HOME/.ssh_proxy/peer_state.json" <<EOF
-{{"schema":"ssh_proxy_peer_state.v1","state":"configured","service_manager":"pending","transport":"$transport","control":"tcp://$control","updated_at_unix":$created_at_unix}}
-EOF
-cat > "$HOME/.ssh_proxy/install_report.json" <<EOF
-{{"schema":"ssh_proxy_remote_install.v1","state":"configured","phase":"write_config","service_manager":"pending","updated_at_unix":$created_at_unix}}
-EOF
-cat > "$HOME/.ssh_proxy/health.json" <<EOF
-{{"schema":"ssh_proxy_peer_health.v1","state":"starting","transport":"$transport","control":"tcp://$control","updated_at_unix":$created_at_unix}}
-EOF
-[ -f "$HOME/.ssh_proxy/routes.json" ] || printf '{{"version":1,"routes":[]}}\n' > "$HOME/.ssh_proxy/routes.json"
 printf 'transport=%s\ncontrol=%s\nnode_id=%s\nnode_name=%s\nconfig=%s\n' "$transport" "$control" "$node_id" "$node_name" "$config_file"
 "#,
-        transport_port = preferred_transport.port(),
-        control_port = preferred_control.port(),
-        token = toml_quote(token),
-        peer_table = peer_table
-    )
+            transport_port = preferred_transport.port(),
+            control_port = preferred_control.port(),
+        ),
+    }
 }
 
-fn remote_write_config_powershell_command(
-    preferred_transport: SocketAddr,
-    preferred_control: SocketAddr,
-    token: &str,
-    local_node_id: Option<&str>,
-    local_node_name: Option<&str>,
-    local_control_endpoint: Option<&str>,
-    local_transport: Option<SocketAddr>,
+pub(super) fn remote_write_peer_file_command_for_os(
+    file: RemotePeerFile,
+    remote_os: cli::RemoteOs,
 ) -> String {
-    let token = ps_single_quote(token);
-    let peer_table = local_node_id
-        .map(|node_id| {
-            let node_name = local_node_name.unwrap_or("local");
-            let control = local_control_endpoint
-                .map(|value| format!("control_endpoint = {value:?}`n"))
-                .unwrap_or_default();
-            let transport = local_transport
-                .map(|addr| format!("transport = {:?}`n", addr.to_string()))
-                .unwrap_or_default();
+    let name = file.file_name();
+    match remote_os {
+        cli::RemoteOs::Windows => {
+            let preserve_routes = if file.is_routes() {
+                "if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $tmp -Force; exit 0 }; "
+            } else {
+                ""
+            };
             format!(
-                "`n[peers.bootstrap-local]`nnode_id = {node_id:?}`nnode_name = {node_name:?}`ntrust = \"ssh-bootstrap\"`n{control}{transport}"
+                "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; $home=[Environment]::GetFolderPath('UserProfile'); $dir=Join-Path $home '.ssh_proxy'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $p=Join-Path $dir '{name}'; $tmp=Join-Path $dir ('{name}.tmp.'+[Guid]::NewGuid().ToString('N')); $fs=[IO.File]::Open($tmp,'CreateNew','Write','None'); [Console]::OpenStandardInput().CopyTo($fs); $fs.Close(); {preserve_routes}Move-Item -LiteralPath $tmp -Destination $p -Force\""
             )
-        })
-        .unwrap_or_default();
-    format!(
-        "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; $home=[Environment]::GetFolderPath('UserProfile'); $dir=Join-Path $home '.ssh_proxy'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $transport='127.0.0.1:{transport_port}'; $control='127.0.0.1:{control_port}'; $config=Join-Path $dir 'config.toml'; $nodeId='spx-'+[Guid]::NewGuid().ToString('N'); $nodeName=\\\"$env:USERNAME@$env:COMPUTERNAME\\\"; $created=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); $token={token}; $content=\\\"[identity]`nnode_id = \\\\\\\"$nodeId\\\\\\\"`nnode_name = \\\\\\\"$nodeName\\\\\\\"`nsecret = \\\\\\\"$token\\\\\\\"`n`n[daemon]`ncontrol_endpoint = \\\\\\\"tcp://$control\\\\\\\"`ntransport_listen = \\\\\\\"$transport\\\\\\\"`ntoken = \\\\\\\"$token\\\\\\\"`nroute_autostart = true`n`n[daemon.token_metadata]`ncreated_at_unix = $created`nscope = \\\\\\\"daemon-control-transport\\\\\\\"`n{peer_table}\\\"; Set-Content -LiteralPath $config -Value $content -Encoding UTF8; $peerState=Join-Path $dir 'peer_state.json'; $install=Join-Path $dir 'install_report.json'; $health=Join-Path $dir 'health.json'; $routes=Join-Path $dir 'routes.json'; Set-Content -LiteralPath $peerState -Value \\\"{{`\\\\\\\"schema`\\\\\\\":`\\\\\\\"ssh_proxy_peer_state.v1`\\\\\\\",`\\\\\\\"state`\\\\\\\":`\\\\\\\"configured`\\\\\\\",`\\\\\\\"service_manager`\\\\\\\":`\\\\\\\"pending`\\\\\\\",`\\\\\\\"transport`\\\\\\\":`\\\\\\\"$transport`\\\\\\\",`\\\\\\\"control`\\\\\\\":`\\\\\\\"tcp://$control`\\\\\\\",`\\\\\\\"updated_at_unix`\\\\\\\":$created}}\\\"; Set-Content -LiteralPath $install -Value \\\"{{`\\\\\\\"schema`\\\\\\\":`\\\\\\\"ssh_proxy_remote_install.v1`\\\\\\\",`\\\\\\\"state`\\\\\\\":`\\\\\\\"configured`\\\\\\\",`\\\\\\\"phase`\\\\\\\":`\\\\\\\"write_config`\\\\\\\",`\\\\\\\"service_manager`\\\\\\\":`\\\\\\\"pending`\\\\\\\",`\\\\\\\"updated_at_unix`\\\\\\\":$created}}\\\"; Set-Content -LiteralPath $health -Value \\\"{{`\\\\\\\"schema`\\\\\\\":`\\\\\\\"ssh_proxy_peer_health.v1`\\\\\\\",`\\\\\\\"state`\\\\\\\":`\\\\\\\"starting`\\\\\\\",`\\\\\\\"transport`\\\\\\\":`\\\\\\\"$transport`\\\\\\\",`\\\\\\\"control`\\\\\\\":`\\\\\\\"tcp://$control`\\\\\\\",`\\\\\\\"updated_at_unix`\\\\\\\":$created}}\\\"; if (!(Test-Path -LiteralPath $routes)) {{ Set-Content -LiteralPath $routes -Value '{{\\\"version\\\":1,\\\"routes\\\":[]}}' }}; Write-Output \\\"transport=$transport\\\"; Write-Output \\\"control=$control\\\"; Write-Output \\\"node_id=$nodeId\\\"; Write-Output \\\"node_name=$nodeName\\\"; Write-Output \\\"config=$config\\\"\"",
-        transport_port = preferred_transport.port(),
-        control_port = preferred_control.port(),
-        token = token,
-        peer_table = peer_table.replace('"', "`\\\""),
-    )
+        }
+        cli::RemoteOs::Unix | cli::RemoteOs::Auto => {
+            let preserve_routes = if file.is_routes() {
+                "[ -f \"$p\" ] && { rm -f \"$tmp\"; exit 0; }; "
+            } else {
+                ""
+            };
+            format!(
+                "set -eu; mkdir -p \"$HOME/.ssh_proxy\"; p=\"$HOME/.ssh_proxy/{name}\"; tmp=\"$p.tmp.$$\"; umask 077; cat > \"$tmp\"; {preserve_routes}if [ -f \"$p\" ] && [ \"{name}\" = \"config.toml\" ]; then cp \"$p\" \"$HOME/.ssh_proxy/config.toml.bak\" 2>/dev/null || true; fi; mv \"$tmp\" \"$p\"; chmod 600 \"$p\" 2>/dev/null || true"
+            )
+        }
+    }
 }
 
 pub(super) fn remote_systemd_install_command(
@@ -476,10 +411,6 @@ fn xml_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn ps_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 fn windows_cmd_quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
 }
@@ -497,11 +428,6 @@ fn windows_extra_args(args: &cli::InstallRemoteArgs) -> String {
 
 pub(super) fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-pub(super) fn toml_quote(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 #[cfg(test)]
@@ -567,6 +493,41 @@ mod tests {
 
         assert!(command.contains("--token 'secret token'"), "{command}");
         assert!(command.contains(" send '"), "{command}");
+    }
+
+    #[test]
+    fn remote_config_write_uses_stdin_file_upload_contract() {
+        let command =
+            remote_write_peer_file_command_for_os(RemotePeerFile::Config, cli::RemoteOs::Unix);
+
+        assert!(command.contains("cat > \"$tmp\""), "{command}");
+        assert!(command.contains("config.toml.bak"), "{command}");
+        assert!(!command.contains("[identity]"), "{command}");
+        assert!(!command.contains("node_id ="), "{command}");
+    }
+
+    #[test]
+    fn remote_routes_write_preserves_existing_routes_file() {
+        let command =
+            remote_write_peer_file_command_for_os(RemotePeerFile::Routes, cli::RemoteOs::Unix);
+
+        assert!(
+            command.contains("[ -f \"$p\" ] && { rm -f \"$tmp\"; exit 0; }"),
+            "{command}"
+        );
+    }
+
+    #[test]
+    fn remote_resolve_defaults_only_reports_runtime_values() {
+        let command = remote_resolve_peer_defaults_command(
+            "127.0.0.1:19080".parse().unwrap(),
+            "127.0.0.1:19081".parse().unwrap(),
+            cli::RemoteOs::Unix,
+        );
+
+        assert!(command.contains("pick_port 19080"), "{command}");
+        assert!(command.contains("printf 'transport=%s"), "{command}");
+        assert!(!command.contains("cat > \"$config_file\""), "{command}");
     }
 
     #[test]

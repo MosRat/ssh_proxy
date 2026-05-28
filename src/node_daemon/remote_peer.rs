@@ -2,12 +2,12 @@ use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{cli, deploy, repair};
+use crate::{cli, deploy, peer_lifecycle, repair};
 
 use super::{
     NodeManager, NodeRequest,
     jobs::{JobPhase, JobRecord, JobState},
-    proxy_session::{ProxySessionSpec, SshTargetSpec},
+    proxy_session::ProxySessionSpec,
     response_line,
     state::PeerStatusRecord,
 };
@@ -116,38 +116,7 @@ impl NodeManager {
         &self,
         spec: &ProxySessionSpec,
     ) -> Result<cli::InstallRemoteArgs> {
-        let ssh = spec.ssh.as_ref();
-        let mut args = cli::InstallRemoteArgs {
-            target: spec.target.clone(),
-            ssh_args: ssh.map(ssh_args).unwrap_or_default(),
-            ssh_command: None,
-            user: ssh.and_then(|ssh| ssh.user.clone()),
-            port: ssh.and_then(|ssh| ssh.port),
-            identity: ssh.map(|ssh| ssh.identity.clone()).unwrap_or_default(),
-            config: ssh.and_then(|ssh| ssh.config.clone()),
-            known_hosts: ssh.and_then(|ssh| ssh.known_hosts.clone()),
-            accept_new: ssh.is_some_and(|ssh| ssh.accept_new),
-            insecure_ignore_host_key: false,
-            jump: ssh.map(|ssh| ssh.jump.clone()).unwrap_or_default(),
-            remote_path: None,
-            remote_bin: None,
-            remote_os: cli::RemoteOs::Auto,
-            remote_token: None,
-            remote_tcp: "127.0.0.1:19080".parse().expect("static socket addr"),
-            remote_control: "127.0.0.1:19081".parse().expect("static socket addr"),
-            local_node_id: None,
-            local_node_name: None,
-            local_control_endpoint: None,
-            local_transport: None,
-            remote_node_id: None,
-            remote_node_name: None,
-            remote_tls_transport: None,
-            remote_quic_transport: None,
-            remote_tls_cert: None,
-            remote_tls_key: None,
-            remote_tls_client_ca: None,
-            persist: cli::PersistMode::Auto,
-        };
+        let mut args = peer_lifecycle::spec::install_args_from_proxy_session(None, spec)?;
         self.apply_daemon_peer_defaults(&mut args, Some(&spec.target))
             .await?;
         Ok(args)
@@ -158,37 +127,7 @@ impl NodeManager {
         bootstrap: cli::PeerBootstrapArgs,
         alias: &str,
     ) -> Result<cli::InstallRemoteArgs> {
-        let mut args = cli::InstallRemoteArgs {
-            target: bootstrap.target,
-            ssh_args: bootstrap.ssh_args,
-            ssh_command: None,
-            user: bootstrap.user,
-            port: bootstrap.port,
-            identity: bootstrap.identity,
-            config: bootstrap.config,
-            known_hosts: bootstrap.known_hosts,
-            accept_new: bootstrap.accept_new,
-            insecure_ignore_host_key: bootstrap.insecure_ignore_host_key,
-            jump: bootstrap.jump,
-            remote_path: bootstrap.remote_path,
-            remote_bin: bootstrap.remote_bin,
-            remote_os: bootstrap.remote_os,
-            remote_token: bootstrap.remote_token,
-            remote_tcp: bootstrap.remote_tcp,
-            remote_control: bootstrap.remote_control,
-            local_node_id: None,
-            local_node_name: None,
-            local_control_endpoint: None,
-            local_transport: None,
-            remote_node_id: None,
-            remote_node_name: None,
-            remote_tls_transport: None,
-            remote_quic_transport: None,
-            remote_tls_cert: None,
-            remote_tls_key: None,
-            remote_tls_client_ca: None,
-            persist: cli::PersistMode::Auto,
-        };
+        let mut args = peer_lifecycle::spec::install_args_from_peer_bootstrap(bootstrap);
         self.apply_daemon_peer_defaults(&mut args, Some(alias))
             .await?;
         Ok(args)
@@ -653,13 +592,6 @@ fn remote_transport_protocols(result: &deploy::RemoteInstallResult) -> Vec<Strin
     }
     protocols.push("plain-tcp".to_string());
     protocols
-}
-
-fn ssh_args(ssh: &SshTargetSpec) -> Vec<String> {
-    ssh.host_name
-        .as_deref()
-        .map(|host_name| vec!["-o".to_string(), format!("HostName={host_name}")])
-        .unwrap_or_default()
 }
 
 fn value_hash(value: &Value) -> String {

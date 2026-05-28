@@ -191,7 +191,7 @@ impl SshTargetSpec {
             && !self.accept_new
     }
 
-    pub(super) fn ssh_args(&self) -> Vec<String> {
+    pub(crate) fn ssh_args(&self) -> Vec<String> {
         match self.host_name.as_deref() {
             Some(host_name) => vec!["-o".to_string(), format!("HostName={host_name}")],
             None => Vec::new(),

@@ -1,4 +1,7 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::SocketAddr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -7,7 +10,7 @@ use tokio::{
     time::{self, Instant},
 };
 
-use crate::{cli, config, node_daemon, ssh_client};
+use crate::{cli, config, node_daemon, peer_lifecycle, ssh_client};
 
 mod helper;
 mod remote_commands;
@@ -1050,17 +1053,14 @@ async fn apply_remote_auto_defaults(
     }
     let token = args.remote_token.as_deref().unwrap_or_default();
     let output = client
-        .exec_output(remote_write_config_command_for_os(
+        .exec_output(remote_resolve_peer_defaults_command(
             args.remote_tcp,
             args.remote_control,
-            token,
-            args.local_node_id.as_deref(),
-            args.local_node_name.as_deref(),
-            args.local_control_endpoint.as_deref(),
-            args.local_transport,
             args.remote_os,
         ))
         .await?;
+    let mut resolved_node_id = None;
+    let mut resolved_node_name = None;
     for line in output.lines() {
         if let Some(value) = line.strip_prefix("transport=") {
             args.remote_tcp = value
@@ -1071,12 +1071,71 @@ async fn apply_remote_auto_defaults(
                 .parse()
                 .with_context(|| format!("invalid remote control address {value:?}"))?;
         } else if let Some(value) = line.strip_prefix("node_id=") {
-            args.remote_node_id = Some(value.to_string());
+            if !value.trim().is_empty() {
+                resolved_node_id = Some(value.to_string());
+            }
         } else if let Some(value) = line.strip_prefix("node_name=") {
-            args.remote_node_name = Some(value.to_string());
+            if !value.trim().is_empty() {
+                resolved_node_name = Some(value.to_string());
+            }
         }
     }
+    let node_id = args
+        .remote_node_id
+        .clone()
+        .or(resolved_node_id)
+        .map(Ok)
+        .unwrap_or_else(peer_lifecycle::spec::generated_remote_node_id)?;
+    let node_name = args
+        .remote_node_name
+        .clone()
+        .or(resolved_node_name)
+        .unwrap_or_else(|| args.target.clone());
+    let files =
+        peer_lifecycle::config::materialize_peer_config(&peer_lifecycle::config::PeerConfigInput {
+            node_id: node_id.clone(),
+            node_name: node_name.clone(),
+            token: token.to_string(),
+            transport: args.remote_tcp,
+            control: args.remote_control,
+            local_node_id: args.local_node_id.clone(),
+            local_node_name: args.local_node_name.clone(),
+            local_control_endpoint: args.local_control_endpoint.clone(),
+            local_transport: args.local_transport,
+            service_manager: "pending".to_string(),
+            updated_at_unix: now_unix(),
+        });
+    for (file, bytes) in [
+        (RemotePeerFile::Config, files.config_toml.into_bytes()),
+        (
+            RemotePeerFile::PeerState,
+            files.peer_state_json.into_bytes(),
+        ),
+        (
+            RemotePeerFile::InstallReport,
+            files.install_report_json.into_bytes(),
+        ),
+        (RemotePeerFile::Health, files.health_json.into_bytes()),
+        (RemotePeerFile::Routes, files.routes_json.into_bytes()),
+    ] {
+        client
+            .exec_upload(
+                remote_write_peer_file_command_for_os(file, args.remote_os),
+                bytes,
+            )
+            .await
+            .with_context(|| format!("failed to write remote peer {}", file.file_name()))?;
+    }
+    args.remote_node_id = Some(node_id);
+    args.remote_node_name = Some(node_name);
     Ok(())
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
