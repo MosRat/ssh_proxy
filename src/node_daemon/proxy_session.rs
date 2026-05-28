@@ -925,7 +925,17 @@ fn proxy_session_accepted_response(
 }
 
 fn proxy_session_specs_match(left: &ProxySessionSpec, right: &ProxySessionSpec) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    normalize_proxy_session_spec_for_live_reuse(&mut left);
+    normalize_proxy_session_spec_for_live_reuse(&mut right);
     serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+}
+
+fn normalize_proxy_session_spec_for_live_reuse(spec: &mut ProxySessionSpec) {
+    if let Some(ssh) = spec.ssh.as_mut() {
+        ssh.identity.clear();
+    }
 }
 
 fn find_route_status(status: &Value, route_id: &str) -> Option<Value> {
@@ -1222,6 +1232,43 @@ mod tests {
         assert_eq!(route.jump, vec!["hub"]);
         assert!(route.accept_new);
         assert_eq!(route.ssh_args, vec!["-o", "HostName=10.10.100.71"]);
+    }
+
+    #[test]
+    fn proxy_session_reuse_ignores_identity_enrichment() {
+        let mut existing = ProxySessionSpec {
+            target: "125".to_string(),
+            workspace_id: Some("wenhongli@172.18.116.125".to_string()),
+            ssh: Some(SshTargetSpec {
+                host_name: Some("172.18.116.125".to_string()),
+                user: Some("wenhongli".to_string()),
+                port: None,
+                identity: Vec::new(),
+                config: Some(PathBuf::from("C:/Users/whl/.ssh/config")),
+                known_hosts: Some(PathBuf::from("C:/Users/whl/.ssh/known_hosts")),
+                jump: Vec::new(),
+                accept_new: true,
+            }),
+            workspace_paths: Vec::new(),
+            local_proxy: "http://127.0.0.1:10808/".to_string(),
+            remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
+            remote_port_policy: RemotePortPolicy {
+                preferred: 17890,
+                auto_pick: true,
+            },
+            connect_mode: cli::RouteConnectMode::ReverseLink,
+            apply_policy: ApplyPolicy::default(),
+        };
+        let mut enriched = existing.clone();
+        enriched.ssh.as_mut().unwrap().identity = vec![
+            PathBuf::from("C:/Users/whl/.ssh/id_rsa"),
+            PathBuf::from("C:/Users/whl/.ssh/id_ed25519"),
+        ];
+
+        assert!(proxy_session_specs_match(&existing, &enriched));
+
+        existing.remote_port_policy.preferred = 17891;
+        assert!(!proxy_session_specs_match(&existing, &enriched));
     }
 
     #[test]

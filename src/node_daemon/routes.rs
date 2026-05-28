@@ -791,6 +791,19 @@ fn route_task_matches(
 }
 
 fn route_specs_match(left: &RouteSpec, right: &RouteSpec) -> bool {
+    match (left, right) {
+        (RouteSpec::Reverse { reverse: left }, RouteSpec::Reverse { reverse: right }) => {
+            reverse_route_specs_match(left, right)
+        }
+        _ => serde_json::to_value(left).ok() == serde_json::to_value(right).ok(),
+    }
+}
+
+fn reverse_route_specs_match(left: &cli::ReverseTaskArgs, right: &cli::ReverseTaskArgs) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.identity.clear();
+    right.identity.clear();
     serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
 }
 
@@ -861,6 +874,59 @@ mod tests {
             no_reconnect: false,
             control_listen: None,
         }
+    }
+
+    fn reverse_args() -> cli::ReverseTaskArgs {
+        cli::ReverseTaskArgs {
+            target: "125".to_string(),
+            remote_listen: "127.0.0.1:17890".parse().unwrap(),
+            tcp_target: None,
+            ssh_args: vec!["-o".to_string(), "HostName=172.18.116.125".to_string()],
+            user: Some("wenhongli".to_string()),
+            port: None,
+            identity: Vec::new(),
+            config: Some("C:/Users/whl/.ssh/config".into()),
+            known_hosts: Some("C:/Users/whl/.ssh/known_hosts".into()),
+            accept_new: true,
+            insecure_ignore_host_key: false,
+            jump: Vec::new(),
+            remote_path: None,
+            remote_bin: None,
+            deploy: cli::DeployMode::Auto,
+            remote_os: cli::RemoteOs::Auto,
+            egress_proxy: Some("http://127.0.0.1:10808/".to_string()),
+            reconnect_delay_secs: 5,
+            reconnect_max_delay_secs: 60,
+            connect_timeout_secs: 30,
+            transport_pool_source: Some("fixed".to_string()),
+            transport_pool_reason: Some("reverse-link test".to_string()),
+            no_reconnect: false,
+        }
+    }
+
+    #[test]
+    fn reverse_route_match_ignores_identity_enrichment() {
+        let mut left = reverse_args();
+        let mut right = left.clone();
+        right.identity = vec![
+            "C:/Users/whl/.ssh/id_rsa".into(),
+            "C:/Users/whl/.ssh/id_ed25519".into(),
+        ];
+
+        assert!(route_specs_match(
+            &RouteSpec::Reverse {
+                reverse: left.clone()
+            },
+            &RouteSpec::Reverse {
+                reverse: right.clone()
+            },
+        ));
+
+        left.remote_listen = "127.0.0.1:17891".parse().unwrap();
+        assert!(!route_specs_match(
+            &RouteSpec::Reverse { reverse: left },
+            &RouteSpec::Reverse { reverse: right },
+        ));
     }
 
     #[test]
