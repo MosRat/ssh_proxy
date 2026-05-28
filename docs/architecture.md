@@ -47,6 +47,11 @@ The implementation keeps platform differences behind small adapters:
   or Rust SSH exec/upload/direct-tcpip.
 - Service providers render platform operations for Windows SCM, Windows user
   scheduled tasks, systemd, launchd, and the managed nohup supervisor.
+- Remote install no longer executes service-manager commands as an ad hoc SSH
+  call. `install_remote` builds a `PeerLifecycleSpec(remote_peer)` and runs the
+  provider command plan through `SshExecutor` and the lifecycle workflow, so
+  command failure, phase reporting, and redaction use the same path as daemon
+  jobs.
 - Rust materializes peer `config.toml`, `peer_state.json`,
   `install_report.json`, `health.json`, and `routes.json`; remote shell usage is
   limited to minimal file writes and platform service commands.
@@ -129,6 +134,10 @@ Normal transport preference is:
 8. Explicit emergency external SSH only when the daemon reports why it is required.
 
 OpenSSH subprocess fallback is not part of the normal VS Code path.
+
+Route runtime metadata uses the shared transport helpers for transport names,
+direct transport policy, SSH mode labels, and SSH data-plane reasons. The daemon
+does not maintain a second copy of those user-facing decisions.
 
 Remote peer service management follows the local daemon model where possible:
 Linux prefers user systemd and falls back to a managed nohup supervisor; macOS

@@ -10,6 +10,9 @@ rendering, health classification, elevation requirements, and rollback hints.
 Providers also feed `PeerLifecycleSpec` and `PeerLifecycleReport`, so local
 daemon reports and remote peer reports use the same role, scope, provider, phase,
 blocker, and recovery fields.
+Remote install commands are executed through the lifecycle workflow rather than
+direct SSH status calls, which keeps provider failures, lifecycle JSON, and
+doctor/status redaction on one path.
 The same contract covers:
 
 - Windows system daemon through `windows-service` and the elevated install worker.

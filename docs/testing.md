@@ -26,9 +26,10 @@ long-lived local daemon/proxy processes and binds ephemeral ports.
 Add targeted Rust tests instead of the full suite when only one subsystem moved:
 
 - peer lifecycle schema/provider/config: `cargo test --bin ssh_proxy peer_lifecycle`;
+- remote install lifecycle execution: `cargo test --bin ssh_proxy deploy`;
 - remote peer file command rendering: `cargo test --bin ssh_proxy remote_config_write`;
 - local service lifecycle reporting: `cargo test --bin ssh_proxy service`;
-- transport selection policy: `cargo test --bin ssh_proxy route::tests`;
+- route transport decisions and daemon route metadata: `cargo test --bin ssh_proxy routes`;
 - repair/report schema: `cargo test --bin ssh_proxy repair diagnostics`;
 - extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
 
