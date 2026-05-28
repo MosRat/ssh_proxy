@@ -63,11 +63,12 @@ function parseSshTargetConfig(value: unknown): SshTargetConfig | undefined {
   const config = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+  const identityFiles = normalizePathList(config?.IdentityFile ?? config?.identityFile);
   const result: SshTargetConfig = {
     hostName: stringify(config?.HostName ?? config?.hostname),
     user: stringify(config?.User ?? config?.user),
     port: parsePort(config?.Port ?? config?.port),
-    identityFiles: normalizePathList(config?.IdentityFile ?? config?.identityFile),
+    identityFiles: identityFiles.length > 0 ? identityFiles : defaultIdentityFiles(),
     configFile: firstExistingPath([
       stringify(config?.ConfigFile ?? config?.configFile),
       vscode.workspace.getConfiguration('remote.SSH').get<string>('configFile', ''),
@@ -120,6 +121,20 @@ function firstExistingPath(candidates: Array<string | undefined>): string | unde
     }
   }
   return undefined;
+}
+
+function defaultIdentityFiles(): string[] {
+  return [
+    'id_rsa',
+    'id_ecdsa',
+    'id_ecdsa_sk',
+    'id_ed25519',
+    'id_ed25519_sk',
+    'id_xmss',
+    'id_dsa',
+  ]
+    .map((name) => path.join(os.homedir(), '.ssh', name))
+    .filter((candidate) => fs.existsSync(candidate));
 }
 
 function expandHome(value: string): string {

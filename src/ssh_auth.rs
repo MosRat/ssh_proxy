@@ -10,7 +10,7 @@ use russh::{
 };
 use tracing::{debug, info, warn};
 
-use crate::ssh_client::{ClientHandler, Target};
+use crate::ssh_client::{ClientHandler, Target, openssh_default_identity_candidates};
 
 pub(crate) async fn authenticate(
     session: &mut client::Handle<ClientHandler>,
@@ -152,8 +152,8 @@ fn default_identities() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
-    ["id_ed25519", "id_ecdsa", "id_rsa"]
+    openssh_default_identity_candidates(&home)
         .into_iter()
-        .map(|name| home.join(".ssh").join(name))
+        .filter(|path| path.exists())
         .collect()
 }

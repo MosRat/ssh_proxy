@@ -497,6 +497,7 @@ fn resolve_target(
     } else {
         known_hosts_arg.clone()
     };
+    let config_home = config_arg.as_deref().and_then(config_home_from_path);
     let mut resolved = Target {
         alias: host_part.clone(),
         host: host_part,
@@ -522,6 +523,7 @@ fn resolve_target(
     if !identities_arg.is_empty() {
         resolved.identities = identities_arg;
     }
+    add_config_home_default_identities(&mut resolved, config_home.as_deref());
     let jump_specs = if jump_args.is_empty() {
         resolved.jump_specs.clone()
     } else {
@@ -807,12 +809,43 @@ fn resolve_jumps(
             if let Some(port) = port_from_target {
                 target.port = port;
             }
+            let config_home = config_path.and_then(config_home_from_path);
+            add_config_home_default_identities(&mut target, config_home.as_deref());
             target.jumps.clear();
             target.jump_specs.clear();
             jumps.push(target);
         }
     }
     Ok(jumps)
+}
+
+fn add_config_home_default_identities(target: &mut Target, config_home: Option<&Path>) {
+    if !target.identities.is_empty() {
+        return;
+    }
+    let Some(home) = config_home else {
+        return;
+    };
+    target.identities.extend(
+        openssh_default_identity_candidates(home)
+            .into_iter()
+            .filter(|path| path.exists()),
+    );
+}
+
+pub(crate) fn openssh_default_identity_candidates(home: &Path) -> Vec<PathBuf> {
+    [
+        "id_rsa",
+        "id_ecdsa",
+        "id_ecdsa_sk",
+        "id_ed25519",
+        "id_ed25519_sk",
+        "id_xmss",
+        "id_dsa",
+    ]
+    .into_iter()
+    .map(|name| home.join(".ssh").join(name))
+    .collect()
 }
 
 #[cfg(test)]
@@ -857,6 +890,67 @@ mod tests {
         assert_eq!(
             config_home_from_path(Path::new("C:/Users/whl/.ssh/config")),
             Some(PathBuf::from("C:/Users/whl"))
+        );
+    }
+
+    #[test]
+    fn uses_config_home_default_identity_when_host_has_no_identity_file() {
+        let base = std::env::temp_dir().join(format!(
+            "ssh_proxy-config-home-identity-{}",
+            std::process::id()
+        ));
+        let home = base.join("home");
+        let ssh_dir = home.join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).unwrap();
+        let config_path = ssh_dir.join("config");
+        let identity_path = ssh_dir.join("id_rsa");
+        std::fs::write(
+            &config_path,
+            "Host 125\n  HostName 172.18.116.125\n  User wenhongli\n",
+        )
+        .unwrap();
+        std::fs::write(&identity_path, "not-a-real-key").unwrap();
+
+        let target = resolve_target(
+            "125",
+            &[],
+            None,
+            None,
+            Vec::new(),
+            Some(config_path),
+            None,
+            false,
+            false,
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(target.host, "172.18.116.125");
+        assert_eq!(target.user, "wenhongli");
+        assert_eq!(target.identities, vec![identity_path]);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn openssh_default_identity_order_matches_common_clients() {
+        let home = Path::new("C:/Users/whl");
+        assert_eq!(
+            openssh_default_identity_candidates(home),
+            vec![
+                PathBuf::from("C:/Users/whl").join(".ssh").join("id_rsa"),
+                PathBuf::from("C:/Users/whl").join(".ssh").join("id_ecdsa"),
+                PathBuf::from("C:/Users/whl")
+                    .join(".ssh")
+                    .join("id_ecdsa_sk"),
+                PathBuf::from("C:/Users/whl")
+                    .join(".ssh")
+                    .join("id_ed25519"),
+                PathBuf::from("C:/Users/whl")
+                    .join(".ssh")
+                    .join("id_ed25519_sk"),
+                PathBuf::from("C:/Users/whl").join(".ssh").join("id_xmss"),
+                PathBuf::from("C:/Users/whl").join(".ssh").join("id_dsa"),
+            ]
         );
     }
 }
