@@ -81,7 +81,17 @@ impl ServicePlan {
             })
         };
         let token = match args.token {
-            Some(token) => Some(token),
+            Some(token) => {
+                if should_materialize_config {
+                    let token_changed = config.daemon.token.as_deref() != Some(token.as_str());
+                    config.daemon.token = Some(token.clone());
+                    if token_changed || config.daemon.token_metadata.is_none() {
+                        config.daemon.token_metadata =
+                            Some(config::TokenMetadata::new("daemon-control-transport"));
+                    }
+                }
+                Some(token)
+            }
             None if should_materialize_config => Some(config.ensure_daemon_token()?),
             None => config.daemon.token.clone(),
         };

@@ -851,6 +851,27 @@ mod tests {
         .unwrap()
     }
 
+    fn service_args(command: cli::ServiceCommand) -> cli::ServiceArgs {
+        cli::ServiceArgs {
+            scope: cli::ServiceScope::User,
+            control: Some("tcp://127.0.0.1:1".to_string()),
+            transport: Some("127.0.0.1:19080".parse().unwrap()),
+            no_transport: false,
+            token: None,
+            tls_transport: None,
+            quic_transport: None,
+            tls_cert: None,
+            tls_key: None,
+            tls_client_ca: None,
+            report_to: Vec::new(),
+            install_dir: None,
+            no_copy: true,
+            json: false,
+            elevate: false,
+            command,
+        }
+    }
+
     #[tokio::test]
     async fn service_status_summary_is_redacted_and_structured() {
         let plan = status_plan();
@@ -898,6 +919,30 @@ mod tests {
         assert_eq!(
             service_next_action(false, false),
             "install_persistent_service_or_start_session_daemon"
+        );
+    }
+
+    #[test]
+    fn explicit_install_token_is_saved_to_materialized_config() {
+        let mut args = service_args(cli::ServiceCommand::Install);
+        args.token = Some("install-token".to_string());
+
+        let plan = ServicePlan::new(args, config::AppConfig::default()).unwrap();
+        let saved = plan
+            .config_to_save
+            .as_ref()
+            .expect("config should be saved");
+
+        assert_eq!(plan.token.as_deref(), Some("install-token"));
+        assert_eq!(saved.daemon.token.as_deref(), Some("install-token"));
+        assert_eq!(
+            saved
+                .daemon
+                .token_metadata
+                .as_ref()
+                .expect("token metadata")
+                .scope,
+            "daemon-control-transport"
         );
     }
 
