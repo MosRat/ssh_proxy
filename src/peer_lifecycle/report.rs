@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::repair;
 
@@ -71,6 +72,7 @@ pub(crate) struct PeerLifecycleReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) retry_after_ms: Option<u64>,
     pub(crate) recovery_attempts: u32,
+    pub(crate) updated_at_unix: u64,
 }
 
 impl PeerLifecycleReport {
@@ -85,12 +87,20 @@ impl PeerLifecycleReport {
             last_error: None,
             retry_after_ms: None,
             recovery_attempts: 0,
+            updated_at_unix: now_unix(),
         }
     }
 
     pub(crate) fn to_redacted_value(&self) -> Value {
         redact_value(&serde_json::to_value(self).unwrap_or_else(|_| Value::Null))
     }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 pub(crate) fn redact_value(value: &Value) -> Value {

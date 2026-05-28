@@ -254,11 +254,14 @@ impl NodeManager {
                         transport_protocols: Vec::new(),
                         service_manager: Some("auto".to_string()),
                         descriptor_hash: None,
-                        install: Some(json!({
-                            "state": "failed",
-                            "phase": "install_service",
-                            "last_error": error,
-                        })),
+                        install: Some(remote_peer_lifecycle_report(
+                            alias,
+                            peer_lifecycle::workflow::PeerLifecyclePhase::Failed,
+                            "auto",
+                            Some(&blocker),
+                            Some(&error),
+                            0,
+                        )),
                         dependency_report: Some(remote_dependency_report()),
                         update_required: false,
                         blocker: Some(blocker.clone()),
@@ -306,10 +309,14 @@ impl NodeManager {
                 transport_protocols: Vec::new(),
                 service_manager: Some("auto".to_string()),
                 descriptor_hash: None,
-                install: Some(json!({
-                    "state": "running",
-                    "phase": phase_name(phase),
-                })),
+                install: Some(remote_peer_lifecycle_report(
+                    alias,
+                    lifecycle_phase_from_job(phase),
+                    "auto",
+                    None,
+                    None,
+                    0,
+                )),
                 dependency_report: Some(remote_dependency_report()),
                 update_required: false,
                 blocker: None,
@@ -514,12 +521,14 @@ fn peer_status_from_descriptor(
         transport_protocols: protocols,
         service_manager: Some(service_manager.to_string()),
         descriptor_hash: Some(value_hash(descriptor)),
-        install: Some(json!({
-            "state": install_state,
-            "phase": install_phase,
-            "service_manager": service_manager,
-            "updated_at_unix": now_unix(),
-        })),
+        install: Some(remote_peer_lifecycle_report(
+            alias,
+            lifecycle_phase_from_install_state(install_state, install_phase),
+            service_manager,
+            None,
+            None,
+            recovery_attempts,
+        )),
         dependency_report: Some(remote_dependency_report()),
         update_required: descriptor
             .get("version")
@@ -606,18 +615,60 @@ fn value_hash(value: &Value) -> String {
     out
 }
 
-fn phase_name(phase: JobPhase) -> &'static str {
+fn lifecycle_phase_from_job(phase: JobPhase) -> peer_lifecycle::workflow::PeerLifecyclePhase {
     match phase {
-        JobPhase::InspectPeerDescriptor => "inspect_descriptor",
-        JobPhase::DependencyCheck => "dependency_check",
-        JobPhase::StageRemotePeer => "stage_binary",
-        JobPhase::WritePeerConfig => "write_config",
-        JobPhase::InstallPeerService => "install_service",
-        JobPhase::StartPeerService => "start_service",
-        JobPhase::PeerHealthProbe => "health_probe",
-        JobPhase::RecordPeer => "record_peer",
-        _ => "remote_peer",
+        JobPhase::InspectPeerDescriptor => {
+            peer_lifecycle::workflow::PeerLifecyclePhase::InspectDescriptor
+        }
+        JobPhase::DependencyCheck => peer_lifecycle::workflow::PeerLifecyclePhase::DependencyCheck,
+        JobPhase::StageRemotePeer => peer_lifecycle::workflow::PeerLifecyclePhase::StageBinary,
+        JobPhase::WritePeerConfig => peer_lifecycle::workflow::PeerLifecyclePhase::WriteConfig,
+        JobPhase::InstallPeerService => {
+            peer_lifecycle::workflow::PeerLifecyclePhase::InstallService
+        }
+        JobPhase::StartPeerService => peer_lifecycle::workflow::PeerLifecyclePhase::StartService,
+        JobPhase::PeerHealthProbe => peer_lifecycle::workflow::PeerLifecyclePhase::HealthProbe,
+        JobPhase::RecordPeer => peer_lifecycle::workflow::PeerLifecyclePhase::Record,
+        JobPhase::Failed => peer_lifecycle::workflow::PeerLifecyclePhase::Failed,
+        _ => peer_lifecycle::workflow::PeerLifecyclePhase::Prepare,
     }
+}
+
+fn lifecycle_phase_from_install_state(
+    install_state: &str,
+    install_phase: &str,
+) -> peer_lifecycle::workflow::PeerLifecyclePhase {
+    if install_state == "healthy" {
+        return peer_lifecycle::workflow::PeerLifecyclePhase::Healthy;
+    }
+    match install_phase {
+        "inspect_descriptor" => peer_lifecycle::workflow::PeerLifecyclePhase::InspectDescriptor,
+        "dependency_check" => peer_lifecycle::workflow::PeerLifecyclePhase::DependencyCheck,
+        "stage_binary" => peer_lifecycle::workflow::PeerLifecyclePhase::StageBinary,
+        "write_config" => peer_lifecycle::workflow::PeerLifecyclePhase::WriteConfig,
+        "install_service" => peer_lifecycle::workflow::PeerLifecyclePhase::InstallService,
+        "start_service" => peer_lifecycle::workflow::PeerLifecyclePhase::StartService,
+        "health_probe" => peer_lifecycle::workflow::PeerLifecyclePhase::HealthProbe,
+        "record_peer" | "record" => peer_lifecycle::workflow::PeerLifecyclePhase::Record,
+        "failed" => peer_lifecycle::workflow::PeerLifecyclePhase::Failed,
+        _ => peer_lifecycle::workflow::PeerLifecyclePhase::Prepare,
+    }
+}
+
+fn remote_peer_lifecycle_report(
+    alias: &str,
+    phase: peer_lifecycle::workflow::PeerLifecyclePhase,
+    service_manager: &str,
+    blocker: Option<&str>,
+    last_error: Option<&str>,
+    recovery_attempts: u32,
+) -> Value {
+    let mut report = peer_lifecycle::report::PeerLifecycleReport::new(alias, phase);
+    report.service_manager = Some(service_manager.to_string());
+    report.recovery_attempts = recovery_attempts;
+    report.blocker = blocker.map(ToOwned::to_owned);
+    report.last_error = last_error.map(ToOwned::to_owned);
+    report.to_redacted_value()
 }
 
 fn sanitize_key(value: &str) -> String {
