@@ -169,10 +169,8 @@ mod tests {
 
     #[test]
     fn local_file_write_preserves_existing_when_requested() {
-        let dir = std::env::temp_dir().join(format!(
-            "ssh_proxy-local-executor-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ssh_proxy-local-executor-{}", std::process::id()));
         let path = dir.join("config.toml");
         write_local_file(&path, b"first", false).unwrap();
         write_local_file(&path, b"second", true).unwrap();

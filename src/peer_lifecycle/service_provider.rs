@@ -132,9 +132,7 @@ pub(crate) fn remote_service_install_plan(
         cli::PersistMode::Systemd => commands::remote_systemd_install_command(remote_path, args),
         cli::PersistMode::Nohup => commands::remote_nohup_start_command(remote_path, args, true),
         cli::PersistMode::Launchd => commands::remote_launchd_install_command(remote_path, args),
-        cli::PersistMode::Schtasks => {
-            commands::remote_schtasks_install_command(remote_path, args)
-        }
+        cli::PersistMode::Schtasks => commands::remote_schtasks_install_command(remote_path, args),
     };
     let reported_service_manager = match args.persist {
         cli::PersistMode::None => "none",

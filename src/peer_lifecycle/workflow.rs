@@ -2,11 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use anyhow::{Context, Result, bail};
 
-use super::{
-    executor::PeerExecutor,
-    report::PeerLifecycleReport,
-    spec::PeerLifecycleSpec,
-};
+use super::{executor::PeerExecutor, report::PeerLifecycleReport, spec::PeerLifecycleSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -179,13 +175,19 @@ mod tests {
         let result = run_lifecycle_commands(
             &executor,
             &spec,
-            vec![LifecycleCommand::new(PeerLifecyclePhase::HealthProbe, "true")],
+            vec![LifecycleCommand::new(
+                PeerLifecyclePhase::HealthProbe,
+                "true",
+            )],
         )
         .await
         .unwrap();
 
         assert_eq!(result.report.state, "healthy");
-        assert_eq!(result.phase_reports.last().unwrap().phase, PeerLifecyclePhase::Healthy);
+        assert_eq!(
+            result.phase_reports.last().unwrap().phase,
+            PeerLifecyclePhase::Healthy
+        );
     }
 
     #[tokio::test]
@@ -210,7 +212,10 @@ mod tests {
         let error = run_lifecycle_commands(
             &executor,
             &spec,
-            vec![LifecycleCommand::new(PeerLifecyclePhase::InstallService, "false")],
+            vec![LifecycleCommand::new(
+                PeerLifecyclePhase::InstallService,
+                "false",
+            )],
         )
         .await
         .unwrap_err();

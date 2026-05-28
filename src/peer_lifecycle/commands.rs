@@ -38,7 +38,10 @@ pub(crate) fn remote_write_peer_artifact_command(
     }
 }
 
-pub(crate) fn remote_auto_install_command(remote_path: &str, args: &cli::InstallRemoteArgs) -> String {
+pub(crate) fn remote_auto_install_command(
+    remote_path: &str,
+    args: &cli::InstallRemoteArgs,
+) -> String {
     format!(
         "set -eu; if [ \"$(uname -s 2>/dev/null || true)\" = Darwin ] && command -v launchctl >/dev/null 2>&1; then {launchd}; elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then {systemd}; else {nohup}; fi",
         launchd = remote_launchd_install_command(remote_path, args),
@@ -188,11 +191,7 @@ pub(crate) fn node_daemon_extra_args(args: &cli::InstallRemoteArgs) -> String {
     out
 }
 
-pub(crate) fn remote_mark_service_state_command(
-    manager: &str,
-    state: &str,
-    phase: &str,
-) -> String {
+pub(crate) fn remote_mark_service_state_command(manager: &str, state: &str, phase: &str) -> String {
     format!(
         "now=$(date +%s 2>/dev/null || printf 0); mkdir -p \"$HOME/.ssh_proxy\"; cat > \"$HOME/.ssh_proxy/install_report.json\" <<EOF\n{{\"schema\":\"ssh_proxy_remote_install.v1\",\"state\":\"{state}\",\"phase\":\"{phase}\",\"service_manager\":\"{manager}\",\"updated_at_unix\":$now}}\nEOF\ncat > \"$HOME/.ssh_proxy/health.json\" <<EOF\n{{\"schema\":\"ssh_proxy_peer_health.v1\",\"state\":\"{state}\",\"service_manager\":\"{manager}\",\"updated_at_unix\":$now}}\nEOF"
     )
@@ -308,10 +307,8 @@ mod tests {
     fn windows_schtasks_command_uses_user_task() {
         let mut args = install_args(cli::PersistMode::Schtasks);
         args.remote_os = cli::RemoteOs::Windows;
-        let command = remote_schtasks_install_command(
-            r"%LOCALAPPDATA%\ssh_proxy\bin\ssh_proxy.exe",
-            &args,
-        );
+        let command =
+            remote_schtasks_install_command(r"%LOCALAPPDATA%\ssh_proxy\bin\ssh_proxy.exe", &args);
 
         assert!(command.contains("schtasks /Create"));
         assert!(command.contains("windows_schtasks_user"));

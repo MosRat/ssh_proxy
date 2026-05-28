@@ -456,6 +456,9 @@ mod tests {
         assert_eq!(spec.role, PeerLifecycleRole::RemotePeer);
         assert_eq!(spec.platform, PeerLifecyclePlatform::Linux);
         assert_eq!(spec.scope, PeerLifecycleScope::User);
-        assert_eq!(spec.control_endpoint.as_deref(), Some("tcp://127.0.0.1:19081"));
+        assert_eq!(
+            spec.control_endpoint.as_deref(),
+            Some("tcp://127.0.0.1:19081")
+        );
     }
 }
