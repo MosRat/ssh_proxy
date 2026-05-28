@@ -27,9 +27,14 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
 
 - peer lifecycle schema/provider/config: `cargo test --bin ssh_proxy peer_lifecycle`;
 - remote peer file command rendering: `cargo test --bin ssh_proxy remote_config_write`;
+- local service lifecycle reporting: `cargo test --bin ssh_proxy service`;
 - transport selection policy: `cargo test --bin ssh_proxy route::tests`;
 - repair/report schema: `cargo test --bin ssh_proxy repair diagnostics`;
 - extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
+
+Prefer the pure lifecycle/provider tests while editing service managers. They use
+fake executors and command rendering contracts, so they do not install services,
+open long-lived routes, or keep `target/debug/ssh_proxy.exe` locked on Windows.
 
 Run the VS Code tests separately when extension code changes:
 

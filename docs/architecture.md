@@ -40,6 +40,9 @@ prepare -> inspect_descriptor -> dependency_check -> stage_binary
 
 The implementation keeps platform differences behind small adapters:
 
+- `PeerLifecycleSpec` is the shared model for `local_daemon` and `remote_peer`
+  roles; legacy CLI/daemon entrypoints convert into this model before reporting
+  service state.
 - `LocalExecutor` and `SshExecutor` run the same lifecycle against local files
   or Rust SSH exec/upload/direct-tcpip.
 - Service providers render platform operations for Windows SCM, Windows user
@@ -47,6 +50,9 @@ The implementation keeps platform differences behind small adapters:
 - Rust materializes peer `config.toml`, `peer_state.json`,
   `install_report.json`, `health.json`, and `routes.json`; remote shell usage is
   limited to minimal file writes and platform service commands.
+- `PeerLifecycleReport` is reused by local service install reports and remote
+  peer status so doctor/status output has the same state, phase, provider,
+  blocker, retry, and recovery vocabulary.
 
 `service-manager` is useful as an interface reference, but the production path
 keeps the existing `windows-service` + elevated worker transaction until a
@@ -106,8 +112,8 @@ order:
 
 1. Adopt an existing compatible peer descriptor.
 2. Inspect dependency and service-manager capability.
-3. Stage the remote binary and write remote peer config/state.
-4. Install and start the peer service.
+3. Stage the remote binary and materialize peer config/state artifacts.
+4. Install and start the peer service through the shared provider command plan.
 5. Health-check the remote descriptor and transport.
 6. Record local `peers.json` state and continue the proxy session.
 

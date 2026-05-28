@@ -7,6 +7,9 @@ remains a design reference, not a production dependency for v0.3.
 
 Each provider must expose stable manager naming, install/start/stop/status
 rendering, health classification, elevation requirements, and rollback hints.
+Providers also feed `PeerLifecycleSpec` and `PeerLifecycleReport`, so local
+daemon reports and remote peer reports use the same role, scope, provider, phase,
+blocker, and recovery fields.
 The same contract covers:
 
 - Windows system daemon through `windows-service` and the elevated install worker.
