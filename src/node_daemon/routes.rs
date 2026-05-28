@@ -15,7 +15,14 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::{cli, config, controller, peer_lifecycle, quic_native, reverse, ssh_native};
+use crate::{
+    cli, config, controller, quic_native, reverse,
+    route::{
+        direct_transport_policy, direct_transport_policy_reason, remote_transport_name,
+        ssh_data_plane_reason, ssh_mode_name, ssh_mode_reason, tls_peer_auth_mode,
+    },
+    ssh_native,
+};
 
 use super::{NodeManager, NodeRequest, response_line};
 
@@ -166,10 +173,14 @@ impl RouteSpec {
                 "transport_selection_reason": proxy.transport_selection_reason.as_deref().unwrap_or("daemon received an already-materialized forward route task"),
                 "direct_transport_policy": direct_transport_policy(proxy.remote_transport),
                 "direct_transport_policy_reason": direct_transport_policy_reason(proxy.remote_transport),
-                "tls_peer_auth_mode": tls_peer_auth_mode(proxy),
+                "tls_peer_auth_mode": tls_peer_auth_mode(
+                    proxy.remote_transport,
+                    proxy.remote_client_cert.as_ref(),
+                    proxy.remote_client_key.as_ref(),
+                ),
                 "preflight": preflight_metadata(proxy),
                 "decision_chain": runtime_decision_chain(proxy),
-                "ssh_mode": ssh_mode(proxy.remote_transport),
+                "ssh_mode": ssh_mode_name(proxy.remote_transport),
                 "ssh_mode_reason": ssh_mode_reason(proxy.remote_transport),
                 "ssh_data_plane_reason": ssh_data_plane_reason(
                     proxy.remote_transport,
@@ -250,7 +261,11 @@ fn runtime_decision_chain(proxy: &cli::ProxyArgs) -> serde_json::Value {
         "policy": {
             "direct_transport_policy": direct_transport_policy(proxy.remote_transport),
             "direct_transport_policy_reason": direct_transport_policy_reason(proxy.remote_transport),
-            "tls_peer_auth_mode": tls_peer_auth_mode(proxy),
+            "tls_peer_auth_mode": tls_peer_auth_mode(
+                proxy.remote_transport,
+                proxy.remote_client_cert.as_ref(),
+                proxy.remote_client_key.as_ref(),
+            ),
             "ssh_data_plane_reason": ssh_data_plane_reason(
                 proxy.remote_transport,
                 proxy.transport_selection_source.as_deref(),
@@ -281,97 +296,11 @@ fn runtime_decision_chain(proxy: &cli::ProxyArgs) -> serde_json::Value {
     })
 }
 
-fn remote_transport_name(transport: cli::RemoteTransport) -> &'static str {
-    peer_lifecycle::connection::remote_transport_name(transport)
-}
-
-fn direct_transport_policy(transport: cli::RemoteTransport) -> serde_json::Value {
-    match transport {
-        cli::RemoteTransport::TlsTcp => json!("production_direct"),
-        cli::RemoteTransport::PlainTcp => json!("lab_baseline"),
-        cli::RemoteTransport::Quic | cli::RemoteTransport::QuicNative => json!("experimental"),
-        _ => serde_json::Value::Null,
-    }
-}
-
-fn direct_transport_policy_reason(transport: cli::RemoteTransport) -> serde_json::Value {
-    match transport {
-        cli::RemoteTransport::TlsTcp => json!(
-            "TLS/TCP SPX is the production direct baseline because it keeps the stable SPX data plane while adding peer encryption and certificate identity"
-        ),
-        cli::RemoteTransport::PlainTcp => json!(
-            "Plain TCP SPX is a lab or explicitly trusted baseline only; it is not selected as the production default because the data path is not encrypted"
-        ),
-        cli::RemoteTransport::Quic | cli::RemoteTransport::QuicNative => json!(
-            "QUIC direct transport remains experimental until throughput and recovery behavior close the gap with TLS/TCP SPX"
-        ),
-        _ => serde_json::Value::Null,
-    }
-}
-
-fn tls_peer_auth_mode(proxy: &cli::ProxyArgs) -> serde_json::Value {
-    if !matches!(proxy.remote_transport, cli::RemoteTransport::TlsTcp) {
-        return serde_json::Value::Null;
-    }
-    match (
-        proxy.remote_client_cert.is_some(),
-        proxy.remote_client_key.is_some(),
-    ) {
-        (true, true) => json!("mutual_tls"),
-        (false, false) => json!("server_auth"),
-        _ => json!("invalid_client_auth_config"),
-    }
-}
-
 fn workload_hint_name(hint: cli::RouteWorkloadHint) -> &'static str {
     match hint {
         cli::RouteWorkloadHint::Large => "large",
         cli::RouteWorkloadHint::Concurrent => "concurrent",
         cli::RouteWorkloadHint::Mixed => "mixed",
-    }
-}
-
-fn ssh_mode(transport: cli::RemoteTransport) -> serde_json::Value {
-    match transport {
-        cli::RemoteTransport::SshNative => json!("native-direct-tcpip"),
-        cli::RemoteTransport::Tcp => json!("spx-over-ssh-direct"),
-        cli::RemoteTransport::Exec => json!("ssh-exec-helper"),
-        _ => serde_json::Value::Null,
-    }
-}
-
-fn ssh_mode_reason(transport: cli::RemoteTransport) -> serde_json::Value {
-    match transport {
-        cli::RemoteTransport::SshNative => json!(
-            "ssh-native opens russh direct-tcpip channels to each requested target; use it for simple SSH-only local egress because it avoids remote daemon and SPX framed data-plane overhead"
-        ),
-        cli::RemoteTransport::Tcp => json!(
-            "spx-over-ssh-direct opens SSH direct-tcpip to the remote daemon transport and keeps SPX daemon semantics; use it when remote daemon policy, token auth, route restore, or SPX UDP behavior is required"
-        ),
-        cli::RemoteTransport::Exec => json!(
-            "ssh-exec-helper starts a temporary remote helper over SSH; keep it as a compatibility path when no persistent remote daemon transport is available"
-        ),
-        _ => serde_json::Value::Null,
-    }
-}
-
-fn ssh_data_plane_reason(
-    transport: cli::RemoteTransport,
-    selection_source: Option<&str>,
-) -> serde_json::Value {
-    if matches!(selection_source, Some("cli" | "profile")) {
-        return match transport {
-            cli::RemoteTransport::SshNative
-            | cli::RemoteTransport::Tcp
-            | cli::RemoteTransport::Exec => json!("explicit_user_choice"),
-            _ => serde_json::Value::Null,
-        };
-    }
-    match transport {
-        cli::RemoteTransport::SshNative => json!("simple_egress"),
-        cli::RemoteTransport::Tcp => json!("daemon_policy_required"),
-        cli::RemoteTransport::Exec => json!("ssh_exec_compatibility"),
-        _ => serde_json::Value::Null,
     }
 }
 
