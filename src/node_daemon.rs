@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use tokio::{
-    sync::{Mutex, Notify},
+    sync::{Mutex, Notify, oneshot},
     task::JoinHandle,
     time::{self, Duration},
 };
@@ -33,6 +33,8 @@ mod remote_setup;
 mod routes;
 mod state;
 mod transport;
+#[cfg(windows)]
+mod windows_service_runner;
 
 use jobs::JobRegistry;
 use routes::RouteTask;
@@ -75,6 +77,18 @@ pub async fn run(args: cli::NodeArgs, config: config::AppConfig) -> Result<()> {
 }
 
 async fn run_daemon(args: cli::NodeDaemonArgs, config: config::AppConfig) -> Result<()> {
+    #[cfg(windows)]
+    if windows_service_runner::run_if_started_by_scm(args.clone(), config.clone())? {
+        return Ok(());
+    }
+    run_daemon_inner(args, config, None).await
+}
+
+pub(crate) async fn run_daemon_inner(
+    args: cli::NodeDaemonArgs,
+    config: config::AppConfig,
+    external_shutdown: Option<oneshot::Receiver<()>>,
+) -> Result<()> {
     let endpoint = control_socket::ControlEndpoint::parse(&args.control)?;
     let manager = Arc::new(NodeManager::new(args, endpoint.clone(), config)?);
 
@@ -125,7 +139,16 @@ async fn run_daemon(args: cli::NodeDaemonArgs, config: config::AppConfig) -> Res
         "node daemon started"
     );
 
-    manager.shutdown_notified().await;
+    if let Some(external_shutdown) = external_shutdown {
+        tokio::select! {
+            _ = manager.shutdown_notified() => {}
+            _ = external_shutdown => {
+                manager.request_shutdown();
+            }
+        }
+    } else {
+        manager.shutdown_notified().await;
+    }
     for task in tasks {
         task.abort();
     }
@@ -560,7 +583,7 @@ impl NodeManager {
     }
 
     async fn shutdown(&self) -> Result<String> {
-        self.shutdown.store(true, Ordering::Relaxed);
+        self.request_shutdown();
         let mut instances = self.instances.lock().await;
         for (_, handle) in instances.drain() {
             handle.abort();
@@ -571,6 +594,11 @@ impl NodeManager {
         }
         self.shutdown_notify.notify_waiters();
         NodeResponse::ok_message("node shutdown requested").to_line()
+    }
+
+    fn request_shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        self.shutdown_notify.notify_waiters();
     }
 
     async fn shutdown_notified(&self) {
