@@ -149,6 +149,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       this.applyRouteState(proxy, this.snapshot.routeState ?? routeState);
 
       this.statusValue = 'running';
+      this.lastErrorValue = undefined;
       this.changeEmitter.fire();
       if (record?.health) {
         this.output.appendLine(`ssh_proxy route health: ${prettyJson(record.health)}`);
@@ -228,6 +229,11 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     if (state === 'failed' || state === 'cancelled') {
       this.statusValue = 'failed';
       this.lastErrorValue = asString(job?.last_error) ?? asString(record?.last_error) ?? 'ssh_proxy daemon job failed';
+    } else if (state === 'waiting_retry') {
+      this.statusValue = 'starting';
+      this.lastErrorValue = asString(job?.phase) === 'verify_remote_port'
+        ? 'ssh_proxy daemon is waiting for remote handoff'
+        : undefined;
     } else if (state === 'healthy' || record?.health === 'healthy') {
       this.statusValue = 'running';
       this.lastErrorValue = undefined;
@@ -287,7 +293,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
     target: string,
     initialRouteState: SshProxyRouteState,
   ): Promise<void> {
-    const deadline = Date.now() + 60_000;
+    const deadline = Date.now() + 120_000;
     let lastPhase = 'queued';
     let lastError: string | undefined;
     while (Date.now() <= deadline) {
@@ -299,6 +305,13 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       const state = asString(job?.state) ?? asString(record?.health) ?? 'unknown';
       lastPhase = asString(job?.phase) ?? lastPhase;
       lastError = asString(job?.last_error) ?? asString(record?.last_error) ?? lastError;
+      if (state === 'waiting_retry') {
+        this.statusValue = 'starting';
+        if (lastPhase === 'verify_remote_port') {
+          this.lastErrorValue = 'ssh_proxy daemon is waiting for remote handoff';
+        }
+        this.changeEmitter.fire();
+      }
       if (route || record?.remote_url) {
         this.setSnapshot({
           routeState: {

@@ -15,6 +15,37 @@
 
 ## Check
 
+For fast local iteration, run the fast gate:
+
+```powershell
+pwsh -NoProfile -File scripts/check-fast.ps1
+```
+
+The fast gate keeps `SSH_PROXY_ALLOW_MISSING_SIDECAR=1` for non-release Rust
+checks, auto-enables `sccache` when it is installed, temporarily disables the
+dev/test incremental profile for cacheable sccache calls, and always runs
+`cargo check --tests` first.
+
+By default it runs a smoke/core Rust set: handoff unit tests plus one daemon
+route lifecycle integration test. This is the normal edit loop after code
+changes. Add `-Contracts` to include build-contract checks and one CLI
+production-surface test. Add `-Transport` to include a single transport
+data-plane smoke test. Add `-Full` when the smoke set fails, before handoff, or
+before packaging; full mode uses `cargo nextest run --tests` when
+`cargo-nextest` is available and falls back to single-threaded
+`cargo test --tests` otherwise to reduce integration-test port and timing
+noise. Without `sccache`, Cargo keeps using the dev/test incremental profiles.
+It finishes with the VS Code extension test suite. The Unix shell variant is:
+
+```sh
+scripts/check-fast.sh
+```
+
+Unix options mirror PowerShell: `--contracts`, `--transport`, `--full`,
+`--skip-rust`, `--skip-vscode`, `--install-node-modules`, and `--no-sccache`.
+
+For the full local gate, run:
+
 ```powershell
 pwsh -NoProfile -File scripts/check-all.ps1
 ```

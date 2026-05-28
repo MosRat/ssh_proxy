@@ -13,6 +13,7 @@ use tracing::warn;
 use crate::config;
 
 use super::{
+    handoff::HandoffProbeStatus,
     jobs::JobRecord,
     proxy_session::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy, SshTargetSpec},
 };
@@ -47,6 +48,8 @@ pub(super) struct ProxySessionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_error: Option<String>,
     pub(super) remote_setup: RemoteSetupStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) handoff_probe: Option<HandoffProbeStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) route: Option<Value>,
     pub(super) created_at_unix: u64,
@@ -75,6 +78,7 @@ impl ProxySessionRecord {
             next_action: job.next_action.clone(),
             last_error: job.last_error.clone(),
             remote_setup: RemoteSetupStatus::pending(),
+            handoff_probe: None,
             route: None,
             created_at_unix: job.created_at_unix,
             updated_at_unix: job.updated_at_unix,
@@ -511,6 +515,26 @@ impl ProductionState {
         Ok(found)
     }
 
+    pub(super) async fn update_handoff_probe_status(
+        &self,
+        session_id: &str,
+        job_id: &str,
+        status: HandoffProbeStatus,
+    ) -> Result<Option<ProxySessionRecord>> {
+        let mut store = self.sessions.lock().await;
+        let mut found = None;
+        for record in store.sessions.values_mut() {
+            if record.session_id == session_id || record.job_id == job_id {
+                record.handoff_probe = Some(status.clone());
+                record.updated_at_unix = now_unix();
+                found = Some(record.clone());
+                break;
+            }
+        }
+        save_store(&self.sessions_path, &*store)?;
+        Ok(found)
+    }
+
     pub(super) async fn session_by_job(&self, job_id: &str) -> Option<ProxySessionRecord> {
         self.sessions
             .lock()
@@ -672,6 +696,25 @@ mod tests {
         assert_eq!(record.state, "running");
         assert_eq!(record.phase, "ensure_peer");
         assert_eq!(record.health, "starting");
+    }
+
+    #[test]
+    fn proxy_session_record_serializes_handoff_probe() {
+        let spec = spec();
+        let job = JobRecord::new(spec.job_id(), "ensure_proxy_session")
+            .with_target(spec.target.clone())
+            .with_workspace(spec.workspace_id.clone())
+            .with_route(spec.route_id())
+            .with_remote_url(Some(spec.remote_url()))
+            .transition(JobState::WaitingRetry, JobPhase::VerifyRemotePort, 85)
+            .with_retry_after_ms(250);
+        let mut record = ProxySessionRecord::from_spec_and_job(&spec, &job);
+        record.handoff_probe = Some(HandoffProbeStatus::checking());
+
+        let value = record.to_value();
+        assert_eq!(value["handoff_probe"]["source"], "rust_ssh_direct_tcpip");
+        assert_eq!(value["handoff_probe"]["state"], "checking");
+        assert_eq!(value["handoff_probe"]["retry_after_ms"], 250);
     }
 
     #[test]

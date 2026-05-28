@@ -74,6 +74,8 @@ pub(super) struct JobRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) retry_after_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) workspace_id: Option<String>,
@@ -97,6 +99,7 @@ impl JobRecord {
             blocker: None,
             next_action: None,
             last_error: None,
+            retry_after_ms: None,
             target: None,
             workspace_id: None,
             route_id: None,
@@ -113,6 +116,9 @@ impl JobRecord {
         self.updated_at_unix = now_unix();
         if !matches!(state, JobState::Failed) {
             self.last_error = None;
+        }
+        if !matches!(state, JobState::WaitingRetry) {
+            self.retry_after_ms = None;
         }
         self
     }
@@ -142,12 +148,18 @@ impl JobRecord {
         self
     }
 
+    pub(super) fn with_retry_after_ms(mut self, retry_after_ms: u64) -> Self {
+        self.retry_after_ms = Some(retry_after_ms);
+        self
+    }
+
     pub(super) fn failed(mut self, error: impl Into<String>, blocker: Option<String>) -> Self {
         self.state = JobState::Failed;
         self.phase = JobPhase::Failed;
         self.progress = 100;
         self.last_error = Some(error.into());
         self.blocker = blocker;
+        self.retry_after_ms = None;
         self.updated_at_unix = now_unix();
         self
     }
@@ -434,6 +446,20 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].message, "left queued");
+    }
+
+    #[test]
+    fn waiting_retry_jobs_serialize_retry_after_ms() {
+        let waiting = JobRecord::new("proxy:window", "ensure_proxy_session")
+            .transition(JobState::WaitingRetry, JobPhase::VerifyRemotePort, 85)
+            .with_retry_after_ms(250);
+        let value = waiting.to_value();
+        assert_eq!(value["state"], "waiting_retry");
+        assert_eq!(value["phase"], "verify_remote_port");
+        assert_eq!(value["retry_after_ms"], 250);
+
+        let healthy = waiting.transition(JobState::Healthy, JobPhase::Healthy, 100);
+        assert_eq!(healthy.to_value().get("retry_after_ms"), None);
     }
 
     #[test]

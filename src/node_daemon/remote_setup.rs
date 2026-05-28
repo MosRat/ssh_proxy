@@ -5,9 +5,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{cli, config, ssh_client};
+use crate::{config, ssh_client};
 
-use super::proxy_session::ProxySessionSpec;
+use super::{proxy_session::ProxySessionSpec, remote_ssh};
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct RemoteSetupOutcome {
@@ -23,10 +23,8 @@ pub(super) async fn apply_remote_settings(
     route: Option<&Value>,
     remote_url: &str,
 ) -> Result<RemoteSetupOutcome> {
-    let mut install_args = install_args_from_spec(config, spec)?;
-    config
-        .apply_install_defaults(&mut install_args, Some(&spec.target))
-        .context("failed to apply install defaults for remote setup")?;
+    let install_args = remote_ssh::install_args_from_spec(config, spec)
+        .context("failed to build SSH target for remote setup")?;
     let client = ssh_client::Client::connect_install_args(&install_args).await?;
     let payload = setup_payload(spec, remote_url, route);
     let desired_hash = setup_hash(&payload);
@@ -78,26 +76,11 @@ pub(super) async fn apply_remote_settings(
         .await?;
     }
 
-    if spec.apply_policy.verify_remote_port {
-        run_script(
-            &client,
-            &build_verify_forward_script(
-                &spec.remote_bind.to_string(),
-                spec.remote_port_policy.preferred,
-            ),
-            &format!(
-                "verify remote forwarded port {}:{}",
-                spec.remote_bind, spec.remote_port_policy.preferred
-            ),
-        )
-        .await?;
-    }
-
     Ok(RemoteSetupOutcome {
         desired_hash: desired_hash.clone(),
         applied_hash: desired_hash,
         remote_url: remote_url.to_string(),
-        verified: true,
+        verified: false,
     })
 }
 
@@ -106,10 +89,8 @@ pub(super) async fn cleanup_remote_settings(
     spec: &ProxySessionSpec,
     remote_url: &str,
 ) -> Result<()> {
-    let mut install_args = install_args_from_spec(config, spec)?;
-    config
-        .apply_install_defaults(&mut install_args, Some(&spec.target))
-        .context("failed to apply install defaults for remote cleanup")?;
+    let install_args = remote_ssh::install_args_from_spec(config, spec)
+        .context("failed to build SSH target for remote cleanup")?;
     let client = ssh_client::Client::connect_install_args(&install_args).await?;
     run_script(
         &client,
@@ -129,76 +110,6 @@ pub(super) fn setup_hash(payload: &Value) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-fn install_args_from_spec(
-    config: &config::AppConfig,
-    spec: &ProxySessionSpec,
-) -> Result<cli::InstallRemoteArgs> {
-    let mut args = cli::InstallRemoteArgs {
-        target: spec.target.clone(),
-        ssh_args: Vec::new(),
-        ssh_command: None,
-        user: None,
-        port: None,
-        identity: Vec::new(),
-        config: None,
-        known_hosts: None,
-        accept_new: false,
-        insecure_ignore_host_key: false,
-        jump: Vec::new(),
-        remote_path: None,
-        remote_bin: None,
-        remote_os: cli::RemoteOs::Auto,
-        remote_token: config.daemon.token.clone(),
-        remote_tcp: "127.0.0.1:19080"
-            .parse()
-            .map_err(|err| anyhow!("invalid default remote tcp: {err}"))?,
-        remote_control: "127.0.0.1:19081"
-            .parse()
-            .map_err(|err| anyhow!("invalid default remote control: {err}"))?,
-        local_node_id: config.identity.node_id.clone(),
-        local_node_name: config.identity.node_name.clone(),
-        local_control_endpoint: config.daemon.control_endpoint.clone(),
-        local_transport: config.daemon.transport_listen,
-        remote_node_id: None,
-        remote_node_name: None,
-        remote_tls_transport: config.daemon.tls_transport_listen,
-        remote_quic_transport: config.daemon.quic_transport_listen,
-        remote_tls_cert: config
-            .daemon
-            .tls_cert
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        remote_tls_key: config
-            .daemon
-            .tls_key
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        remote_tls_client_ca: config
-            .daemon
-            .tls_client_ca
-            .as_ref()
-            .map(|path| path.display().to_string()),
-        persist: cli::PersistMode::Auto,
-    };
-    if let Some(profile) = config.profiles.get(&spec.target) {
-        args.target = profile
-            .target
-            .clone()
-            .unwrap_or_else(|| spec.target.clone());
-    }
-    if let Some(ssh) = spec.ssh.as_ref() {
-        args.ssh_args = ssh.ssh_args();
-        args.user = ssh.user.clone();
-        args.port = ssh.port;
-        args.identity = ssh.identity.clone();
-        args.config = ssh.config.clone();
-        args.known_hosts = ssh.known_hosts.clone();
-        args.jump = ssh.jump.clone();
-        args.accept_new = ssh.accept_new;
-    }
-    Ok(args)
 }
 
 fn setup_payload(spec: &ProxySessionSpec, remote_url: &str, route: Option<&Value>) -> Value {
@@ -724,60 +635,6 @@ echo "remote-proxy: cleanup complete"
     )
 }
 
-fn build_verify_forward_script(host: &str, port: u16) -> String {
-    format!(
-        r#"
-set -eu
-host={host}
-port={port}
-attempts=30
-delay=0.2
-verify_once() {{
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$host" "$port" <<'PY'
-import socket
-import sys
-host = sys.argv[1]
-port = int(sys.argv[2])
-try:
-    sock = socket.create_connection((host, port), timeout=1)
-    sock.close()
-except OSError as exc:
-    print(f"tcp connect failed: {{exc}}", file=sys.stderr)
-    sys.exit(1)
-PY
-    return $?
-  fi
-  if command -v nc >/dev/null 2>&1; then
-    nc -z "$host" "$port"
-    return $?
-  fi
-  if command -v bash >/dev/null 2>&1; then
-    bash -c ":</dev/tcp/$host/$port"
-    return $?
-  fi
-  echo "remote-proxy: no python3/nc/bash available to verify forwarded port" >&2
-  return 2
-}}
-i=1
-last_status=1
-while [ "$i" -le "$attempts" ]; do
-  if verify_once; then
-    echo "remote-proxy: verified $host:$port on attempt $i"
-    exit 0
-  fi
-  last_status=$?
-  sleep "$delay"
-  i=$((i + 1))
-done
-echo "remote-proxy: forwarded port $host:$port was not reachable after $attempts attempts" >&2
-exit "$last_status"
-"#,
-        host = shell_quote(host),
-        port = shell_quote(&port.to_string()),
-    )
-}
-
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -785,6 +642,8 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
+
+    use crate::cli;
 
     use super::*;
 
@@ -837,12 +696,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_forward_script_retries_and_reports_context() {
-        let script = build_verify_forward_script("127.0.0.1", 17890);
+    fn remote_setup_does_not_embed_shell_port_verification() {
+        let setup_source = include_str!("remote_setup.rs");
 
-        assert!(script.contains("attempts=30"));
-        assert!(script.contains("tcp connect failed"));
-        assert!(script.contains("was not reachable after $attempts attempts"));
-        assert!(script.contains("verified $host:$port on attempt $i"));
+        assert!(!setup_source.contains(&["nc", " -z"].concat()));
+        assert!(!setup_source.contains(&["/dev", "/tcp"].concat()));
+        assert!(!setup_source.contains(&["socket", ".create_connection"].concat()));
     }
 }

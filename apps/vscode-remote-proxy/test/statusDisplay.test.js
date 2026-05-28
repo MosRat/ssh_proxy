@@ -4,6 +4,7 @@ const test = require('node:test');
 const {
   buildRemoteProxyStatusLines,
   describeSshProxyDaemonHealth,
+  describeSshProxyHandoffProbe,
   describeSshProxyRouteHealth,
 } = require('../out/statusDisplay');
 
@@ -41,6 +42,12 @@ function kernelStatus() {
           tls_tcp: { ok: true },
           quic: { configured: false },
         },
+      },
+      handoff_probe: {
+        source: 'rust_ssh_direct_tcpip',
+        state: 'ready',
+        attempts: 3,
+        latency_ms: 12,
       },
     },
     sessionStart: undefined,
@@ -82,6 +89,14 @@ test('summarizes ssh_proxy route health from kernel link health', () => {
   assert.equal(describeSshProxyRouteHealth('ssh_proxy', undefined), 'unknown');
 });
 
+test('summarizes ssh_proxy handoff probe from daemon status', () => {
+  assert.equal(
+    describeSshProxyHandoffProbe('ssh_proxy', kernelStatus()),
+    'source=rust_ssh_direct_tcpip state=ready attempts=3 latency_ms=12',
+  );
+  assert.equal(describeSshProxyHandoffProbe('ssh_proxy', undefined), 'unknown');
+});
+
 test('builds status lines with backend route transport fallback daemon and error', () => {
   const lines = buildRemoteProxyStatusLines({
     status: 'running',
@@ -106,5 +121,6 @@ test('builds status lines with backend route transport fallback daemon and error
   assert.ok(lines.includes('fallback reason: ssh-only topology'));
   assert.ok(lines.includes('daemon health: ok=true daemon=true control=true plain=true tls=true quic=false'));
   assert.ok(lines.includes('route health: protocol=ssh-native control=healthy connections=1 streams=2 open_failures=0'));
+  assert.ok(lines.includes('handoff probe: source=rust_ssh_direct_tcpip state=ready attempts=3 latency_ms=12'));
   assert.ok(lines.includes('last error: last failure'));
 });

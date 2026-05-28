@@ -9,6 +9,7 @@ use crate::cli;
 
 use super::{
     NodeManager, NodeRequest,
+    handoff::{self, HandoffProbeStatus},
     jobs::{JobPhase, JobRecord, JobState},
     remote_setup, response_line,
     state::RemoteSetupStatus,
@@ -328,6 +329,7 @@ impl NodeManager {
             "remote_url": job.as_ref().and_then(|job| job.remote_url.clone())
                 .or_else(|| session.as_ref().map(|session| session.remote_url.clone())),
             "remote_setup": session.as_ref().map(|session| serde_json::to_value(&session.remote_setup).unwrap_or(Value::Null)),
+            "handoff_probe": session.as_ref().and_then(|session| session.handoff_probe.clone()),
             "health": health,
             "code": if ok { Value::Null } else { json!("not_found") },
         }))
@@ -461,14 +463,106 @@ impl NodeManager {
             let config = self.config.lock().await;
             config.clone()
         };
-        let route = session.as_ref().and_then(|session| session.route.as_ref());
-        match remote_setup::apply_remote_settings(&config, &spec, route, &remote_url).await {
+        let route_value = session.as_ref().and_then(|session| session.route.clone());
+        let handoff_verified = if spec.apply_policy.verify_remote_port {
+            self.state
+                .update_handoff_probe_status(
+                    &spec.session_id(),
+                    &job_id,
+                    HandoffProbeStatus::checking(),
+                )
+                .await?;
+            let job = self
+                .jobs
+                .upsert(
+                    JobRecord::new(job_id.clone(), "apply_remote_settings")
+                        .with_target(spec.target.clone())
+                        .with_workspace(spec.workspace_id.clone())
+                        .with_route(spec.route_id())
+                        .with_remote_url(Some(remote_url.clone()))
+                        .transition(JobState::WaitingRetry, JobPhase::VerifyRemotePort, 45)
+                        .with_next_action("wait_for_remote_handoff")
+                        .with_retry_after_ms(250),
+                    "waiting for remote handoff before applying settings",
+                )
+                .await?;
+            self.state
+                .upsert_session_from_job(
+                    &spec,
+                    &job,
+                    session.as_ref().and_then(|session| session.route.clone()),
+                )
+                .await?;
+            match handoff::wait_remote_port_ready(&config, &spec, Duration::from_secs(90)).await {
+                Ok(probe) => {
+                    self.state
+                        .update_handoff_probe_status(&spec.session_id(), &job_id, probe)
+                        .await?;
+                    true
+                }
+                Err(failure) => {
+                    self.state
+                        .update_handoff_probe_status(
+                            &spec.session_id(),
+                            &job_id,
+                            failure.status.clone(),
+                        )
+                        .await?;
+                    let remote_setup = RemoteSetupStatus::failed(
+                        failure.message.clone(),
+                        None,
+                        Some(remote_url.clone()),
+                    );
+                    let session = self
+                        .state
+                        .update_remote_setup_status(
+                            &spec.session_id(),
+                            &job_id,
+                            remote_setup.clone(),
+                        )
+                        .await?;
+                    let job = self
+                        .jobs
+                        .upsert(
+                            JobRecord::new(job_id, "apply_remote_settings")
+                                .with_target(spec.target.clone())
+                                .with_workspace(spec.workspace_id.clone())
+                                .with_route(spec.route_id())
+                                .with_remote_url(Some(remote_url))
+                                .failed(failure.message, Some(failure.blocker))
+                                .with_next_action("run ssh_proxy doctor --json"),
+                            "remote handoff probe failed before applying settings",
+                        )
+                        .await?;
+                    return response_line(json!({
+                        "ok": false,
+                        "kind": "vscode_apply_settings",
+                        "daemon_api": "v0.3",
+                        "job": job.to_value(),
+                        "session": session.map(|session| session.to_value()),
+                        "remote_setup": remote_setup,
+                    }));
+                }
+            }
+        } else {
+            self.state
+                .update_handoff_probe_status(
+                    &spec.session_id(),
+                    &job_id,
+                    HandoffProbeStatus::skipped(),
+                )
+                .await?;
+            false
+        };
+        match remote_setup::apply_remote_settings(&config, &spec, route_value.as_ref(), &remote_url)
+            .await
+        {
             Ok(outcome) => {
                 let remote_setup = RemoteSetupStatus::applied(
                     outcome.desired_hash,
                     outcome.applied_hash,
                     outcome.remote_url,
-                    outcome.verified,
+                    handoff_verified || outcome.verified,
                 );
                 let session = self
                     .state
@@ -675,7 +769,7 @@ impl NodeManager {
         remote_url: Option<String>,
     ) -> Result<()> {
         let route_id = spec.route_id();
-        let deadline = time::Instant::now() + Duration::from_secs(12);
+        let deadline = time::Instant::now() + Duration::from_secs(90);
         loop {
             let status = self.status_value().await?;
             if let Some(route) = find_route_status(&status, &route_id) {
@@ -696,6 +790,7 @@ impl NodeManager {
                     return Ok(());
                 }
                 if matches!(state.as_deref(), Some("running" | "ready" | "restarting")) {
+                    let remote_url_value = remote_url.clone().unwrap_or_else(|| spec.remote_url());
                     let job = self
                         .jobs
                         .upsert(
@@ -707,6 +802,76 @@ impl NodeManager {
                     self.state
                         .upsert_session_from_job(spec, &job, Some(route.clone()))
                         .await?;
+                    let handoff_verified = if spec.apply_policy.verify_remote_port {
+                        let checking = HandoffProbeStatus::checking();
+                        self.state
+                            .update_handoff_probe_status(&spec.session_id(), job_id, checking)
+                            .await?;
+                        let job = self
+                            .jobs
+                            .upsert(
+                                job_for_phase(spec, job_id, JobPhase::VerifyRemotePort, 85)
+                                    .with_remote_url(remote_url.clone())
+                                    .transition(
+                                        JobState::WaitingRetry,
+                                        JobPhase::VerifyRemotePort,
+                                        85,
+                                    )
+                                    .with_next_action("wait_for_remote_handoff")
+                                    .with_retry_after_ms(250),
+                                "waiting for remote handoff probe",
+                            )
+                            .await?;
+                        self.state
+                            .upsert_session_from_job(spec, &job, Some(route.clone()))
+                            .await?;
+                        let config = {
+                            let config = self.config.lock().await;
+                            config.clone()
+                        };
+                        match handoff::wait_remote_port_ready(
+                            &config,
+                            spec,
+                            Duration::from_secs(90),
+                        )
+                        .await
+                        {
+                            Ok(probe) => {
+                                self.state
+                                    .update_handoff_probe_status(&spec.session_id(), job_id, probe)
+                                    .await?;
+                                true
+                            }
+                            Err(failure) => {
+                                self.state
+                                    .update_handoff_probe_status(
+                                        &spec.session_id(),
+                                        job_id,
+                                        failure.status.clone(),
+                                    )
+                                    .await?;
+                                let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
+                                    .with_remote_url(Some(remote_url_value))
+                                    .failed(failure.message, Some(failure.blocker))
+                                    .with_next_action("run ssh_proxy doctor --json");
+                                let job =
+                                    self.jobs.upsert(job, "remote handoff probe failed").await?;
+                                self.state
+                                    .upsert_session_from_job(spec, &job, Some(route.clone()))
+                                    .await?;
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        self.state
+                            .update_handoff_probe_status(
+                                &spec.session_id(),
+                                job_id,
+                                HandoffProbeStatus::skipped(),
+                            )
+                            .await?;
+                        false
+                    };
                     let job = self
                         .jobs
                         .upsert(
@@ -718,7 +883,6 @@ impl NodeManager {
                     self.state
                         .upsert_session_from_job(spec, &job, Some(route.clone()))
                         .await?;
-                    let remote_url_value = remote_url.clone().unwrap_or_else(|| spec.remote_url());
                     self.state
                         .update_remote_setup_status(
                             &spec.session_id(),
@@ -748,7 +912,7 @@ impl NodeManager {
                                         outcome.desired_hash,
                                         outcome.applied_hash,
                                         outcome.remote_url,
-                                        outcome.verified,
+                                        handoff_verified || outcome.verified,
                                     ),
                                 )
                                 .await?;
@@ -800,15 +964,14 @@ impl NodeManager {
                 }
             }
             if time::Instant::now() >= deadline {
-                let job = self
-                    .jobs
-                    .upsert(
-                        job_for_phase(spec, job_id, JobPhase::WaitRouteReady, 75)
-                            .with_remote_url(remote_url)
-                            .transition(JobState::WaitingRetry, JobPhase::WaitRouteReady, 75),
-                        "route readiness still pending",
+                let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
+                    .with_remote_url(remote_url)
+                    .failed(
+                        "route readiness timed out before remote handoff could start",
+                        Some("route_ready_timeout".to_string()),
                     )
-                    .await?;
+                    .with_next_action("rerun_ensure_proxy_session");
+                let job = self.jobs.upsert(job, "route readiness timed out").await?;
                 self.state.upsert_session_from_job(spec, &job, None).await?;
                 return Ok(());
             }

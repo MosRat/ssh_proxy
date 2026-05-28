@@ -122,6 +122,49 @@ fn release_docs_list_full_local_gate_commands() {
     }
 }
 
+#[test]
+fn fast_check_scripts_keep_acceleration_contract() {
+    let ps1 = read_repo_file("scripts/check-fast.ps1");
+    let sh = read_repo_file("scripts/check-fast.sh");
+    let docs = read_repo_file("docs/release.md");
+
+    for text in [&ps1, &sh] {
+        assert_contains(
+            text,
+            "check --tests",
+            "fast check path should compile tests before running them",
+        );
+        assert_contains(
+            text,
+            "nextest run --tests",
+            "fast check path should prefer cargo-nextest when available",
+        );
+        assert_contains(
+            text,
+            "test --tests",
+            "fast check path should fall back to cargo test",
+        );
+        assert_contains(
+            text,
+            "sccache",
+            "fast check path should document or use sccache acceleration",
+        );
+    }
+
+    for command in [
+        "cargo check --tests",
+        "cargo nextest run --tests",
+        "cargo test --tests",
+        "sccache",
+    ] {
+        assert_contains(
+            &docs,
+            command,
+            "release docs should describe the fast check path",
+        );
+    }
+}
+
 fn read_repo_file(relative: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     fs::read_to_string(&path)

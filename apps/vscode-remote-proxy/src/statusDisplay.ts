@@ -36,6 +36,7 @@ export function buildRemoteProxyStatusLines(input: RemoteProxyStatusLineInput): 
     `fallback reason: ${proxy?.fallbackReason ?? 'none'}`,
     `daemon health: ${describeSshProxyDaemonHealth(input.backend, input.kernelStatus)}`,
     `route health: ${describeSshProxyRouteHealth(input.backend, input.kernelStatus)}`,
+    `handoff probe: ${describeSshProxyHandoffProbe(input.backend, input.kernelStatus)}`,
     `last error: ${input.lastError ?? 'none'}`,
   ];
 }
@@ -101,6 +102,35 @@ export function describeSshProxyRouteHealth(
     openFailures !== undefined ? `open_failures=${openFailures}` : undefined,
     degradedReason ? `degraded=${degradedReason}` : undefined,
   ].filter((part): part is string => Boolean(part)).join(' ') || 'available';
+}
+
+export function describeSshProxyHandoffProbe(
+  backend: ForwardingBackendKind,
+  kernelStatus: SshProxyKernelStatusSnapshot | undefined,
+): string {
+  if (backend !== 'ssh_proxy') {
+    return 'not applicable';
+  }
+  const status = asRecord(kernelStatus?.daemonStatus);
+  const probe = asRecord(status?.handoff_probe) ?? asRecord(asRecord(status?.session)?.handoff_probe);
+  if (!probe) {
+    return 'unknown';
+  }
+
+  const source = asString(probe.source);
+  const state = asString(probe.state);
+  const attempts = asNumber(probe.attempts);
+  const latencyMs = asNumber(probe.latency_ms);
+  const retryAfterMs = asNumber(probe.retry_after_ms);
+  const lastError = asString(probe.last_error);
+  return [
+    source ? `source=${source}` : undefined,
+    state ? `state=${state}` : undefined,
+    attempts !== undefined ? `attempts=${attempts}` : undefined,
+    latencyMs !== undefined ? `latency_ms=${latencyMs}` : undefined,
+    retryAfterMs !== undefined ? `retry_after_ms=${retryAfterMs}` : undefined,
+    lastError ? `last_error=${lastError}` : undefined,
+  ].filter((part): part is string => Boolean(part)).join(' ') || 'unknown';
 }
 
 function formatBool(value: boolean | undefined): string {
