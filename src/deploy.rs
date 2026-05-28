@@ -55,55 +55,7 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
     )
     .await?;
 
-    let service_manager = match args.persist {
-        cli::PersistMode::None => {
-            println!("installed helper at {remote_path}");
-            println!(
-                "use: ssh_proxy proxy {} --remote-path {}",
-                args.target, remote_path
-            );
-            "none"
-        }
-        cli::PersistMode::Auto => {
-            let command = if args.remote_os == cli::RemoteOs::Windows {
-                remote_schtasks_install_command(&remote_path, &args)
-            } else {
-                remote_auto_install_command(&remote_path, &args)
-            };
-            client.exec_status(command).await?;
-            println!("installed persistent helper on {}", args.target);
-            if args.remote_os == cli::RemoteOs::Windows {
-                "windows_schtasks_user"
-            } else {
-                "auto"
-            }
-        }
-        cli::PersistMode::Systemd => {
-            let command = remote_systemd_install_command(&remote_path, &args);
-            client.exec_status(command).await?;
-            println!("installed user systemd service on {}", args.target);
-            "systemd_user"
-        }
-        cli::PersistMode::Nohup => {
-            let command = remote_nohup_start_command(&remote_path, &args, true);
-            client.exec_status(command).await?;
-            println!("started nohup helper on {}", args.target);
-            "nohup_supervisor"
-        }
-        cli::PersistMode::Launchd => {
-            let command = remote_launchd_install_command(&remote_path, &args);
-            client.exec_status(command).await?;
-            println!("installed user launchd service on {}", args.target);
-            "launchd_user"
-        }
-        cli::PersistMode::Schtasks => {
-            let command = remote_schtasks_install_command(&remote_path, &args);
-            client.exec_status(command).await?;
-            println!("installed user scheduled task on {}", args.target);
-            "windows_schtasks_user"
-        }
-    }
-    .to_string();
+    let service_manager = install_remote_service(&client, &remote_path, &args).await?;
     let descriptor = if args.persist == cli::PersistMode::None {
         None
     } else {
@@ -122,6 +74,44 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
         remote_token: args.remote_token,
         descriptor,
     })
+}
+
+async fn install_remote_service(
+    client: &ssh_client::Client,
+    remote_path: &str,
+    args: &cli::InstallRemoteArgs,
+) -> Result<String> {
+    let plan = peer_lifecycle::service_provider::remote_service_install_plan(remote_path, args);
+    match args.persist {
+        cli::PersistMode::None => {
+            println!("installed helper at {remote_path}");
+            println!(
+                "use: ssh_proxy proxy {} --remote-path {}",
+                args.target, remote_path
+            );
+        }
+        cli::PersistMode::Auto => {
+            client.exec_status(plan.command.clone()).await?;
+            println!("installed persistent helper on {}", args.target);
+        }
+        cli::PersistMode::Systemd => {
+            client.exec_status(plan.command.clone()).await?;
+            println!("installed user systemd service on {}", args.target);
+        }
+        cli::PersistMode::Nohup => {
+            client.exec_status(plan.command.clone()).await?;
+            println!("started nohup helper on {}", args.target);
+        }
+        cli::PersistMode::Launchd => {
+            client.exec_status(plan.command.clone()).await?;
+            println!("installed user launchd service on {}", args.target);
+        }
+        cli::PersistMode::Schtasks => {
+            client.exec_status(plan.command.clone()).await?;
+            println!("installed user scheduled task on {}", args.target);
+        }
+    }
+    Ok(plan.reported_service_manager)
 }
 
 pub async fn host(mut args: cli::HostArgs, mut config: config::AppConfig) -> Result<()> {
@@ -1105,26 +1095,22 @@ async fn apply_remote_auto_defaults(
             service_manager: "pending".to_string(),
             updated_at_unix: now_unix(),
         });
-    for (file, bytes) in [
-        (RemotePeerFile::Config, files.config_toml.into_bytes()),
-        (
-            RemotePeerFile::PeerState,
-            files.peer_state_json.into_bytes(),
-        ),
-        (
-            RemotePeerFile::InstallReport,
-            files.install_report_json.into_bytes(),
-        ),
-        (RemotePeerFile::Health, files.health_json.into_bytes()),
-        (RemotePeerFile::Routes, files.routes_json.into_bytes()),
-    ] {
+    for artifact in peer_lifecycle::artifacts::materialized_peer_artifacts(files) {
         client
             .exec_upload(
-                remote_write_peer_file_command_for_os(file, args.remote_os),
-                bytes,
+                peer_lifecycle::commands::remote_write_peer_artifact_command(
+                    artifact.artifact,
+                    args.remote_os,
+                ),
+                artifact.bytes,
             )
             .await
-            .with_context(|| format!("failed to write remote peer {}", file.file_name()))?;
+            .with_context(|| {
+                format!(
+                    "failed to write remote peer {}",
+                    artifact.artifact.file_name()
+                )
+            })?;
     }
     args.remote_node_id = Some(node_id);
     args.remote_node_name = Some(node_name);
