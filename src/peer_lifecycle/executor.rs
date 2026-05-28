@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin, process::Command};
+use std::{fs, future::Future, path::Path, pin::Pin, process::Command};
 
 use anyhow::{Context, Result, bail};
 
@@ -72,11 +72,34 @@ impl PeerExecutor for LocalExecutor {
         })
     }
 
-    fn upload_bytes<'a>(&'a self, _command: String, _bytes: Vec<u8>) -> BoxExecutorFuture<'a, ()> {
-        Box::pin(
-            async move { bail!("LocalExecutor upload_bytes is intentionally not implemented") },
-        )
+    fn upload_bytes<'a>(&'a self, path: String, bytes: Vec<u8>) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move { write_local_file(Path::new(&path), &bytes, false) })
     }
+}
+
+pub(crate) fn write_local_file(path: &Path, bytes: &[u8], preserve_existing: bool) -> Result<()> {
+    if preserve_existing && path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let tmp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file")
+    ));
+    fs::write(&tmp, bytes).with_context(|| format!("failed to write {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| {
+        format!(
+            "failed to atomically replace {} with {}",
+            path.display(),
+            tmp.display()
+        )
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -142,5 +165,19 @@ mod tests {
 
         assert_eq!(output.stdout, "ok");
         assert_eq!(executor.commands(), vec!["echo ok"]);
+    }
+
+    #[test]
+    fn local_file_write_preserves_existing_when_requested() {
+        let dir = std::env::temp_dir().join(format!(
+            "ssh_proxy-local-executor-{}",
+            std::process::id()
+        ));
+        let path = dir.join("config.toml");
+        write_local_file(&path, b"first", false).unwrap();
+        write_local_file(&path, b"second", true).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

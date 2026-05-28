@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use crate::cli;
+
+use super::commands;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ServiceProviderKind {
@@ -88,21 +92,63 @@ impl ServiceProviderPlan {
 }
 
 pub(crate) fn provider_for_remote_os(
-    remote_os: crate::cli::RemoteOs,
-    persist: crate::cli::PersistMode,
+    remote_os: cli::RemoteOs,
+    persist: cli::PersistMode,
 ) -> ServiceProviderKind {
     match persist {
-        crate::cli::PersistMode::Systemd => ServiceProviderKind::SystemdUser,
-        crate::cli::PersistMode::Nohup => ServiceProviderKind::NohupSupervisor,
-        crate::cli::PersistMode::Launchd => ServiceProviderKind::LaunchdUser,
-        crate::cli::PersistMode::Schtasks => ServiceProviderKind::WindowsScheduledTaskUser,
-        crate::cli::PersistMode::None => ServiceProviderKind::NohupSupervisor,
-        crate::cli::PersistMode::Auto => match remote_os {
-            crate::cli::RemoteOs::Windows => ServiceProviderKind::WindowsScheduledTaskUser,
-            crate::cli::RemoteOs::Unix | crate::cli::RemoteOs::Auto => {
-                ServiceProviderKind::SystemdUser
-            }
+        cli::PersistMode::Systemd => ServiceProviderKind::SystemdUser,
+        cli::PersistMode::Nohup => ServiceProviderKind::NohupSupervisor,
+        cli::PersistMode::Launchd => ServiceProviderKind::LaunchdUser,
+        cli::PersistMode::Schtasks => ServiceProviderKind::WindowsScheduledTaskUser,
+        cli::PersistMode::None => ServiceProviderKind::NohupSupervisor,
+        cli::PersistMode::Auto => match remote_os {
+            cli::RemoteOs::Windows => ServiceProviderKind::WindowsScheduledTaskUser,
+            cli::RemoteOs::Unix | cli::RemoteOs::Auto => ServiceProviderKind::SystemdUser,
         },
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteServiceInstallPlan {
+    pub(crate) provider: ServiceProviderPlan,
+    pub(crate) command: String,
+    pub(crate) reported_service_manager: String,
+}
+
+pub(crate) fn remote_service_install_plan(
+    remote_path: &str,
+    args: &cli::InstallRemoteArgs,
+) -> RemoteServiceInstallPlan {
+    let kind = provider_for_remote_os(args.remote_os, args.persist);
+    let command = match args.persist {
+        cli::PersistMode::None => String::new(),
+        cli::PersistMode::Auto => {
+            if args.remote_os == cli::RemoteOs::Windows {
+                commands::remote_schtasks_install_command(remote_path, args)
+            } else {
+                commands::remote_auto_install_command(remote_path, args)
+            }
+        }
+        cli::PersistMode::Systemd => commands::remote_systemd_install_command(remote_path, args),
+        cli::PersistMode::Nohup => commands::remote_nohup_start_command(remote_path, args, true),
+        cli::PersistMode::Launchd => commands::remote_launchd_install_command(remote_path, args),
+        cli::PersistMode::Schtasks => {
+            commands::remote_schtasks_install_command(remote_path, args)
+        }
+    };
+    let reported_service_manager = match args.persist {
+        cli::PersistMode::None => "none",
+        cli::PersistMode::Auto if args.remote_os == cli::RemoteOs::Windows => {
+            ServiceProviderKind::WindowsScheduledTaskUser.manager_name()
+        }
+        cli::PersistMode::Auto => "auto",
+        _ => kind.manager_name(),
+    }
+    .to_string();
+    RemoteServiceInstallPlan {
+        provider: ServiceProviderPlan::new(kind, "ssh-proxy-helper"),
+        command,
+        reported_service_manager,
     }
 }
 
@@ -127,12 +173,54 @@ mod tests {
     #[test]
     fn remote_provider_defaults_match_production_order() {
         assert_eq!(
-            provider_for_remote_os(crate::cli::RemoteOs::Windows, crate::cli::PersistMode::Auto),
+            provider_for_remote_os(cli::RemoteOs::Windows, cli::PersistMode::Auto),
             ServiceProviderKind::WindowsScheduledTaskUser
         );
         assert_eq!(
-            provider_for_remote_os(crate::cli::RemoteOs::Auto, crate::cli::PersistMode::Auto),
+            provider_for_remote_os(cli::RemoteOs::Auto, cli::PersistMode::Auto),
             ServiceProviderKind::SystemdUser
         );
+    }
+
+    #[test]
+    fn remote_install_plan_preserves_auto_reporting_contract() {
+        let args = cli::InstallRemoteArgs {
+            target: "edge".to_string(),
+            ssh_args: Vec::new(),
+            ssh_command: None,
+            user: None,
+            port: None,
+            identity: Vec::new(),
+            config: None,
+            known_hosts: None,
+            accept_new: false,
+            insecure_ignore_host_key: false,
+            jump: Vec::new(),
+            remote_path: None,
+            remote_bin: None,
+            remote_os: cli::RemoteOs::Unix,
+            remote_token: Some("secret".to_string()),
+            remote_tcp: "127.0.0.1:19080".parse().unwrap(),
+            remote_control: "127.0.0.1:19081".parse().unwrap(),
+            local_node_id: None,
+            local_node_name: None,
+            local_control_endpoint: None,
+            local_transport: None,
+            remote_node_id: None,
+            remote_node_name: None,
+            remote_tls_transport: None,
+            remote_quic_transport: None,
+            remote_tls_cert: None,
+            remote_tls_key: None,
+            remote_tls_client_ca: None,
+            persist: cli::PersistMode::Auto,
+        };
+
+        let plan = remote_service_install_plan("/home/me/bin/ssh_proxy", &args);
+
+        assert_eq!(plan.provider.kind, ServiceProviderKind::SystemdUser);
+        assert_eq!(plan.reported_service_manager, "auto");
+        assert!(plan.command.contains("systemctl --user"));
+        assert!(plan.command.contains("nohup"));
     }
 }

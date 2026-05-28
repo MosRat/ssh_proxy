@@ -1,12 +1,15 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     cli,
     config::{self, AppConfig},
     node_daemon::ProxySessionSpec,
 };
+
+use super::service_provider::ServiceProviderKind;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PeerSshSpec {
@@ -46,6 +49,110 @@ pub(crate) struct PeerBootstrapSpec {
     pub(crate) remote_tls_key: Option<String>,
     pub(crate) remote_tls_client_ca: Option<String>,
     pub(crate) persist: cli::PersistMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PeerLifecycleRole {
+    LocalDaemon,
+    RemotePeer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PeerLifecyclePlatform {
+    Windows,
+    Linux,
+    Macos,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PeerLifecycleScope {
+    User,
+    System,
+    Managed,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RollbackPolicy {
+    None,
+    PreserveExisting,
+    StopAndRestore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PeerLifecycleSpec {
+    pub(crate) role: PeerLifecycleRole,
+    pub(crate) target: String,
+    pub(crate) platform: PeerLifecyclePlatform,
+    pub(crate) scope: PeerLifecycleScope,
+    pub(crate) provider: ServiceProviderKind,
+    pub(crate) service_name: String,
+    pub(crate) binary_path: String,
+    pub(crate) transport: Option<SocketAddr>,
+    pub(crate) control_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) token: Option<String>,
+    pub(crate) state_dir: String,
+    pub(crate) rollback_policy: RollbackPolicy,
+}
+
+impl PeerLifecycleSpec {
+    pub(crate) fn remote_peer(
+        target: impl Into<String>,
+        remote_path: impl Into<String>,
+        args: &cli::InstallRemoteArgs,
+        provider: ServiceProviderKind,
+    ) -> Self {
+        Self {
+            role: PeerLifecycleRole::RemotePeer,
+            target: target.into(),
+            platform: platform_from_remote_os(args.remote_os),
+            scope: scope_from_persist(args.persist),
+            provider,
+            service_name: "ssh-proxy-helper".to_string(),
+            binary_path: remote_path.into(),
+            transport: Some(args.remote_tcp),
+            control_endpoint: Some(format!("tcp://{}", args.remote_control)),
+            token: args.remote_token.clone(),
+            state_dir: remote_state_dir(args.remote_os),
+            rollback_policy: RollbackPolicy::PreserveExisting,
+        }
+    }
+
+    pub(crate) fn local_daemon(
+        target: impl Into<String>,
+        binary_path: impl Into<String>,
+        provider: ServiceProviderKind,
+        service_name: impl Into<String>,
+        control_endpoint: Option<String>,
+        transport: Option<SocketAddr>,
+        token: Option<String>,
+        state_dir: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: PeerLifecycleRole::LocalDaemon,
+            target: target.into(),
+            platform: local_platform(),
+            scope: if provider.requires_elevation() {
+                PeerLifecycleScope::System
+            } else {
+                PeerLifecycleScope::User
+            },
+            provider,
+            service_name: service_name.into(),
+            binary_path: binary_path.into(),
+            transport,
+            control_endpoint,
+            token,
+            state_dir: state_dir.into(),
+            rollback_policy: RollbackPolicy::StopAndRestore,
+        }
+    }
 }
 
 impl PeerBootstrapSpec {
@@ -235,6 +342,43 @@ pub(crate) fn generated_remote_node_id() -> Result<String> {
     Ok(format!("spx-{}", config::generate_token()?))
 }
 
+fn platform_from_remote_os(remote_os: cli::RemoteOs) -> PeerLifecyclePlatform {
+    match remote_os {
+        cli::RemoteOs::Windows => PeerLifecyclePlatform::Windows,
+        cli::RemoteOs::Unix | cli::RemoteOs::Auto => PeerLifecyclePlatform::Linux,
+    }
+}
+
+fn scope_from_persist(persist: cli::PersistMode) -> PeerLifecycleScope {
+    match persist {
+        cli::PersistMode::None => PeerLifecycleScope::None,
+        cli::PersistMode::Nohup => PeerLifecycleScope::Managed,
+        cli::PersistMode::Systemd
+        | cli::PersistMode::Launchd
+        | cli::PersistMode::Schtasks
+        | cli::PersistMode::Auto => PeerLifecycleScope::User,
+    }
+}
+
+fn remote_state_dir(remote_os: cli::RemoteOs) -> String {
+    match remote_os {
+        cli::RemoteOs::Windows => r"%USERPROFILE%\.ssh_proxy".to_string(),
+        cli::RemoteOs::Unix | cli::RemoteOs::Auto => "$HOME/.ssh_proxy".to_string(),
+    }
+}
+
+fn local_platform() -> PeerLifecyclePlatform {
+    if cfg!(windows) {
+        PeerLifecyclePlatform::Windows
+    } else if cfg!(target_os = "macos") {
+        PeerLifecyclePlatform::Macos
+    } else if cfg!(target_os = "linux") {
+        PeerLifecyclePlatform::Linux
+    } else {
+        PeerLifecyclePlatform::Unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +421,41 @@ mod tests {
         assert_eq!(args.jump, vec!["bastion"]);
         assert!(args.accept_new);
         assert_eq!(args.persist, cli::PersistMode::Auto);
+    }
+
+    #[test]
+    fn lifecycle_spec_models_remote_peer_without_shell_policy() {
+        let mut args = install_args_from_peer_bootstrap(crate::cli::PeerBootstrapArgs {
+            target: "edge".to_string(),
+            alias: None,
+            force: false,
+            ssh_args: Vec::new(),
+            user: None,
+            port: None,
+            identity: Vec::new(),
+            config: None,
+            known_hosts: None,
+            accept_new: false,
+            insecure_ignore_host_key: false,
+            jump: Vec::new(),
+            remote_path: None,
+            remote_bin: None,
+            remote_os: cli::RemoteOs::Unix,
+            remote_token: Some("secret".to_string()),
+            remote_tcp: "127.0.0.1:19080".parse().unwrap(),
+            remote_control: "127.0.0.1:19081".parse().unwrap(),
+        });
+        args.persist = cli::PersistMode::Systemd;
+        let spec = PeerLifecycleSpec::remote_peer(
+            "edge",
+            "/home/me/.local/bin/ssh_proxy",
+            &args,
+            ServiceProviderKind::SystemdUser,
+        );
+
+        assert_eq!(spec.role, PeerLifecycleRole::RemotePeer);
+        assert_eq!(spec.platform, PeerLifecyclePlatform::Linux);
+        assert_eq!(spec.scope, PeerLifecycleScope::User);
+        assert_eq!(spec.control_endpoint.as_deref(), Some("tcp://127.0.0.1:19081"));
     }
 }
