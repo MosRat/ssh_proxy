@@ -19,6 +19,37 @@ use crate::{cli, config, controller, quic_native, reverse, ssh_native};
 
 use super::{NodeManager, NodeRequest, response_line};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RouteStartOutcome {
+    Started,
+    ReusedExisting {
+        persist: bool,
+        upgraded_persist: bool,
+    },
+}
+
+impl RouteStartOutcome {
+    fn reused_existing(self) -> bool {
+        matches!(self, Self::ReusedExisting { .. })
+    }
+
+    fn persist(self, requested: bool) -> bool {
+        match self {
+            Self::Started => requested,
+            Self::ReusedExisting { persist, .. } => persist,
+        }
+    }
+
+    fn should_save_route_store(self, requested: bool) -> bool {
+        match self {
+            Self::Started => requested,
+            Self::ReusedExisting {
+                upgraded_persist, ..
+            } => upgraded_persist,
+        }
+    }
+}
+
 pub(super) struct RouteTask {
     pub(super) spec: RouteSpec,
     pub(super) direction: String,
@@ -386,27 +417,33 @@ impl NodeManager {
         let listen = spec.listen();
         let peer = spec.peer().to_string();
         let fallback_reason = request.fallback_reason;
-        self.start_route_spec(
-            id.clone(),
-            spec,
-            persist,
-            now_unix(),
-            fallback_reason.clone(),
-        )
-        .await?;
-        if persist {
+        let outcome = self
+            .start_route_spec(
+                id.clone(),
+                spec,
+                persist,
+                now_unix(),
+                fallback_reason.clone(),
+            )
+            .await?;
+        if outcome.should_save_route_store(persist) {
             self.save_routes().await?;
         }
         response_line(json!({
             "ok": true,
-            "message": format!("route {id:?} started"),
-            "id": id,
+            "message": if outcome.reused_existing() {
+                format!("route {id:?} already running; reusing existing task")
+            } else {
+                format!("route {id:?} started")
+            },
+            "id": id.clone(),
+            "reused_existing": outcome.reused_existing(),
             "owner": "local",
             "direction": route_direction,
             "detail": detail,
             "listen": listen.to_string(),
             "peer": peer,
-            "persist": persist,
+            "persist": outcome.persist(persist),
             "fallback_reason": fallback_reason,
         }))
     }
@@ -481,14 +518,29 @@ impl NodeManager {
         persist: bool,
         created_at_unix: u64,
         fallback_reason: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<RouteStartOutcome> {
         let direction = spec.direction().to_string();
         let detail = spec.detail();
         let listen = spec.listen();
         let peer = spec.peer().to_string();
         {
-            let routes = self.routes.lock().await;
-            ensure_route_can_start(&routes, &id, &direction, listen, Some(&peer), &spec)?;
+            let mut routes = self.routes.lock().await;
+            routes.retain(|_, task| !task.handle.is_finished());
+            if let Some(task) = routes.get_mut(&id) {
+                if route_task_matches(task, &direction, listen, Some(&peer), &spec) {
+                    let upgraded_persist = persist && !task.persist;
+                    if upgraded_persist {
+                        task.persist = true;
+                    }
+                    info!(route = %id, %direction, %listen, persist = task.persist, "route already registered; reusing existing task");
+                    return Ok(RouteStartOutcome::ReusedExisting {
+                        persist: task.persist,
+                        upgraded_persist,
+                    });
+                }
+                bail!("route {id:?} is already running with a different spec");
+            }
+            ensure_new_route_can_start(&routes, &direction, listen, Some(&peer), &spec)?;
         }
         let stats = Arc::new(Mutex::new(RouteStats::default()));
         let route_config = {
@@ -508,7 +560,22 @@ impl NodeManager {
             RouteSpec::Reverse { .. } => None,
         };
         let mut routes = self.routes.lock().await;
-        ensure_route_can_start(&routes, &id, &direction, listen, Some(&peer), &spec)?;
+        routes.retain(|_, task| !task.handle.is_finished());
+        if let Some(task) = routes.get_mut(&id) {
+            if route_task_matches(task, &direction, listen, Some(&peer), &spec) {
+                let upgraded_persist = persist && !task.persist;
+                if upgraded_persist {
+                    task.persist = true;
+                }
+                info!(route = %id, %direction, %listen, persist = task.persist, "route already registered during start race; reusing existing task");
+                return Ok(RouteStartOutcome::ReusedExisting {
+                    persist: task.persist,
+                    upgraded_persist,
+                });
+            }
+            bail!("route {id:?} is already running with a different spec");
+        }
+        ensure_new_route_can_start(&routes, &direction, listen, Some(&peer), &spec)?;
         let handle = spawn_route_supervisor(
             id.clone(),
             spec.clone(),
@@ -533,7 +600,7 @@ impl NodeManager {
             },
         );
         info!(route = %id, %direction, %listen, persist, "route registered");
-        Ok(())
+        Ok(RouteStartOutcome::Started)
     }
 
     pub(super) async fn save_routes(&self) -> Result<()> {
@@ -594,7 +661,7 @@ impl NodeManager {
                 )
                 .await
             {
-                Ok(()) => info!(route = %id, "restored persistent route"),
+                Ok(_) => info!(route = %id, "restored persistent route"),
                 Err(err) => warn!(route = %id, error = %err, "failed to restore persistent route"),
             }
         }
@@ -693,22 +760,38 @@ fn ensure_listener_not_reserved(
     Ok(())
 }
 
-fn ensure_route_can_start(
+fn ensure_new_route_can_start(
     routes: &HashMap<String, RouteTask>,
-    id: &str,
     direction: &str,
     listen: SocketAddr,
     peer: Option<&str>,
     spec: &RouteSpec,
 ) -> Result<()> {
-    if routes.contains_key(id) {
-        bail!("route {id:?} is already running");
-    }
     ensure_listener_not_reserved(routes, direction, listen, peer)?;
     if matches!(spec, RouteSpec::Forward { .. }) {
         ensure_port_available(listen)?;
     }
     Ok(())
+}
+
+fn route_task_matches(
+    task: &RouteTask,
+    direction: &str,
+    listen: SocketAddr,
+    peer: Option<&str>,
+    spec: &RouteSpec,
+) -> bool {
+    task.direction == direction
+        && task.listen == Some(listen)
+        && match peer {
+            Some(peer) => task.peer.as_deref() == Some(peer),
+            None => true,
+        }
+        && route_specs_match(&task.spec, spec)
+}
+
+fn route_specs_match(left: &RouteSpec, right: &RouteSpec) -> bool {
+    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
 }
 
 #[cfg(test)]

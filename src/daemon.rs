@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
@@ -71,11 +73,10 @@ pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<
             .await
         }
         cli::DaemonCommand::Update { source } => {
-            let request = node_daemon::NodeRequest::daemon_update(
-                source.as_ref().map(|path| path.display().to_string()),
-            )
-            .to_value()
-            .context("failed to encode daemon update request")?;
+            let update_source = daemon_update_source(source.as_deref())?;
+            let request = node_daemon::NodeRequest::daemon_update(update_source.clone())
+                .to_value()
+                .context("failed to encode daemon update request")?;
             request_daemon_or_report(
                 &control_socket::default_endpoint_string(),
                 None,
@@ -94,7 +95,7 @@ pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<
                             "daemon_unavailable",
                             "daemon self-update requires the running daemon",
                         ),
-                        "source": source.map(|path| path.display().to_string()),
+                        "source": update_source.clone(),
                         "requires_daemon": true,
                         "requires_elevation": true,
                         "blocker": "daemon_unavailable",
@@ -464,6 +465,16 @@ fn job_status(id: &str, kind: &str, state: &str, phase: &str, message: &str) -> 
     })
 }
 
+fn daemon_update_source(source: Option<&Path>) -> Result<Option<String>> {
+    source
+        .map(|path| {
+            path.canonicalize()
+                .with_context(|| format!("failed to resolve update source {}", path.display()))
+                .map(|path| path.display().to_string())
+        })
+        .transpose()
+}
+
 fn print_json(compact: bool, value: Value) -> Result<()> {
     if compact {
         println!("{}", serde_json::to_string(&value)?);
@@ -475,6 +486,8 @@ fn print_json(compact: bool, value: Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::{cli, control_socket, node_daemon::ProxySessionSpec};
 
     #[test]
@@ -547,5 +560,22 @@ mod tests {
             cli::ServiceCommand::Start,
         );
         assert_eq!(args.control, None);
+    }
+
+    #[test]
+    fn daemon_update_source_is_canonicalized_for_system_daemon() {
+        let path = std::env::temp_dir().join(format!(
+            "ssh_proxy-update-source-{}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"candidate").expect("write update source");
+
+        let source = super::daemon_update_source(Some(&path)).expect("canonicalize update source");
+        let source = PathBuf::from(source.expect("source path"));
+
+        assert!(source.is_absolute());
+        assert_eq!(source.file_name(), path.file_name());
+
+        let _ = std::fs::remove_file(path);
     }
 }

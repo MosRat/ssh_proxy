@@ -206,7 +206,20 @@ impl NodeManager {
         let spec = request
             .proxy_session
             .ok_or_else(|| anyhow!("ensure_proxy_session requires proxy_session spec"))?;
-        let job = JobRecord::new(spec.job_id(), "ensure_proxy_session")
+        let job_id = spec.job_id();
+        if let Some(existing) = self.jobs.get(&job_id).await {
+            if reusable_proxy_session_job(&existing, self.proxy_session_route_is_live(&spec).await)
+                && self.proxy_session_matches_existing(&job_id, &spec).await
+            {
+                let session = self
+                    .state
+                    .upsert_session_from_job(&spec, &existing, None)
+                    .await?;
+                return proxy_session_accepted_response(&spec, &existing, session.to_value(), true);
+            }
+        }
+
+        let job = JobRecord::new(job_id, "ensure_proxy_session")
             .with_target(spec.target.clone())
             .with_workspace(spec.workspace_id.clone())
             .with_route(spec.route_id())
@@ -234,27 +247,26 @@ impl NodeManager {
                     .await;
             }
         });
-        response_line(json!({
-            "ok": true,
-            "kind": "proxy_session",
-            "daemon_api": "v0.3",
-            "accepted": true,
-            "session_id": spec.session_id(),
-            "job": job.to_value(),
-            "session": session.to_value(),
-            "spec": spec.to_value(),
-            "route": {
-                "route_id": spec.route_id(),
-                "remote_url": spec.remote_url(),
-                "readiness": {
-                    "state": "accepted",
-                    "phase": "queued",
-                    "next_action": "poll_job"
-                }
-            },
-            "remote_url": spec.remote_url(),
-            "apply_remote_settings_required": true,
-        }))
+        proxy_session_accepted_response(&spec, &job, session.to_value(), false)
+    }
+
+    async fn proxy_session_matches_existing(&self, job_id: &str, spec: &ProxySessionSpec) -> bool {
+        let Some(session) = self.state.session_by_job(job_id).await else {
+            return false;
+        };
+        match session.to_spec() {
+            Ok(existing) => proxy_session_specs_match(&existing, spec),
+            Err(_) => false,
+        }
+    }
+
+    async fn proxy_session_route_is_live(&self, spec: &ProxySessionSpec) -> bool {
+        let route_id = spec.route_id();
+        let routes = self.routes.lock().await;
+        routes
+            .get(&route_id)
+            .map(|task| !task.handle.is_finished())
+            .unwrap_or(false)
     }
 
     pub(super) async fn proxy_session_status(&self, request: NodeRequest) -> Result<String> {
@@ -269,6 +281,42 @@ impl NodeManager {
             Some(id) => self.state.session_by_job(id).await,
             None => None,
         };
+        let route_id = job
+            .as_ref()
+            .and_then(|job| job.route_id.clone())
+            .or_else(|| session.as_ref().map(|session| session.route_id.clone()));
+        let live_route = match route_id.as_deref() {
+            Some(route_id) => self.live_route_status(route_id).await?,
+            None => None,
+        };
+        let missing_healthy_route =
+            matches!(job.as_ref().map(|job| job.state), Some(JobState::Healthy))
+                && live_route.is_none()
+                && route_id.is_some();
+        let route = live_route
+            .or_else(|| {
+                if missing_healthy_route {
+                    Some(missing_route_status(
+                        route_id.clone(),
+                        job.as_ref()
+                            .and_then(|job| job.remote_url.clone())
+                            .or_else(|| session.as_ref().map(|session| session.remote_url.clone())),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| job.as_ref().map(route_status_from_job))
+            .or_else(|| session.as_ref().and_then(|session| session.route.clone()))
+            .unwrap_or(Value::Null);
+        let health = (if missing_healthy_route {
+            Some("starting")
+        } else {
+            None
+        })
+        .or_else(|| job.as_ref().map(|job| job_health(job)))
+        .or_else(|| session.as_ref().map(|session| session.health.as_str()))
+        .unwrap_or("unknown");
         let ok = job.is_some() || session.is_some();
         response_line(json!({
             "ok": ok,
@@ -276,17 +324,18 @@ impl NodeManager {
             "daemon_api": "v0.3",
             "job": job.as_ref().map(JobRecord::to_value),
             "session": session.as_ref().map(|session| session.to_value()),
-            "route": job.as_ref().map(route_status_from_job)
-                .or_else(|| session.as_ref().and_then(|session| session.route.clone()))
-                .unwrap_or(Value::Null),
+            "route": route,
             "remote_url": job.as_ref().and_then(|job| job.remote_url.clone())
                 .or_else(|| session.as_ref().map(|session| session.remote_url.clone())),
             "remote_setup": session.as_ref().map(|session| serde_json::to_value(&session.remote_setup).unwrap_or(Value::Null)),
-            "health": job.as_ref().map(|job| job_health(job))
-                .or_else(|| session.as_ref().map(|session| session.health.as_str()))
-                .unwrap_or("unknown"),
+            "health": health,
             "code": if ok { Value::Null } else { json!("not_found") },
         }))
+    }
+
+    async fn live_route_status(&self, route_id: &str) -> Result<Option<Value>> {
+        let status = self.status_value().await?;
+        Ok(find_route_status(&status, route_id))
     }
 
     pub(super) async fn proxy_session_down(&self, request: NodeRequest) -> Result<String> {
@@ -837,6 +886,48 @@ fn job_for_phase(
         .transition(JobState::Running, phase, progress)
 }
 
+fn reusable_proxy_session_job(job: &JobRecord, live_route: bool) -> bool {
+    match job.state {
+        JobState::Queued | JobState::Running | JobState::WaitingRetry => true,
+        JobState::Healthy => live_route,
+        JobState::Failed | JobState::Cancelled => false,
+    }
+}
+
+fn proxy_session_accepted_response(
+    spec: &ProxySessionSpec,
+    job: &JobRecord,
+    session: Value,
+    reused_existing: bool,
+) -> Result<String> {
+    response_line(json!({
+        "ok": true,
+        "kind": "proxy_session",
+        "daemon_api": "v0.3",
+        "accepted": true,
+        "reused_existing": reused_existing,
+        "session_id": spec.session_id(),
+        "job": job.to_value(),
+        "session": session,
+        "spec": spec.to_value(),
+        "route": {
+            "route_id": spec.route_id(),
+            "remote_url": spec.remote_url(),
+            "readiness": {
+                "state": if reused_existing { "reused" } else { "accepted" },
+                "phase": if reused_existing { "existing_job" } else { "queued" },
+                "next_action": "poll_job"
+            }
+        },
+        "remote_url": spec.remote_url(),
+        "apply_remote_settings_required": true,
+    }))
+}
+
+fn proxy_session_specs_match(left: &ProxySessionSpec, right: &ProxySessionSpec) -> bool {
+    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+}
+
 fn find_route_status(status: &Value, route_id: &str) -> Option<Value> {
     status
         .get("routes")
@@ -859,6 +950,20 @@ fn route_status_from_job(job: &JobRecord) -> Value {
         "route_id": job.route_id,
         "remote_url": job.remote_url,
         "health": job_health(job),
+    })
+}
+
+fn missing_route_status(route_id: Option<String>, remote_url: Option<String>) -> Value {
+    json!({
+        "route_id": route_id,
+        "remote_url": remote_url,
+        "health": "starting",
+        "readiness": {
+            "state": "missing",
+            "phase": "reconciling",
+            "blocker": "route_not_running",
+            "next_action": "rerun_ensure_proxy_session",
+        },
     })
 }
 
@@ -1050,6 +1155,24 @@ mod tests {
             proxy_url_for_remote("http://user:pass@127.0.0.1:10808/path", "127.0.0.1", 17890),
             "http://user:pass@127.0.0.1:17890/path",
         );
+    }
+
+    #[test]
+    fn healthy_proxy_session_job_requires_live_route_for_reuse() {
+        let healthy = JobRecord::new("proxy:window-a", "ensure_proxy_session").transition(
+            JobState::Healthy,
+            JobPhase::Healthy,
+            100,
+        );
+        let running = JobRecord::new("proxy:window-a", "ensure_proxy_session").transition(
+            JobState::Running,
+            JobPhase::EnsurePeer,
+            35,
+        );
+
+        assert!(!reusable_proxy_session_job(&healthy, false));
+        assert!(reusable_proxy_session_job(&healthy, true));
+        assert!(reusable_proxy_session_job(&running, false));
     }
 
     #[test]

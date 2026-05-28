@@ -432,6 +432,86 @@ fn node_daemon_returns_json_errors_and_preflights_route_ports() {
 }
 
 #[test]
+fn node_daemon_reuses_duplicate_route_start_for_same_spec() {
+    let control = free_addr();
+    let transport = free_addr();
+    let listen = free_addr();
+    let other_listen = free_addr();
+    let endpoint = format!("tcp://{control}");
+    let routes_path = route_store_path("route-reuse");
+    let child = start_daemon(&endpoint, transport, &routes_path);
+
+    wait_for_status(&endpoint);
+
+    let started = run_control(
+        &endpoint,
+        &[
+            "forward",
+            "127.0.0.1",
+            "--id",
+            "duplicate",
+            "--listen",
+            &listen.to_string(),
+            "--deploy",
+            "never",
+        ],
+    );
+    assert!(started.status.success());
+    let started_json: serde_json::Value =
+        serde_json::from_slice(&started.stdout).expect("start json");
+    assert_eq!(started_json["ok"], true);
+    assert_eq!(started_json["reused_existing"], false);
+
+    let reused = run_control(
+        &endpoint,
+        &[
+            "forward",
+            "127.0.0.1",
+            "--id",
+            "duplicate",
+            "--listen",
+            &listen.to_string(),
+            "--deploy",
+            "never",
+        ],
+    );
+    assert!(reused.status.success());
+    let reused_json: serde_json::Value =
+        serde_json::from_slice(&reused.stdout).expect("reuse json");
+    assert_eq!(reused_json["ok"], true);
+    assert_eq!(reused_json["id"], "duplicate");
+    assert_eq!(reused_json["reused_existing"], true);
+    assert_eq!(reused_json["listen"], listen.to_string());
+
+    let mismatch = run_control(
+        &endpoint,
+        &[
+            "forward",
+            "127.0.0.1",
+            "--id",
+            "duplicate",
+            "--listen",
+            &other_listen.to_string(),
+            "--deploy",
+            "never",
+        ],
+    );
+    assert!(mismatch.status.success());
+    let mismatch_json: serde_json::Value =
+        serde_json::from_slice(&mismatch.stdout).expect("mismatch json");
+    assert_eq!(mismatch_json["ok"], false);
+    assert!(
+        mismatch_json["error"]
+            .as_str()
+            .expect("error string")
+            .contains("different spec")
+    );
+
+    stop_child(child, &endpoint);
+    let _ = fs::remove_file(routes_path);
+}
+
+#[test]
 fn node_tcp_control_requires_token_when_configured() {
     let control = free_addr();
     let transport = free_addr();
