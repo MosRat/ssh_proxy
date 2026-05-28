@@ -262,10 +262,18 @@ async fn run_script(client: &ssh_client::Client, script: &str, label: &str) -> R
         .await
         .with_context(|| format!("{label} failed to start"))?;
     if output.exit_status != 0 {
+        let stderr = output.stderr.trim();
+        let stdout = output.stdout.trim();
+        let detail = match (stderr.is_empty(), stdout.is_empty()) {
+            (false, false) => format!("stderr: {stderr}; stdout: {stdout}"),
+            (false, true) => stderr.to_string(),
+            (true, false) => stdout.to_string(),
+            (true, true) => "no output".to_string(),
+        };
         return Err(anyhow!(
             "{label} failed with status {}: {}",
             output.exit_status,
-            output.stderr.trim()
+            detail
         ));
     }
     Ok(())
@@ -722,27 +730,48 @@ fn build_verify_forward_script(host: &str, port: u16) -> String {
 set -eu
 host={host}
 port={port}
-if command -v nc >/dev/null 2>&1; then
-  nc -z "$host" "$port"
-  exit $?
-fi
-if command -v python3 >/dev/null 2>&1; then
-  python3 - "$host" "$port" <<'PY'
+attempts=30
+delay=0.2
+verify_once() {{
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$host" "$port" <<'PY'
 import socket
 import sys
 host = sys.argv[1]
 port = int(sys.argv[2])
-sock = socket.create_connection((host, port), timeout=2)
-sock.close()
+try:
+    sock = socket.create_connection((host, port), timeout=1)
+    sock.close()
+except OSError as exc:
+    print(f"tcp connect failed: {{exc}}", file=sys.stderr)
+    sys.exit(1)
 PY
-  exit $?
-fi
-if command -v bash >/dev/null 2>&1; then
-  bash -c ":</dev/tcp/$host/$port"
-  exit $?
-fi
-echo "remote-proxy: no nc/python3/bash available to verify forwarded port" >&2
-exit 2
+    return $?
+  fi
+  if command -v nc >/dev/null 2>&1; then
+    nc -z "$host" "$port"
+    return $?
+  fi
+  if command -v bash >/dev/null 2>&1; then
+    bash -c ":</dev/tcp/$host/$port"
+    return $?
+  fi
+  echo "remote-proxy: no python3/nc/bash available to verify forwarded port" >&2
+  return 2
+}}
+i=1
+last_status=1
+while [ "$i" -le "$attempts" ]; do
+  if verify_once; then
+    echo "remote-proxy: verified $host:$port on attempt $i"
+    exit 0
+  fi
+  last_status=$?
+  sleep "$delay"
+  i=$((i + 1))
+done
+echo "remote-proxy: forwarded port $host:$port was not reachable after $attempts attempts" >&2
+exit "$last_status"
 "#,
         host = shell_quote(host),
         port = shell_quote(&port.to_string()),
@@ -805,5 +834,15 @@ mod tests {
         assert!(script.contains("remote-proxy-status.json"));
         assert!(script.contains("# >>> vscode-remote-proxy >>>"));
         assert!(script.contains("cleanup_workspace_git '/home/wen/project'"));
+    }
+
+    #[test]
+    fn verify_forward_script_retries_and_reports_context() {
+        let script = build_verify_forward_script("127.0.0.1", 17890);
+
+        assert!(script.contains("attempts=30"));
+        assert!(script.contains("tcp connect failed"));
+        assert!(script.contains("was not reachable after $attempts attempts"));
+        assert!(script.contains("verified $host:$port on attempt $i"));
     }
 }
