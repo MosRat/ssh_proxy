@@ -23,6 +23,7 @@ pub struct RemoteInstallResult {
     pub remote_node_id: Option<String>,
     pub remote_node_name: Option<String>,
     pub remote_path: String,
+    pub service_manager: String,
     pub remote_tcp: SocketAddr,
     pub remote_control: SocketAddr,
     pub remote_tls_transport: Option<SocketAddr>,
@@ -51,40 +52,55 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
     )
     .await?;
 
-    match args.persist {
+    let service_manager = match args.persist {
         cli::PersistMode::None => {
             println!("installed helper at {remote_path}");
             println!(
                 "use: ssh_proxy proxy {} --remote-path {}",
                 args.target, remote_path
             );
+            "none"
         }
         cli::PersistMode::Auto => {
-            let command = remote_auto_install_command(&remote_path, &args);
+            let command = if args.remote_os == cli::RemoteOs::Windows {
+                remote_schtasks_install_command(&remote_path, &args)
+            } else {
+                remote_auto_install_command(&remote_path, &args)
+            };
             client.exec_status(command).await?;
             println!("installed persistent helper on {}", args.target);
+            if args.remote_os == cli::RemoteOs::Windows {
+                "windows_schtasks_user"
+            } else {
+                "auto"
+            }
         }
         cli::PersistMode::Systemd => {
             let command = remote_systemd_install_command(&remote_path, &args);
             client.exec_status(command).await?;
             println!("installed user systemd service on {}", args.target);
+            "systemd_user"
         }
         cli::PersistMode::Nohup => {
             let command = remote_nohup_start_command(&remote_path, &args, true);
             client.exec_status(command).await?;
             println!("started nohup helper on {}", args.target);
+            "nohup_supervisor"
         }
         cli::PersistMode::Launchd => {
-            bail!(
-                "launchd persistence is intentionally explicit: upload succeeded at {remote_path}; create a LaunchAgent that runs `{remote_path} node daemon --transport 127.0.0.1:19080 --control tcp://127.0.0.1:19081`"
-            );
+            let command = remote_launchd_install_command(&remote_path, &args);
+            client.exec_status(command).await?;
+            println!("installed user launchd service on {}", args.target);
+            "launchd_user"
         }
         cli::PersistMode::Schtasks => {
-            bail!(
-                "schtasks persistence is intentionally explicit: upload succeeded at {remote_path}; create a scheduled task that runs `{remote_path} node daemon --transport 127.0.0.1:19080 --control tcp://127.0.0.1:19081`"
-            );
+            let command = remote_schtasks_install_command(&remote_path, &args);
+            client.exec_status(command).await?;
+            println!("installed user scheduled task on {}", args.target);
+            "windows_schtasks_user"
         }
     }
+    .to_string();
     let descriptor = if args.persist == cli::PersistMode::None {
         None
     } else {
@@ -95,6 +111,7 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
         remote_node_id: args.remote_node_id,
         remote_node_name: args.remote_node_name,
         remote_path,
+        service_manager,
         remote_tcp: args.remote_tcp,
         remote_control: args.remote_control,
         remote_tls_transport: args.remote_tls_transport,
@@ -1033,7 +1050,7 @@ async fn apply_remote_auto_defaults(
     }
     let token = args.remote_token.as_deref().unwrap_or_default();
     let output = client
-        .exec_output(remote_write_config_command(
+        .exec_output(remote_write_config_command_for_os(
             args.remote_tcp,
             args.remote_control,
             token,
@@ -1041,6 +1058,7 @@ async fn apply_remote_auto_defaults(
             args.local_node_name.as_deref(),
             args.local_control_endpoint.as_deref(),
             args.local_transport,
+            args.remote_os,
         ))
         .await?;
     for line in output.lines() {

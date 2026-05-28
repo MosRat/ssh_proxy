@@ -267,8 +267,8 @@
             "reverse-link",
             "direct"
           ],
-          "default": "reverse-link",
-          "description": "Route connect mode used by the ssh_proxy kernel backend."
+          "default": "auto",
+          "description": "Route connect mode used by the ssh_proxy kernel backend. Auto lets the daemon prefer the persistent remote peer and fall back when topology requires it."
         },
         "remoteProxy.forward.restartOnHostChange": {
           "type": "boolean",

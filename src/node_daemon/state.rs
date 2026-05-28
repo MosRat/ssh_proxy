@@ -241,13 +241,35 @@ impl RemoteSetupStatus {
 pub(super) struct PeerStatusRecord {
     pub(super) target: String,
     pub(super) state: String,
+    #[serde(default = "default_unknown_health")]
+    pub(super) health: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) control_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) transport_protocols: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) service_manager: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) descriptor_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) install: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dependency_report: Option<Value>,
     pub(super) update_required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) blocker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) repair_action: Option<repair::RepairAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) retry_after_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) recovery_attempts: u32,
     pub(super) updated_at_unix: u64,
 }
 
@@ -587,6 +609,17 @@ impl ProductionState {
         json!(peers)
     }
 
+    pub(super) async fn upsert_peer_status(&self, record: PeerStatusRecord) -> Result<()> {
+        let mut store = self.peers.lock().await;
+        store.version = STORE_VERSION;
+        store.peers.insert(record.target.clone(), record);
+        save_store(&self._peers_path, &*store)
+    }
+
+    pub(super) async fn peer_status(&self, target: &str) -> Option<PeerStatusRecord> {
+        self.peers.lock().await.peers.get(target).cloned()
+    }
+
     pub(super) async fn unfinished_sessions(&self) -> Vec<ProxySessionRecord> {
         self.sessions
             .lock()
@@ -660,6 +693,10 @@ fn is_false(value: &bool) -> bool {
 
 fn is_zero(value: &u32) -> bool {
     *value == 0
+}
+
+fn default_unknown_health() -> String {
+    "unknown".to_string()
 }
 
 fn now_unix() -> u64 {

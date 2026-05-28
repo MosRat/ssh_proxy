@@ -16,9 +16,9 @@ const requiredSettings = {
   },
   'remoteProxy.sshProxy.connectMode': {
     type: 'string',
-    default: 'reverse-link',
+    default: 'auto',
     enum: ['auto', 'reverse-link', 'direct'],
-    configRead: "config.get<'auto' | 'reverse-link' | 'direct'>('sshProxy.connectMode', 'reverse-link')",
+    configRead: "config.get<'auto' | 'reverse-link' | 'direct'>('sshProxy.connectMode', 'auto')",
     typeField: 'readonly sshProxyConnectMode: SshProxyConnectMode;',
   },
   'remoteProxy.forward.healthCheckFailureThreshold': {

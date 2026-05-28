@@ -119,6 +119,12 @@ pub(crate) fn action_for_blocker(blocker: &str) -> Option<RepairAction> {
                 .command("ssh_proxy vscode apply-settings --json")
                 .message("Rerun daemon-owned remote setup after checking the report."),
         ),
+        "remote_peer_install_failed" => Some(
+            RepairAction::new("repair_remote_peer", "Repair remote peer", "remote_peer_repair")
+                .command("ssh_proxy doctor --json --report --target <target>")
+                .retry(1000)
+                .message("Collect a daemon report, then retry the daemon-owned remote peer install."),
+        ),
         _ => None,
     }
 }

@@ -428,6 +428,30 @@ fn route_auto_selects_ssh_native_for_ssh_only_proxy_topology() {
 }
 
 #[test]
+fn route_auto_uses_persistent_peer_before_ssh_native() {
+    let args = route_args(cli::RouteDirection::LocalUsesRemote);
+    let mut config = config::AppConfig::default();
+    config.peers.insert(
+        "peer".to_string(),
+        config::PeerRecord {
+            remote_path: Some("/home/me/.local/bin/ssh_proxy".to_string()),
+            control_endpoint: Some("tcp://127.0.0.1:19081".to_string()),
+            transport: Some("127.0.0.1:19080".parse().unwrap()),
+            transport_protocols: vec!["plain-tcp".to_string()],
+            ..Default::default()
+        },
+    );
+
+    let forward = node_forward_from_route(&args, &config, "peer".to_string(), false).unwrap();
+    let plan = local_uses_remote_plan(&args, forward.id.as_deref().unwrap(), &forward);
+
+    assert_eq!(forward.remote_transport, cli::RemoteTransport::Tcp);
+    assert_eq!(plan["selected_transport"], "ssh-direct-tcpip");
+    assert_eq!(plan["transport_selection_source"], "peer-default");
+    assert_eq!(plan["ssh_data_plane_reason"], "daemon_policy_required");
+}
+
+#[test]
 fn route_auto_prefers_tls_tcp_over_plain_for_direct_production() {
     let mut args = route_args(cli::RouteDirection::LocalUsesRemote);
     args.remote_tls = Some("192.0.2.8:19082".parse().unwrap());

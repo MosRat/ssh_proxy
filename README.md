@@ -48,7 +48,7 @@ ssh_proxy doctor --json --report
 `ssh_proxy up` and `ssh_proxy vscode up` both submit an `ensure_proxy_session` job to the daemon. The command returns quickly with a job id, route id, and intended remote URL. The daemon then drives the session through these phases:
 
 ```text
-resolve_target -> ensure_local_proxy -> ensure_peer -> plan_route
+resolve_target -> ensure_local_proxy -> ensure_remote_peer -> plan_route
   -> start_route -> wait_route_ready -> verify_remote_port
   -> apply_remote_settings -> healthy
 ```
@@ -62,6 +62,10 @@ The daemon is the only production status source for CLI and VS Code paths. Older
 `local-uses-remote` creates a local listener and opens target connections from the remote side.
 
 `remote-uses-local` creates a remote listener and opens target connections from the local side. This is the default shape used by the VS Code extension when a remote shell needs the local desktop proxy.
+
+`--connect-mode auto` is the default. The daemon first ensures the persistent
+remote peer, then chooses a peer-native route when reachable or a reverse link
+when topology requires it.
 
 `--connect-mode reverse-link` keeps the route reachable through SSH even when the local machine is not directly reachable from the remote host.
 

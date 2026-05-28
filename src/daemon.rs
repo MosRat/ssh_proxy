@@ -386,15 +386,20 @@ pub async fn doctor(args: cli::DoctorArgs, config: config::AppConfig) -> Result<
                     "error": "failed to parse daemon status response"
                 })
             });
-            let report = diagnostics::doctor_report(&config, Some(status.clone()));
+            let mut report = diagnostics::doctor_report(&config, Some(status.clone()));
+            if let Some(target) = &args.target {
+                report["peer_report"] = diagnostics::peer_report(&config, Some(&status), target);
+            }
             print_json(
                 args.json,
                 json!({
                     "ok": status.get("ok").and_then(Value::as_bool).unwrap_or(false),
                     "kind": "daemon_doctor",
                     "daemon_api": "v0.3",
+                    "target": args.target,
                     "status": diagnostics::redact_value(&status),
                     "dependencies": report.get("dependencies").cloned().unwrap_or_else(|| json!([])),
+                    "peer_report": report.get("peer_report").cloned().unwrap_or(Value::Null),
                     "report": report,
                 }),
             )
@@ -408,7 +413,7 @@ pub async fn doctor(args: cli::DoctorArgs, config: config::AppConfig) -> Result<
             }
         }
         Err(err) => {
-            let mut value = daemon_unavailable_doctor(&config, args.report);
+            let mut value = daemon_unavailable_doctor(&config, args.report, args.target.as_deref());
             annotate_control_error(&mut value, &err);
             attach_top_level_repair_action(&mut value);
             print_json(args.json, value)
@@ -473,6 +478,7 @@ pub async fn vscode(args: cli::VscodeArgs, config: config::AppConfig) -> Result<
         cli::VscodeCommand::Diagnose(args) => {
             doctor(
                 cli::DoctorArgs {
+                    target: None,
                     endpoint: args.endpoint,
                     token: args.token,
                     json: args.json,
@@ -485,12 +491,17 @@ pub async fn vscode(args: cli::VscodeArgs, config: config::AppConfig) -> Result<
     }
 }
 
-fn daemon_unavailable_doctor(config: &config::AppConfig, include_report: bool) -> Value {
+fn daemon_unavailable_doctor(
+    config: &config::AppConfig,
+    include_report: bool,
+    target: Option<&str>,
+) -> Value {
     let mut value = json!({
         "ok": false,
         "kind": "daemon_doctor",
         "daemon_api": "v0.3",
         "version": env!("CARGO_PKG_VERSION"),
+        "target": target,
         "checks": [{
             "name": "daemon_control",
             "ok": false,
@@ -506,7 +517,12 @@ fn daemon_unavailable_doctor(config: &config::AppConfig, include_report: bool) -
         "requires_elevation": true,
     });
     if include_report {
-        value["report"] = diagnostics::doctor_report(config, None);
+        let mut report = diagnostics::doctor_report(config, None);
+        if let Some(target) = target {
+            report["peer_report"] = diagnostics::peer_report(config, None, target);
+            value["peer_report"] = report["peer_report"].clone();
+        }
+        value["report"] = report;
     }
     value
 }

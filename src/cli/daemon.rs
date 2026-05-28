@@ -83,7 +83,7 @@ pub struct UpArgs {
     #[arg(long, default_value_t = 17890, help = "Preferred remote proxy port")]
     pub remote_port: u16,
 
-    #[arg(long, value_enum, default_value = "reverse-link")]
+    #[arg(long, value_enum, default_value = "auto")]
     pub connect_mode: RouteConnectMode,
 
     #[arg(long, default_value_t = control_socket::default_endpoint_string())]
@@ -245,6 +245,9 @@ pub struct EventsArgs {
 
 #[derive(Debug, Clone, Parser)]
 pub struct DoctorArgs {
+    #[arg(long, help = "Include remote peer diagnostics for one SSH target")]
+    pub target: Option<String>,
+
     #[arg(long, default_value_t = control_socket::default_endpoint_string())]
     pub endpoint: String,
 
@@ -293,7 +296,7 @@ pub struct VscodeUpArgs {
     #[arg(long, default_value_t = 17890)]
     pub remote_port: u16,
 
-    #[arg(long, value_enum, default_value = "reverse-link")]
+    #[arg(long, value_enum, default_value = "auto")]
     pub connect_mode: RouteConnectMode,
 
     #[arg(long)]

@@ -30,6 +30,7 @@ mod management;
 mod peers;
 mod proxy_session;
 mod quic_transport;
+mod remote_peer;
 mod remote_setup;
 mod remote_ssh;
 mod routes;
@@ -454,6 +455,15 @@ impl NodeManager {
             "routes": running_routes,
             "route_store": self.route_store_path,
             "peer_store": peer_store,
+            "peer_health": peer_store,
+            "peer_install": peer_store,
+            "transport_decision": running_routes.iter().map(|route| {
+                json!({
+                    "route_id": route.get("id"),
+                    "peer": route.get("peer"),
+                    "runtime": route.get("runtime"),
+                })
+            }).collect::<Vec<_>>(),
             "dependencies": dependencies,
             "route_autostart": self.route_autostart,
             "report_to": self.report_to,

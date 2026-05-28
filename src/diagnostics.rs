@@ -95,6 +95,78 @@ pub(crate) fn doctor_report(config: &config::AppConfig, status: Option<Value>) -
     })
 }
 
+pub(crate) fn peer_report(
+    config: &config::AppConfig,
+    status: Option<&Value>,
+    target: &str,
+) -> Value {
+    let config_peer = config.peers.get(target);
+    let status_peer = status
+        .and_then(|status| status.get("peer_store"))
+        .and_then(Value::as_array)
+        .and_then(|peers| {
+            peers
+                .iter()
+                .find(|peer| peer.get("target").and_then(Value::as_str) == Some(target))
+        })
+        .cloned()
+        .unwrap_or(Value::Null);
+    let route_decisions = status
+        .and_then(|status| status.get("routes"))
+        .and_then(Value::as_array)
+        .map(|routes| {
+            routes
+                .iter()
+                .filter(|route| route.to_string().contains(target))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "target": target,
+        "config_peer": config_peer.map(|peer| redact_value(&json!({
+            "node_id": peer.node_id,
+            "node_name": peer.node_name,
+            "service_instance_id": peer.service_instance_id,
+            "version": peer.version,
+            "control_api_version": peer.control_api_version,
+            "peer_protocol_version": peer.peer_protocol_version,
+            "features": peer.features,
+            "os": peer.os,
+            "arch": peer.arch,
+            "remote_path": peer.remote_path,
+            "control_endpoint": peer.control_endpoint,
+            "transport": peer.transport.map(|addr| addr.to_string()),
+            "tls_transport": peer.tls_transport.map(|addr| addr.to_string()),
+            "quic_transport": peer.quic_transport.map(|addr| addr.to_string()),
+            "transport_protocols": peer.known_transport_protocols(),
+            "auth": {
+                "token": peer.token.is_some(),
+                "token_metadata": peer.token_metadata,
+                "tls_server_cert_fingerprint": peer.tls_server_cert_fingerprint,
+                "tls_client_ca_fingerprint": peer.tls_client_ca_fingerprint,
+            },
+            "last_seen_unix": peer.last_seen_unix,
+        }))),
+        "daemon_peer": redact_value(&status_peer),
+        "route_decisions": redact_value(&json!(route_decisions)),
+        "dependency_report": [
+            {
+                "name": "remote_peer_server",
+                "classification": "required",
+                "state": if status_peer.is_null() { "not_recorded" } else { "recorded" },
+                "message": "daemon-owned remote peer state used by up/vscode up"
+            },
+            {
+                "name": "remote_service_manager",
+                "classification": "optional",
+                "state": status_peer.get("service_manager").and_then(Value::as_str).unwrap_or("unknown"),
+                "message": "Linux prefers user systemd and falls back to managed nohup"
+            }
+        ],
+    })
+}
+
 pub(crate) fn redact_value(value: &Value) -> Value {
     match value {
         Value::Object(object) => Value::Object(redact_object(object)),

@@ -50,6 +50,7 @@ Long work is represented as daemon jobs:
 - `apply_remote_settings`
 - `self_update`
 - `remote_peer_update`
+- `ensure_remote_peer`
 - `doctor_collect`
 
 Jobs move through `queued`, `running`, `waiting_retry`, `healthy`, `failed`, and
@@ -63,7 +64,7 @@ timestamps, and recent events.
 The daemon state machine is:
 
 ```text
-resolve_target -> validate_local_proxy -> select_remote_port -> ensure_peer
+resolve_target -> validate_local_proxy -> select_remote_port -> ensure_remote_peer
   -> ensure_transport -> start_route -> wait_route_ready
   -> verify_remote_port -> apply_remote_settings -> health_monitoring -> healthy
 ```
@@ -73,22 +74,32 @@ background and clients poll `status` or `events`.
 
 ## Peer And Transport Model
 
-`ensure_peer` uses this order:
+`ensure_remote_peer` is the default path for `up` and `vscode up`. It uses this
+order:
 
 1. Adopt an existing compatible peer descriptor.
-2. Schedule a remote peer update if the version is old.
-3. Bootstrap with Rust SSH when no descriptor is readable.
-4. Report `requires_external_ssh=true` only when Rust SSH lacks a required SSH capability.
+2. Inspect dependency and service-manager capability.
+3. Stage the remote binary and write remote peer config/state.
+4. Install and start the peer service.
+5. Health-check the remote descriptor and transport.
+6. Record local `peers.json` state and continue the proxy session.
 
 Normal transport preference is:
 
-1. Existing direct daemon transport.
-2. Rust reverse-link route.
-3. Rust SSH `direct-tcpip`.
-4. Rust SSH exec helper for constrained bootstrap.
-5. Explicit emergency external SSH only when the daemon reports why it is required.
+1. Existing reachable TLS/TCP peer transport.
+2. Existing reachable QUIC peer transport.
+3. Explicitly trusted plain TCP peer transport.
+4. Rust SSH `direct-tcpip` to the persistent peer transport.
+5. Rust reverse-link when topology requires it.
+6. Explicit `ssh-exec` compatibility only when requested.
+7. Explicit emergency external SSH only when the daemon reports why it is required.
 
 OpenSSH subprocess fallback is not part of the normal VS Code path.
+
+Remote peer service management follows the local daemon model where possible:
+Linux prefers user systemd and falls back to a managed nohup supervisor; macOS
+uses a LaunchAgent; Windows remotes use a user scheduled task unless an explicit
+elevated compatibility path is requested.
 
 ## Remote Setup
 

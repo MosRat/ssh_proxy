@@ -690,9 +690,15 @@ impl NodeManager {
             &job_id,
             JobPhase::EnsurePeer,
             35,
-            "ensuring remote peer through existing route planner",
+            "ensuring persistent remote peer",
         )
         .await?;
+        if !self
+            .ensure_remote_peer_for_proxy_session(&spec, &job_id)
+            .await?
+        {
+            return Ok(());
+        }
         self.proxy_job_phase(
             &spec,
             &job_id,

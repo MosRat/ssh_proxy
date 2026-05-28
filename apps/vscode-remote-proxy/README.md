@@ -41,7 +41,7 @@ Auto-start never prompts for UAC or sudo elevation. Interactive commands can gui
 
 `Remote Proxy: Start` calls `ssh_proxy vscode up` and receives a daemon job id plus the intended remote proxy URL. The extension then polls `ssh_proxy vscode status` and renders the daemon phase instead of starting its own route or service fallback chain.
 
-Typical phases are `resolve_target`, `ensure_peer`, `start_route`, `wait_route_ready`, `verify_remote_port`, `apply_remote_settings`, and `healthy`. A terminal `failed` or `cancelled` job includes a blocker, last error, and next action for Diagnose output.
+Typical phases are `resolve_target`, `ensure_remote_peer`, `start_route`, `wait_route_ready`, `verify_remote_port`, `apply_remote_settings`, and `healthy`. A terminal `failed` or `cancelled` job includes a blocker, last error, and next action for Diagnose output.
 
 When no daemon is reachable, auto-start reports the blocker in the status bar.
 Interactive `Remote Proxy: Start` offers an `Install Daemon` action, runs
@@ -92,7 +92,7 @@ When enabled, the extension manages:
 | `remoteProxy.remote.port` | `17890` | Preferred remote listener port. |
 | `remoteProxy.remote.autoPickPort` | `true` | Try nearby ports if the preferred port is busy. |
 | `remoteProxy.sshProxy.executable` | `ssh_proxy` | Explicit binary, bundled binary, or PATH fallback. |
-| `remoteProxy.sshProxy.connectMode` | `reverse-link` | Keep the daemon-managed route reachable through SSH by default. |
+| `remoteProxy.sshProxy.connectMode` | `auto` | Let the daemon prefer the persistent remote peer and fall back when topology requires it. |
 | `remoteProxy.forward.verifyAfterStart` | `true` | Verify remote listener readiness after route start. |
 | `remoteProxy.forward.healthCheckEnabled` | `true` | Periodically verify the active listener. |
 | `remoteProxy.apply.gitConfig` | `true` | Apply remote Git proxy config. |

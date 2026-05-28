@@ -210,7 +210,7 @@ fn up_accepts_proxy_session_shape() {
             assert_eq!(args.target, "126");
             assert_eq!(args.workspace.as_deref(), Some("window-a"));
             assert_eq!(args.local_proxy, "http://127.0.0.1:10808/");
-            assert_eq!(args.connect_mode, RouteConnectMode::ReverseLink);
+            assert_eq!(args.connect_mode, RouteConnectMode::Auto);
             assert!(args.json);
         }
         other => panic!("unexpected command: {other:?}"),
@@ -239,6 +239,7 @@ fn vscode_up_accepts_workspace_session_shape() {
                 assert_eq!(up.target, "126");
                 assert_eq!(up.workspace, "window-a");
                 assert_eq!(up.local_proxy, "http://127.0.0.1:10808/");
+                assert_eq!(up.connect_mode, RouteConnectMode::Auto);
                 assert!(up.json);
             }
             other => panic!("unexpected vscode command: {other:?}"),

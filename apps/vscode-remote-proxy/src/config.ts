@@ -20,7 +20,7 @@ export function readConfig(): RemoteProxyConfig {
     sshHostOverride: config.get<string>('ssh.host', ''),
     sshUseStorageFallback: config.get<boolean>('ssh.useStorageFallback', false),
     sshProxyExecutable: config.get<string>('sshProxy.executable', 'ssh_proxy'),
-    sshProxyConnectMode: config.get<'auto' | 'reverse-link' | 'direct'>('sshProxy.connectMode', 'reverse-link'),
+    sshProxyConnectMode: config.get<'auto' | 'reverse-link' | 'direct'>('sshProxy.connectMode', 'auto'),
     restartOnHostChange: config.get<boolean>('forward.restartOnHostChange', true),
     verifyAfterStart: config.get<boolean>('forward.verifyAfterStart', true),
     healthCheckEnabled: config.get<boolean>('forward.healthCheckEnabled', true),

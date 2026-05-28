@@ -33,6 +33,7 @@ pub(crate) fn transport_selection_policy(
     remote_tls: Option<SocketAddr>,
     allow_plain_tcp: bool,
     remote_side_listens: bool,
+    persistent_peer_ready: bool,
 ) -> Result<TransportSelection> {
     if args.remote_transport != cli::RemoteTransport::Auto {
         return Ok(TransportSelection {
@@ -106,6 +107,14 @@ pub(crate) fn transport_selection_policy(
             transport: cli::RemoteTransport::PlainTcp,
             source: source.to_string(),
             reason: plain_tcp_selection_reason(source),
+        });
+    }
+
+    if persistent_peer_ready {
+        return Ok(TransportSelection {
+            transport: cli::RemoteTransport::Tcp,
+            source: "peer-default".to_string(),
+            reason: "persistent remote peer is recorded; using SPX over Rust SSH direct-tcpip to the peer transport".to_string(),
         });
     }
 

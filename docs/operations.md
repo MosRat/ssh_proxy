@@ -63,7 +63,7 @@ User-facing repair commands should point at `ssh_proxy daemon install`,
 route id, remote URL, and job id, then advances:
 
 ```text
-resolve_target -> validate_local_proxy -> select_remote_port -> ensure_peer
+resolve_target -> validate_local_proxy -> select_remote_port -> ensure_remote_peer
   -> ensure_transport -> start_route -> wait_route_ready
   -> verify_remote_port -> apply_remote_settings -> health_monitoring -> healthy
 ```
@@ -103,6 +103,9 @@ jobs instead of leaving orphaned local state.
 Remote SSH targets run a managed peer service. On Linux, the daemon prefers the
 user systemd unit `ssh-proxy-helper.service`; when user systemd is unavailable,
 it falls back to the managed nohup supervisor under `~/.ssh_proxy/run`.
+macOS remotes use a user LaunchAgent with KeepAlive. Windows remotes use a user
+scheduled task by default; system service install remains an explicit elevated
+compatibility path.
 
 Bootstrap and update are considered successful only after the remote
 `descriptor` control request succeeds. The descriptor records the real control
@@ -110,6 +113,11 @@ endpoint, transport endpoint, protocol versions, service instance id, remote
 user, data directory, and advertised transports. Re-running bootstrap repairs an
 existing systemd unit, restarts it, then refreshes the descriptor before local
 state is updated.
+
+`ssh_proxy status --json` exposes `peer_store`, `peer_health`, `peer_install`,
+and `transport_decision`. `ssh_proxy doctor --json --report --target <host>`
+adds a redacted target-specific peer report with install state, service manager,
+descriptor state, dependency classification, and matching route decisions.
 
 ## OpenSSH Policy
 
@@ -142,7 +150,7 @@ Common cases:
 - `requires_elevation`: run the suggested daemon install/update command with `--elevate`.
 - `node_control_token_required`: the running daemon is stale or token-backed; use the interactive repair action to reinstall/migrate the daemon.
 - `remote_port_occupied`: keep automatic port picking enabled or select another preferred port.
-- `starting` or `bootstrapping_peer`: inspect events; slow bootstrap is not a reason to switch to OpenSSH.
+- `starting`, `ensure_remote_peer`, or `bootstrapping_peer`: inspect events; slow bootstrap is not a reason to switch to OpenSSH.
 
 ## Reporting
 

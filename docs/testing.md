@@ -22,6 +22,13 @@ change. Add `-Transport` only when transport routing or data-plane behavior
 changes. The transport smoke is intentionally single-threaded because it starts
 long-lived local daemon/proxy processes and binds ephemeral ports.
 
+Add targeted Rust tests instead of the full suite when only one subsystem moved:
+
+- remote peer provider command rendering: `cargo test remote_ --lib`;
+- transport selection policy: `cargo test route::tests --lib`;
+- repair/report schema: `cargo test repair diagnostics --lib`;
+- extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
+
 Run the VS Code tests separately when extension code changes:
 
 ```powershell

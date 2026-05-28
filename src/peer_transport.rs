@@ -298,10 +298,6 @@ pub fn auto_candidates(hints: &NetworkHints) -> Vec<PeerEndpoint> {
             protocol: PeerProtocol::SshDirect,
             addr: hints.peer_addr,
         });
-        candidates.push(PeerEndpoint {
-            protocol: PeerProtocol::SshExec,
-            addr: None,
-        });
     }
 
     candidates
@@ -317,7 +313,6 @@ pub fn implemented_auto_candidates(hints: &NetworkHints) -> Vec<PeerEndpoint> {
                     | PeerProtocol::TlsTcp
                     | PeerProtocol::Tcp
                     | PeerProtocol::SshDirect
-                    | PeerProtocol::SshExec
             )
         })
         .collect()
@@ -641,8 +636,7 @@ mod tests {
             vec![
                 PeerProtocol::Quic,
                 PeerProtocol::TlsTcp,
-                PeerProtocol::SshDirect,
-                PeerProtocol::SshExec
+                PeerProtocol::SshDirect
             ]
         );
     }
@@ -664,8 +658,7 @@ mod tests {
             vec![
                 PeerProtocol::Quic,
                 PeerProtocol::TlsTcp,
-                PeerProtocol::SshDirect,
-                PeerProtocol::SshExec
+                PeerProtocol::SshDirect
             ]
         );
     }
@@ -688,8 +681,7 @@ mod tests {
                 PeerProtocol::Quic,
                 PeerProtocol::TlsTcp,
                 PeerProtocol::Tcp,
-                PeerProtocol::SshDirect,
-                PeerProtocol::SshExec
+                PeerProtocol::SshDirect
             ]
         );
     }

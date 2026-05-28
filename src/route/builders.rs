@@ -181,6 +181,13 @@ pub(crate) fn node_forward_from_route(
         remote_tls,
         allow_plain_tcp,
         remote_side_listens,
+        config.peers.get(&args.target).is_some_and(|peer| {
+            peer.remote_path.is_some()
+                && peer.control_endpoint.is_some()
+                && (peer.transport.is_some()
+                    || peer.tls_transport.is_some()
+                    || peer.quic_transport.is_some())
+        }),
     )?;
     Ok(cli::NodeForwardArgs {
         target,
