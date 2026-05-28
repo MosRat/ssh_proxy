@@ -129,6 +129,7 @@ pub(crate) async fn run_daemon_inner(
         .state
         .record_daemon_started(&manager.name, &manager.control_endpoint.to_string())
         .await?;
+    manager.reconcile_daemon_update_job().await?;
     manager.reconcile_proxy_sessions().await?;
 
     info!(

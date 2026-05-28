@@ -30,6 +30,38 @@ struct UpdateSwitchPlan {
 }
 
 impl NodeManager {
+    pub(super) async fn reconcile_daemon_update_job(&self) -> Result<()> {
+        let update_state = self.state.daemon_value().await;
+        let update_healthy = update_state
+            .pointer("/update/state")
+            .and_then(serde_json::Value::as_str)
+            == Some("healthy")
+            || update_state
+                .get("update_state")
+                .and_then(serde_json::Value::as_str)
+                == Some("healthy");
+        if !update_healthy {
+            return Ok(());
+        }
+        let Some(job) = self.jobs.get("self-update:pending").await else {
+            return Ok(());
+        };
+        if !matches!(
+            job.state,
+            jobs::JobState::Queued | jobs::JobState::Running | jobs::JobState::WaitingRetry
+        ) {
+            return Ok(());
+        }
+        let mut completed = job.transition(jobs::JobState::Healthy, jobs::JobPhase::Healthy, 100);
+        completed.blocker = None;
+        completed.next_action = None;
+        completed.last_error = None;
+        self.jobs
+            .upsert(completed, "daemon self-update completed after restart")
+            .await?;
+        Ok(())
+    }
+
     pub(super) async fn daemon_update(&self, request: NodeRequest) -> Result<String> {
         let source = request.update_source.clone();
         self.state
