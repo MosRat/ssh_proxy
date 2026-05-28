@@ -14,7 +14,7 @@ pub(super) async fn run_control_server(
     manager: Arc<NodeManager>,
 ) -> Result<()> {
     let listener = control_socket::ControlListener::bind(&endpoint).await?;
-    let require_auth = endpoint.is_tcp();
+    let require_auth = manager.token_value().is_some();
     info!(%endpoint, "node control listener ready");
     loop {
         tokio::select! {
@@ -95,7 +95,7 @@ fn authenticate_request(
     let provided = request
         .auth_token
         .as_deref()
-        .ok_or_else(|| anyhow!("node control token is required for TCP endpoints"))?;
+        .ok_or_else(|| anyhow!("node control token is required"))?;
     if token_matches(provided, expected) {
         Ok(())
     } else {

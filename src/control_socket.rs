@@ -13,6 +13,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time;
 
+#[cfg(windows)]
+mod windows_pipe;
+
 pub const MAX_CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
 pub const MAX_CONTROL_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(30);
@@ -266,9 +269,7 @@ impl AsyncWrite for ControlStream {
 fn create_named_pipe_server(
     path: &str,
 ) -> Result<tokio::net::windows::named_pipe::NamedPipeServer> {
-    tokio::net::windows::named_pipe::ServerOptions::new()
-        .create(path)
-        .with_context(|| format!("failed to create named pipe {path}"))
+    windows_pipe::create_server(path)
 }
 
 #[cfg(windows)]

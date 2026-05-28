@@ -31,7 +31,7 @@ import {
   checkStartPreflight,
   planAutoStart,
 } from './startupCoordinator';
-import { AppliedProxy, ForwardingBackendKind, RemoteProxyConfig } from './types';
+import { AppliedProxy, ForwardingBackendKind, RemoteProxyConfig, SshTargetConfig } from './types';
 import { detectSshHostFromVsCodeStorage } from './vscodeStorage';
 
 let controller: RemoteProxyController | undefined;
@@ -65,6 +65,7 @@ class RemoteProxyController implements vscode.Disposable {
   private readonly monitorTimer: NodeJS.Timeout;
   private applying = false;
   private lastResolvedTargetKey: string | undefined;
+  private lastResolvedSshTarget: SshTargetConfig | undefined;
   private lastHealthCheckAt = 0;
   private healthFailures = 0;
 
@@ -201,6 +202,7 @@ class RemoteProxyController implements vscode.Disposable {
         remoteUrl: makeRemoteProxyUrl(local, config.remoteBindHost, config.remotePort),
         remotePort: config.remotePort,
         remoteBindHost: config.remoteBindHost,
+        sshTarget: this.lastResolvedSshTarget,
         workspaceId: targetKey,
       };
       this.output.appendLine(`Starting daemon-owned proxy session for ${sshHost} (${targetKey}).`);
@@ -605,6 +607,7 @@ class RemoteProxyController implements vscode.Disposable {
     const remote = getRemoteContext(config.sshHostOverride);
     if (remote.sshHost) {
       this.lastResolvedTargetKey = remote.sshHost;
+      this.lastResolvedSshTarget = undefined;
       return remote.sshHost;
     }
 
@@ -612,6 +615,7 @@ class RemoteProxyController implements vscode.Disposable {
     if (activeCommandHost) {
       this.output.appendLine(`Resolved SSH host from Remote SSH active command: ${activeCommandHost.host} (${activeCommandHost.source})`);
       this.lastResolvedTargetKey = activeCommandHost.targetKey ?? activeCommandHost.host;
+      this.lastResolvedSshTarget = activeCommandHost.sshTarget;
       return activeCommandHost.host;
     }
 
@@ -619,6 +623,7 @@ class RemoteProxyController implements vscode.Disposable {
     if (storageHost?.confidence === 'high') {
       this.output.appendLine(`Resolved SSH host from VS Code storage: ${storageHost.host} (${storageHost.source})`);
       this.lastResolvedTargetKey = storageHost.targetKey ?? storageHost.host;
+      this.lastResolvedSshTarget = storageHost.sshTarget;
       return storageHost.host;
     }
     if (storageHost) {
@@ -631,6 +636,7 @@ class RemoteProxyController implements vscode.Disposable {
 
     const picked = await this.pickSshHost();
     this.lastResolvedTargetKey = picked;
+    this.lastResolvedSshTarget = undefined;
     return picked;
   }
 

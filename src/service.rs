@@ -752,7 +752,7 @@ async fn query_daemon_status(plan: &ServicePlan) -> Value {
         }
     };
     let request = match crate::node_daemon::NodeRequest::command("status")
-        .with_auth_token(endpoint.is_tcp().then_some(plan.token.as_deref()).flatten())
+        .with_auth_token(plan.token.as_deref())
         .to_line()
     {
         Ok(request) => request,

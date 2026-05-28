@@ -9,10 +9,7 @@ use super::{NodeRequest, attach_auth_token};
 pub(crate) async fn run(args: cli::NodeControlArgs, config: config::AppConfig) -> Result<()> {
     let endpoint = control_socket::ControlEndpoint::parse(&args.endpoint)?;
     let cli_token = args.token.as_deref();
-    let auth_token = endpoint
-        .is_tcp()
-        .then_some(cli_token.or(config.daemon.token.as_deref()))
-        .flatten();
+    let auth_token = cli_token.or(config.daemon.token.as_deref());
     let request = match args.command {
         cli::NodeControlCommand::Status => NodeRequest::command("status")
             .with_auth_token(auth_token)

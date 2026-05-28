@@ -38,6 +38,9 @@ export class SshProxyDaemonRejectedError extends Error {
     if (this.blocker === 'daemon_unavailable') {
       return 'ssh_proxy daemon is not installed or not running';
     }
+    if (this.blocker === 'daemon_pipe_access_denied') {
+      return 'ssh_proxy daemon is running but its control pipe denied this user; reinstall or restart the daemon to repair permissions';
+    }
     return this.message;
   }
 }
@@ -116,6 +119,7 @@ export class SshProxyKernelBackend implements ForwardingBackend {
         remoteBind: proxy.remoteBindHost,
         remotePort: proxy.remotePort,
         connectMode: config.sshProxyConnectMode,
+        sshTarget: proxy.sshTarget,
         workspacePaths: remoteWorkspacePaths(),
         serverDir: serverDirName(),
         noProxy: config.noProxy,

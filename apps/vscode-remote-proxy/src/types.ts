@@ -71,6 +71,7 @@ export interface AppliedProxy {
   readonly remoteUrl: string;
   readonly remotePort: number;
   readonly remoteBindHost: string;
+  readonly sshTarget?: SshTargetConfig;
   readonly workspaceId?: string;
   readonly routeId?: string;
   readonly routeOwner?: string;
@@ -79,4 +80,15 @@ export interface AppliedProxy {
   readonly fallbackReason?: string;
   readonly backend?: ForwardingBackendKind;
   readonly cleanupCommand?: string;
+}
+
+export interface SshTargetConfig {
+  readonly hostName?: string;
+  readonly user?: string;
+  readonly port?: number;
+  readonly identityFiles?: readonly string[];
+  readonly configFile?: string;
+  readonly knownHostsFile?: string;
+  readonly proxyJump?: readonly string[];
+  readonly acceptNew?: boolean;
 }

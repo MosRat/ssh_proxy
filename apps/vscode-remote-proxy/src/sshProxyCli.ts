@@ -17,6 +17,7 @@ import {
   SshProxyExecutableDiscovery,
   SshProxyExecutableDiscoveryOptions,
 } from './sshProxyDiscovery';
+import { SshTargetConfig } from './types';
 
 export interface CommandResult {
   readonly exitCode: number;
@@ -68,6 +69,7 @@ export class SshProxyCli {
     readonly remoteBind: string;
     readonly remotePort: number;
     readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+    readonly sshTarget?: SshTargetConfig;
     readonly workspacePaths?: readonly string[];
     readonly serverDir?: string;
     readonly noProxy?: string;

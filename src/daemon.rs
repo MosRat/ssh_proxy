@@ -396,9 +396,7 @@ async fn request_daemon_or_report(
     unavailable: impl FnOnce() -> Value,
 ) -> Result<()> {
     let endpoint = control_socket::ControlEndpoint::parse(endpoint)?;
-    if endpoint.is_tcp() {
-        node_daemon::attach_auth_token(&mut request, token.or(config.daemon.token.as_deref()));
-    }
+    node_daemon::attach_auth_token(&mut request, token.or(config.daemon.token.as_deref()));
     match control_socket::request(&endpoint, &format!("{request}\n")).await {
         Ok(response) => {
             print!("{response}");
@@ -406,12 +404,50 @@ async fn request_daemon_or_report(
         }
         Err(err) => {
             let mut value = unavailable();
-            if let Some(object) = value.as_object_mut() {
-                object.insert("error".to_string(), json!(err.to_string()));
-            }
+            annotate_control_error(&mut value, &err);
             print_json(compact_json, value)
         }
     }
+}
+
+fn annotate_control_error(value: &mut Value, err: &anyhow::Error) {
+    let access_denied = err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(is_access_denied)
+    }) || err.to_string().contains("Access is denied");
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    object.insert("error".to_string(), json!(err.to_string()));
+    if !access_denied {
+        return;
+    }
+    object.insert("code".to_string(), json!("daemon_pipe_access_denied"));
+    object.insert("blocker".to_string(), json!("daemon_pipe_access_denied"));
+    object.insert(
+        "message".to_string(),
+        json!("ssh_proxy daemon pipe denied this user"),
+    );
+    object.insert(
+        "next_action".to_string(),
+        json!("ssh_proxy daemon install --scope system --elevate"),
+    );
+    object.insert("requires_elevation".to_string(), json!(true));
+    object.insert("retry_after_ms".to_string(), json!(1000));
+    if let Some(job) = object.get_mut("job").and_then(Value::as_object_mut) {
+        job.insert("state".to_string(), json!("blocked"));
+        job.insert("phase".to_string(), json!("daemon_pipe_access_denied"));
+        job.insert("blocker".to_string(), json!("daemon_pipe_access_denied"));
+        job.insert(
+            "message".to_string(),
+            json!("daemon pipe denied this user; reinstall or restart daemon to repair pipe ACL"),
+        );
+    }
+}
+
+fn is_access_denied(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(5)
 }
 
 fn job_status(id: &str, kind: &str, state: &str, phase: &str, message: &str) -> Value {
@@ -453,6 +489,14 @@ mod tests {
             endpoint: control_socket::default_endpoint_string(),
             token: None,
             id: None,
+            ssh_host_name: None,
+            ssh_user: None,
+            ssh_port: None,
+            ssh_identity: Vec::new(),
+            ssh_config: None,
+            ssh_known_hosts: None,
+            ssh_jump: Vec::new(),
+            ssh_accept_new: false,
             workspace_paths: Vec::new(),
             server_dir: ".vscode-server".to_string(),
             no_proxy: "localhost,127.0.0.1,::1".to_string(),

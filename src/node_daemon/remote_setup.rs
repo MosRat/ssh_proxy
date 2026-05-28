@@ -188,6 +188,16 @@ fn install_args_from_spec(
             .clone()
             .unwrap_or_else(|| spec.target.clone());
     }
+    if let Some(ssh) = spec.ssh.as_ref() {
+        args.ssh_args = ssh.ssh_args();
+        args.user = ssh.user.clone();
+        args.port = ssh.port;
+        args.identity = ssh.identity.clone();
+        args.config = ssh.config.clone();
+        args.known_hosts = ssh.known_hosts.clone();
+        args.jump = ssh.jump.clone();
+        args.accept_new = ssh.accept_new;
+    }
     Ok(args)
 }
 
@@ -753,6 +763,7 @@ mod tests {
         ProxySessionSpec {
             target: "126".to_string(),
             workspace_id: Some("Window A".to_string()),
+            ssh: None,
             workspace_paths: vec!["/home/wen/project".to_string()],
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),

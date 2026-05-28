@@ -1,4 +1,4 @@
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{net::IpAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,8 @@ pub(crate) struct ProxySessionSpec {
     pub(crate) target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ssh: Option<SshTargetSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) workspace_paths: Vec<String>,
     pub(crate) local_proxy: String,
@@ -26,6 +28,26 @@ pub(crate) struct ProxySessionSpec {
     pub(crate) remote_port_policy: RemotePortPolicy,
     pub(crate) connect_mode: cli::RouteConnectMode,
     pub(crate) apply_policy: ApplyPolicy,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct SshTargetSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) host_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) identity: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) config: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) known_hosts: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) jump: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) accept_new: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +97,7 @@ impl ProxySessionSpec {
         Self {
             target: args.target.clone(),
             workspace_id: args.workspace.clone(),
+            ssh: SshTargetSpec::from_up_args(args),
             workspace_paths: args.workspace_paths.clone(),
             local_proxy: args.local_proxy.clone(),
             remote_bind: args.remote_bind,
@@ -138,6 +161,40 @@ impl ProxySessionSpec {
 
     pub(crate) fn to_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| Value::Null)
+    }
+}
+
+impl SshTargetSpec {
+    fn from_up_args(args: &cli::UpArgs) -> Option<Self> {
+        let spec = Self {
+            host_name: args.ssh_host_name.clone().filter(|value| !value.is_empty()),
+            user: args.ssh_user.clone().filter(|value| !value.is_empty()),
+            port: args.ssh_port,
+            identity: args.ssh_identity.clone(),
+            config: args.ssh_config.clone(),
+            known_hosts: args.ssh_known_hosts.clone(),
+            jump: args.ssh_jump.clone(),
+            accept_new: args.ssh_accept_new,
+        };
+        (!spec.is_empty()).then_some(spec)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.host_name.is_none()
+            && self.user.is_none()
+            && self.port.is_none()
+            && self.identity.is_empty()
+            && self.config.is_none()
+            && self.known_hosts.is_none()
+            && self.jump.is_empty()
+            && !self.accept_new
+    }
+
+    pub(super) fn ssh_args(&self) -> Vec<String> {
+        match self.host_name.as_deref() {
+            Some(host_name) => vec!["-o".to_string(), format!("HostName={host_name}")],
+            None => Vec::new(),
+        }
     }
 }
 
@@ -391,7 +448,7 @@ impl NodeManager {
                 }))
             }
             Err(err) => {
-                let error = err.to_string();
+                let error = error_chain(&err);
                 let remote_setup =
                     RemoteSetupStatus::failed(error.clone(), None, Some(remote_url.clone()));
                 let session = self
@@ -648,7 +705,7 @@ impl NodeManager {
                                 .await?;
                         }
                         Err(err) => {
-                            let error = err.to_string();
+                            let error = error_chain(&err);
                             let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
                                 .with_remote_url(Some(remote_url_value.clone()))
                                 .failed(error.clone(), Some("remote_setup_failed".to_string()))
@@ -712,6 +769,7 @@ impl NodeManager {
 }
 
 fn route_request_from_spec(spec: &ProxySessionSpec) -> NodeRequest {
+    let ssh = spec.ssh.as_ref();
     NodeRequest::route_intent(cli::RouteArgs {
         target: spec.target.clone(),
         direction: cli::RouteDirection::RemoteUsesLocal,
@@ -721,15 +779,15 @@ fn route_request_from_spec(spec: &ProxySessionSpec) -> NodeRequest {
         tcp_target: None,
         endpoint: crate::control_socket::default_endpoint_string(),
         token: None,
-        ssh_args: Vec::new(),
-        user: None,
-        ssh_port: None,
-        identity: Vec::new(),
-        config: None,
-        known_hosts: None,
-        accept_new: false,
+        ssh_args: ssh.map(SshTargetSpec::ssh_args).unwrap_or_default(),
+        user: ssh.and_then(|ssh| ssh.user.clone()),
+        ssh_port: ssh.and_then(|ssh| ssh.port),
+        identity: ssh.map(|ssh| ssh.identity.clone()).unwrap_or_default(),
+        config: ssh.and_then(|ssh| ssh.config.clone()),
+        known_hosts: ssh.and_then(|ssh| ssh.known_hosts.clone()),
+        accept_new: ssh.is_some_and(|ssh| ssh.accept_new),
         insecure_ignore_host_key: false,
-        jump: Vec::new(),
+        jump: ssh.map(|ssh| ssh.jump.clone()).unwrap_or_default(),
         remote_path: None,
         remote_bin: None,
         deploy: cli::DeployMode::Auto,
@@ -813,6 +871,10 @@ fn job_health(job: &JobRecord) -> &'static str {
     }
 }
 
+fn error_chain(err: &anyhow::Error) -> String {
+    format!("{err:#}")
+}
+
 fn proxy_url_for_remote(local_proxy: &str, remote_bind: &str, remote_port: u16) -> String {
     let Some((scheme, rest)) = local_proxy.split_once("://") else {
         return format!("http://{remote_bind}:{remote_port}");
@@ -883,6 +945,7 @@ fn spec_from_apply_request(request: &NodeRequest) -> Result<ProxySessionSpec> {
     Ok(ProxySessionSpec {
         target,
         workspace_id: Some(workspace),
+        ssh: None,
         workspace_paths: Vec::new(),
         local_proxy: remote_url,
         remote_bind,
@@ -950,9 +1013,13 @@ fn sanitize_key(key: &str) -> String {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::{net::IpAddr, path::PathBuf};
 
     use super::*;
 
@@ -961,6 +1028,7 @@ mod tests {
         let spec = ProxySessionSpec {
             target: "126".to_string(),
             workspace_id: Some("Window A".to_string()),
+            ssh: None,
             workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
@@ -985,10 +1053,60 @@ mod tests {
     }
 
     #[test]
+    fn route_request_uses_client_supplied_ssh_target() {
+        let spec = ProxySessionSpec {
+            target: "102".to_string(),
+            workspace_id: Some("Window A".to_string()),
+            ssh: Some(SshTargetSpec {
+                host_name: Some("10.10.100.71".to_string()),
+                user: Some("wenhongli".to_string()),
+                port: Some(10022),
+                identity: vec![PathBuf::from("C:/Users/whl/.ssh/id_rsa")],
+                config: Some(PathBuf::from("C:/Users/whl/.ssh/config")),
+                known_hosts: Some(PathBuf::from("C:/Users/whl/.ssh/known_hosts")),
+                jump: vec!["hub".to_string()],
+                accept_new: true,
+            }),
+            workspace_paths: Vec::new(),
+            local_proxy: "http://127.0.0.1:10808/".to_string(),
+            remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
+            remote_port_policy: RemotePortPolicy {
+                preferred: 17890,
+                auto_pick: true,
+            },
+            connect_mode: cli::RouteConnectMode::ReverseLink,
+            apply_policy: ApplyPolicy::default(),
+        };
+
+        let request = route_request_from_spec(&spec);
+        let route = request.route.expect("route args");
+
+        assert_eq!(route.target, "102");
+        assert_eq!(route.user.as_deref(), Some("wenhongli"));
+        assert_eq!(route.ssh_port, Some(10022));
+        assert_eq!(
+            route.identity,
+            vec![PathBuf::from("C:/Users/whl/.ssh/id_rsa")]
+        );
+        assert_eq!(
+            route.config,
+            Some(PathBuf::from("C:/Users/whl/.ssh/config"))
+        );
+        assert_eq!(
+            route.known_hosts,
+            Some(PathBuf::from("C:/Users/whl/.ssh/known_hosts"))
+        );
+        assert_eq!(route.jump, vec!["hub"]);
+        assert!(route.accept_new);
+        assert_eq!(route.ssh_args, vec!["-o", "HostName=10.10.100.71"]);
+    }
+
+    #[test]
     fn validates_supported_local_proxy_urls() {
         let mut spec = ProxySessionSpec {
             target: "126".to_string(),
             workspace_id: None,
+            ssh: None,
             workspace_paths: Vec::new(),
             local_proxy: "socks5h://user:pass@[::1]:1080/path".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),

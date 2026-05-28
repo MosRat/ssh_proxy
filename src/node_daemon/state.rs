@@ -14,7 +14,7 @@ use crate::config;
 
 use super::{
     jobs::JobRecord,
-    proxy_session::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy},
+    proxy_session::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy, SshTargetSpec},
 };
 
 const STORE_VERSION: u32 = 1;
@@ -25,6 +25,8 @@ pub(super) struct ProxySessionRecord {
     pub(super) target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) workspace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ssh: Option<SshTargetSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) workspace_paths: Vec<String>,
     pub(super) job_id: String,
@@ -57,6 +59,7 @@ impl ProxySessionRecord {
             session_id: spec.session_id(),
             target: spec.target.clone(),
             workspace_id: spec.workspace_id.clone(),
+            ssh: spec.ssh.clone(),
             workspace_paths: spec.workspace_paths.clone(),
             job_id: job.id.clone(),
             route_id: spec.route_id(),
@@ -81,6 +84,7 @@ impl ProxySessionRecord {
     fn update_from_job(&mut self, spec: &ProxySessionSpec, job: &JobRecord) {
         self.target = spec.target.clone();
         self.workspace_id = spec.workspace_id.clone();
+        self.ssh = spec.ssh.clone();
         self.workspace_paths = spec.workspace_paths.clone();
         self.route_id = spec.route_id();
         self.local_proxy = spec.local_proxy.clone();
@@ -113,6 +117,7 @@ impl ProxySessionRecord {
         Ok(ProxySessionSpec {
             target: self.target.clone(),
             workspace_id: self.workspace_id.clone(),
+            ssh: self.ssh.clone(),
             workspace_paths: self.workspace_paths.clone(),
             local_proxy: self.local_proxy.clone(),
             remote_bind: self.remote_bind.parse()?,
@@ -640,6 +645,7 @@ mod tests {
         ProxySessionSpec {
             target: "126".to_string(),
             workspace_id: Some("Window A".to_string()),
+            ssh: None,
             workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),

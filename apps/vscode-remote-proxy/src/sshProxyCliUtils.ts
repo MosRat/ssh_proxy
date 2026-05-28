@@ -29,6 +29,16 @@ export function buildSshProxyVscodeUpArgs(options: {
   readonly remoteBind: string;
   readonly remotePort: number;
   readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+  readonly sshTarget?: {
+    readonly hostName?: string;
+    readonly user?: string;
+    readonly port?: number;
+    readonly identityFiles?: readonly string[];
+    readonly configFile?: string;
+    readonly knownHostsFile?: string;
+    readonly proxyJump?: readonly string[];
+    readonly acceptNew?: boolean;
+  };
   readonly workspacePaths?: readonly string[];
   readonly serverDir?: string;
   readonly noProxy?: string;
@@ -59,6 +69,30 @@ export function buildSshProxyVscodeUpArgs(options: {
     '--connect-mode',
     options.connectMode,
   ];
+  if (options.sshTarget?.hostName) {
+    args.push('--ssh-host-name', options.sshTarget.hostName);
+  }
+  if (options.sshTarget?.user) {
+    args.push('--ssh-user', options.sshTarget.user);
+  }
+  if (options.sshTarget?.port) {
+    args.push('--ssh-port', String(options.sshTarget.port));
+  }
+  for (const identity of options.sshTarget?.identityFiles ?? []) {
+    args.push('--ssh-identity', identity);
+  }
+  if (options.sshTarget?.configFile) {
+    args.push('--ssh-config', options.sshTarget.configFile);
+  }
+  if (options.sshTarget?.knownHostsFile) {
+    args.push('--ssh-known-hosts', options.sshTarget.knownHostsFile);
+  }
+  for (const jump of options.sshTarget?.proxyJump ?? []) {
+    args.push('--ssh-jump', jump);
+  }
+  if (options.sshTarget?.acceptNew) {
+    args.push('--ssh-accept-new');
+  }
   for (const workspacePath of options.workspacePaths ?? []) {
     args.push('--workspace-path', workspacePath);
   }

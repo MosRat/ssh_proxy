@@ -80,6 +80,39 @@ pub struct UpArgs {
     #[arg(long, help = "Stable route id; defaults to the workspace or target")]
     pub id: Option<String>,
 
+    #[arg(long, help = "Resolved SSH HostName supplied by a thin client")]
+    pub ssh_host_name: Option<String>,
+
+    #[arg(long, help = "Resolved SSH user supplied by a thin client")]
+    pub ssh_user: Option<String>,
+
+    #[arg(long, help = "Resolved SSH port supplied by a thin client")]
+    pub ssh_port: Option<u16>,
+
+    #[arg(long = "ssh-identity", help = "Resolved SSH identity file")]
+    pub ssh_identity: Vec<PathBuf>,
+
+    #[arg(
+        long = "ssh-config",
+        help = "SSH config path used to resolve jump hosts"
+    )]
+    pub ssh_config: Option<PathBuf>,
+
+    #[arg(
+        long = "ssh-known-hosts",
+        help = "SSH known_hosts path for daemon-owned Rust SSH"
+    )]
+    pub ssh_known_hosts: Option<PathBuf>,
+
+    #[arg(long = "ssh-jump", help = "Resolved SSH ProxyJump hop")]
+    pub ssh_jump: Vec<String>,
+
+    #[arg(
+        long = "ssh-accept-new",
+        help = "Learn unknown SSH host keys for daemon-owned Rust SSH"
+    )]
+    pub ssh_accept_new: bool,
+
     #[arg(
         long = "workspace-path",
         help = "Remote workspace path used for daemon-owned Git workspace settings"
@@ -245,6 +278,30 @@ pub struct VscodeUpArgs {
     #[arg(long, value_enum, default_value = "reverse-link")]
     pub connect_mode: RouteConnectMode,
 
+    #[arg(long)]
+    pub ssh_host_name: Option<String>,
+
+    #[arg(long)]
+    pub ssh_user: Option<String>,
+
+    #[arg(long)]
+    pub ssh_port: Option<u16>,
+
+    #[arg(long = "ssh-identity")]
+    pub ssh_identity: Vec<PathBuf>,
+
+    #[arg(long = "ssh-config")]
+    pub ssh_config: Option<PathBuf>,
+
+    #[arg(long = "ssh-known-hosts")]
+    pub ssh_known_hosts: Option<PathBuf>,
+
+    #[arg(long = "ssh-jump")]
+    pub ssh_jump: Vec<String>,
+
+    #[arg(long = "ssh-accept-new")]
+    pub ssh_accept_new: bool,
+
     #[arg(
         long = "workspace-path",
         help = "Remote workspace path used for daemon-owned Git workspace settings"
@@ -373,6 +430,14 @@ impl VscodeUpArgs {
             endpoint: self.endpoint,
             token: self.token,
             id: None,
+            ssh_host_name: self.ssh_host_name,
+            ssh_user: self.ssh_user,
+            ssh_port: self.ssh_port,
+            ssh_identity: self.ssh_identity,
+            ssh_config: self.ssh_config,
+            ssh_known_hosts: self.ssh_known_hosts,
+            ssh_jump: self.ssh_jump,
+            ssh_accept_new: self.ssh_accept_new,
             workspace_paths: self.workspace_paths,
             server_dir: self.server_dir,
             no_proxy: self.no_proxy,

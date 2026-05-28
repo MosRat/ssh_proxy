@@ -492,17 +492,18 @@ fn resolve_target(
     jump_args: Vec<String>,
 ) -> Result<Target> {
     let (user_from_target, host_part, port_from_target) = parse_target(target);
+    let default_known_hosts = if insecure_ignore_host_key {
+        Some(PathBuf::from("NUL"))
+    } else {
+        known_hosts_arg.clone()
+    };
     let mut resolved = Target {
         alias: host_part.clone(),
         host: host_part,
         port: 22,
         user: whoami::username().unwrap_or_else(|_| "root".to_string()),
         identities: Vec::new(),
-        known_hosts: if insecure_ignore_host_key {
-            Some(PathBuf::from("NUL"))
-        } else {
-            known_hosts_arg
-        },
+        known_hosts: default_known_hosts.clone(),
         accept_new: accept_new || insecure_ignore_host_key,
         insecure_ignore_host_key,
         jumps: Vec::new(),
@@ -526,7 +527,13 @@ fn resolve_target(
     } else {
         jump_args
     };
-    resolved.jumps = resolve_jumps(&jump_specs, config_arg.as_deref())?;
+    resolved.jumps = resolve_jumps(
+        &jump_specs,
+        config_arg.as_deref(),
+        default_known_hosts,
+        resolved.accept_new,
+        resolved.insecure_ignore_host_key,
+    )?;
     if resolved.host.is_empty() {
         bail!("empty SSH host");
     }
@@ -560,6 +567,7 @@ fn apply_config(target: &mut Target, config_path: Option<&Path>) -> Result<()> {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(());
     };
+    let config_home = config_home_from_path(&path);
 
     let mut active = true;
     for raw in text.lines() {
@@ -585,11 +593,15 @@ fn apply_config(target: &mut Target, config_path: Option<&Path>) -> Result<()> {
                     target.port = port;
                 }
             }
-            "identityfile" => target
-                .identities
-                .push(expand_path(&expand_ssh_tokens(value, target))),
+            "identityfile" => target.identities.push(expand_path_from_config(
+                &expand_ssh_tokens(value, target),
+                config_home.as_deref(),
+            )),
             "userknownhostsfile" => {
-                target.known_hosts = Some(expand_path(&expand_ssh_tokens(value, target)))
+                target.known_hosts = Some(expand_path_from_config(
+                    &expand_ssh_tokens(value, target),
+                    config_home.as_deref(),
+                ))
             }
             "stricthostkeychecking" if value.eq_ignore_ascii_case("accept-new") => {
                 target.accept_new = true;
@@ -616,6 +628,15 @@ fn apply_config(target: &mut Target, config_path: Option<&Path>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn config_home_from_path(path: &Path) -> Option<PathBuf> {
+    let ssh_dir = path.parent()?;
+    let name = ssh_dir.file_name()?.to_string_lossy();
+    if !name.eq_ignore_ascii_case(".ssh") {
+        return None;
+    }
+    ssh_dir.parent().map(Path::to_path_buf)
 }
 
 fn split_directive(line: &str) -> (&str, &str) {
@@ -673,7 +694,14 @@ fn expand_ssh_tokens(value: &str, target: &Target) -> String {
 }
 
 fn expand_path(value: &str) -> PathBuf {
+    expand_path_from_config(value, None)
+}
+
+fn expand_path_from_config(value: &str, config_home: Option<&Path>) -> PathBuf {
     if let Some(stripped) = value.strip_prefix("~/") {
+        if let Some(home) = config_home {
+            return home.join(stripped);
+        }
         if let Some(home) = dirs::home_dir() {
             return home.join(stripped);
         }
@@ -746,7 +774,13 @@ fn apply_o_option(target: &mut Target, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn resolve_jumps(specs: &[String], config_path: Option<&Path>) -> Result<Vec<Target>> {
+fn resolve_jumps(
+    specs: &[String],
+    config_path: Option<&Path>,
+    known_hosts: Option<PathBuf>,
+    accept_new: bool,
+    insecure_ignore_host_key: bool,
+) -> Result<Vec<Target>> {
     let mut jumps = Vec::new();
     for spec in specs {
         if spec.eq_ignore_ascii_case("none") {
@@ -760,9 +794,9 @@ fn resolve_jumps(specs: &[String], config_path: Option<&Path>) -> Result<Vec<Tar
                 port: 22,
                 user: whoami::username().unwrap_or_else(|_| "root".to_string()),
                 identities: Vec::new(),
-                known_hosts: None,
-                accept_new: false,
-                insecure_ignore_host_key: false,
+                known_hosts: known_hosts.clone(),
+                accept_new,
+                insecure_ignore_host_key,
                 jumps: Vec::new(),
                 jump_specs: Vec::new(),
             };
@@ -809,5 +843,20 @@ mod tests {
         assert_eq!(target.jumps[0].host, "jump1");
         assert_eq!(target.jumps[0].port, 2200);
         assert_eq!(target.jumps[1].host, "jump2");
+    }
+
+    #[test]
+    fn expands_config_relative_home_paths() {
+        let home = Path::new("C:/Users/whl");
+        assert_eq!(
+            expand_path_from_config("~/.ssh/id_ed25519", Some(home)),
+            PathBuf::from("C:/Users/whl")
+                .join(".ssh")
+                .join("id_ed25519")
+        );
+        assert_eq!(
+            config_home_from_path(Path::new("C:/Users/whl/.ssh/config")),
+            Some(PathBuf::from("C:/Users/whl"))
+        );
     }
 }
