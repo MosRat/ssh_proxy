@@ -33,6 +33,7 @@ pub struct RemoteInstallResult {
     pub remote_quic_transport: Option<SocketAddr>,
     pub remote_token: Option<String>,
     pub descriptor: Option<Value>,
+    pub install_report: Option<Value>,
 }
 
 pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteInstallResult> {
@@ -55,7 +56,8 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
     )
     .await?;
 
-    let service_manager = install_remote_service(&client, &remote_path, &args).await?;
+    let (service_manager, install_report) =
+        install_remote_service(&client, &remote_path, &args).await?;
     let descriptor = if args.persist == cli::PersistMode::None {
         None
     } else {
@@ -73,6 +75,7 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
         remote_quic_transport: args.remote_quic_transport,
         remote_token: args.remote_token,
         descriptor,
+        install_report,
     })
 }
 
@@ -80,8 +83,15 @@ async fn install_remote_service(
     client: &ssh_client::Client,
     remote_path: &str,
     args: &cli::InstallRemoteArgs,
-) -> Result<String> {
+) -> Result<(String, Option<Value>)> {
     let plan = peer_lifecycle::service_provider::remote_service_install_plan(remote_path, args);
+    let spec = peer_lifecycle::spec::PeerLifecycleSpec::remote_peer(
+        args.target.clone(),
+        remote_path,
+        args,
+        plan.provider.kind,
+    );
+    let executor = peer_lifecycle::executor::SshExecutor::new(client);
     match args.persist {
         cli::PersistMode::None => {
             println!("installed helper at {remote_path}");
@@ -89,29 +99,56 @@ async fn install_remote_service(
                 "use: ssh_proxy proxy {} --remote-path {}",
                 args.target, remote_path
             );
+            Ok((plan.reported_service_manager, None))
         }
         cli::PersistMode::Auto => {
-            client.exec_status(plan.command.clone()).await?;
+            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
             println!("installed persistent helper on {}", args.target);
+            Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Systemd => {
-            client.exec_status(plan.command.clone()).await?;
+            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
             println!("installed user systemd service on {}", args.target);
+            Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Nohup => {
-            client.exec_status(plan.command.clone()).await?;
+            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
             println!("started nohup helper on {}", args.target);
+            Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Launchd => {
-            client.exec_status(plan.command.clone()).await?;
+            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
             println!("installed user launchd service on {}", args.target);
+            Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Schtasks => {
-            client.exec_status(plan.command.clone()).await?;
+            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
             println!("installed user scheduled task on {}", args.target);
+            Ok((plan.reported_service_manager, Some(install_report)))
         }
     }
-    Ok(plan.reported_service_manager)
+}
+
+async fn run_remote_install_plan<E: peer_lifecycle::executor::PeerExecutor>(
+    executor: &E,
+    spec: &peer_lifecycle::spec::PeerLifecycleSpec,
+    command: String,
+) -> Result<Value> {
+    let mut sink = peer_lifecycle::workflow::VecLifecycleEventSink::default();
+    let result = peer_lifecycle::workflow::run_lifecycle_plan(
+        executor,
+        spec,
+        peer_lifecycle::workflow::LifecycleCommandPlan::new(
+            peer_lifecycle::workflow::LifecycleOperation::Install,
+        )
+        .push(peer_lifecycle::workflow::LifecycleCommand::new(
+            peer_lifecycle::workflow::PeerLifecyclePhase::InstallService,
+            command,
+        )),
+        &mut sink,
+    )
+    .await?;
+    Ok(result.report.to_redacted_value())
 }
 
 pub async fn host(mut args: cli::HostArgs, mut config: config::AppConfig) -> Result<()> {
@@ -1127,6 +1164,66 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn install_args(persist: cli::PersistMode) -> cli::InstallRemoteArgs {
+        cli::InstallRemoteArgs {
+            target: "peer".to_string(),
+            ssh_args: Vec::new(),
+            ssh_command: None,
+            user: None,
+            port: None,
+            identity: Vec::new(),
+            config: None,
+            known_hosts: None,
+            accept_new: false,
+            insecure_ignore_host_key: false,
+            jump: Vec::new(),
+            remote_path: None,
+            remote_bin: None,
+            remote_os: cli::RemoteOs::Unix,
+            remote_token: Some("secret".to_string()),
+            remote_tcp: "127.0.0.1:19080".parse().unwrap(),
+            remote_control: "127.0.0.1:19081".parse().unwrap(),
+            local_node_id: None,
+            local_node_name: None,
+            local_control_endpoint: None,
+            local_transport: None,
+            remote_node_id: None,
+            remote_node_name: None,
+            remote_tls_transport: None,
+            remote_quic_transport: None,
+            remote_tls_cert: None,
+            remote_tls_key: None,
+            remote_tls_client_ca: None,
+            persist,
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_install_plan_returns_lifecycle_report() {
+        let args = install_args(cli::PersistMode::Systemd);
+        let spec = peer_lifecycle::spec::PeerLifecycleSpec::remote_peer(
+            "peer",
+            "/home/me/bin/ssh_proxy",
+            &args,
+            peer_lifecycle::service_provider::ServiceProviderKind::SystemdUser,
+        );
+        let executor = peer_lifecycle::executor::FakeExecutor::default();
+        executor.push_output(ssh_client::ExecOutput {
+            exit_status: 0,
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+        });
+
+        let report = run_remote_install_plan(&executor, &spec, "true".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(report["role"], "remote_peer");
+        assert_eq!(report["operation"], "install");
+        assert_eq!(report["provider"], "systemd_user");
+        assert_eq!(executor.commands(), vec!["true"]);
+    }
 
     #[test]
     fn descriptor_updates_install_endpoints() {

@@ -478,21 +478,23 @@ impl NodeManager {
                 }
             })
         });
-        self.state
-            .upsert_peer_status(peer_status_from_descriptor(
-                alias,
-                &descriptor,
-                result.remote_control,
-                result.remote_tcp,
-                "healthy",
-                "start_service",
-                &result.service_manager,
-                0,
-                Some(install_args),
-                Some(&result.remote_path),
-                peer_lifecycle::workflow::LifecycleOperation::Ensure,
-            ))
-            .await?;
+        let mut status = peer_status_from_descriptor(
+            alias,
+            &descriptor,
+            result.remote_control,
+            result.remote_tcp,
+            "healthy",
+            "start_service",
+            &result.service_manager,
+            0,
+            Some(install_args),
+            Some(&result.remote_path),
+            peer_lifecycle::workflow::LifecycleOperation::Ensure,
+        );
+        if let Some(install_report) = &result.install_report {
+            status.install = Some(install_report.clone());
+        }
+        self.state.upsert_peer_status(status).await?;
         Ok(())
     }
 }

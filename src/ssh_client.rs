@@ -292,35 +292,6 @@ impl Client {
         Ok(())
     }
 
-    pub async fn exec_status(&self, command: String) -> Result<()> {
-        let mut channel = self
-            .session
-            .channel_open_session()
-            .await
-            .context("failed to open command channel")?;
-        channel.exec(true, command.into_bytes()).await?;
-        channel.eof().await.ok();
-        let mut status = None;
-        while let Some(msg) = channel.wait().await {
-            match msg {
-                russh::ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
-                russh::ChannelMsg::Close => break,
-                russh::ChannelMsg::Data { data } | russh::ChannelMsg::ExtendedData { data, .. } => {
-                    if let Ok(s) = std::str::from_utf8(&data) {
-                        for line in s.lines() {
-                            info!(target: "remote", "{line}");
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        if status.unwrap_or(0) != 0 {
-            bail!("remote command exited with status {:?}", status);
-        }
-        Ok(())
-    }
-
     pub async fn exec_output(&self, command: String) -> Result<String> {
         let output = self.exec_capture(command, None).await?;
         if output.exit_status != 0 {
