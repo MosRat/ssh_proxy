@@ -101,12 +101,14 @@ so existing module paths can migrate gradually. New shared DTOs, codecs,
 lifecycle models, control socket helpers, SSH primitives, transport adapters,
 and CLI command contracts should live in the appropriate workspace crate rather
 than expanding the binary crate. `ssh-proxy-route` owns route decision, route
-plan, route status, and `decision_chain` rendering DTOs. `ssh-proxy-deploy`
-owns remote install and remote setup artifact intents. `ssh-proxy-service` owns
+conflict policy, route plan, route status, and `decision_chain` rendering DTOs.
+`ssh-proxy-deploy` owns remote install, remote admin intents, remote setup
+artifact intents, and remote setup script rendering. `ssh-proxy-service` owns
 service-management contracts. `ssh-proxy-daemon` owns command-neutral
-daemon/job/session/peer/state DTOs and daemon-unavailable fallback response
-builders. `ssh-proxy-cli` is a command-contract crate; command dispatch still
-lives in the app crate until the remaining runtime orchestration is promoted.
+daemon/job/session/peer/state DTOs, proxy session specs, and
+daemon-unavailable fallback response builders. `ssh-proxy-cli` is a
+command-contract crate; command dispatch still lives in the app crate until the
+remaining runtime orchestration is promoted.
 Lower crates must not depend on app, CLI dispatch, SSH executors, or platform
 service runtimes unless the dependency direction is explicitly promoted in a
 separate architecture change.
@@ -123,13 +125,14 @@ Command-neutral intent models sit below CLI parsing and above runtime adapters:
 - `ssh-proxy-config` plans profile/default values into core enums, endpoint
   defaults, path-expanded artifacts, and runtime tuning before the app shim
   applies them to legacy CLI-shaped structs.
-- `ssh-proxy-route` owns pool sizing and runtime decision policy in terms of
-  core route inputs. It also renders route plan reports from typed route
-  context instead of forcing app modules to re-read their own JSON. The app
-  route modules adapt CLI/config data and run async probes, but pure policy
-  should not grow in the app crate.
-- `ssh-proxy-deploy` owns command-neutral remote install plans and remote setup
-  artifact intents. The app crate keeps SSH execution and lifecycle adapters.
+- `ssh-proxy-route` owns pool sizing, route conflict, and runtime decision
+  policy in terms of core route inputs. It also renders route plan reports from
+  typed route context instead of forcing app modules to re-read their own JSON.
+  The app route modules adapt CLI/config data and run async probes, but pure
+  policy should not grow in the app crate.
+- `ssh-proxy-deploy` owns command-neutral remote install plans, remote admin
+  intents, remote setup artifact intents, and remote setup shell fallback
+  scripts. The app crate keeps SSH execution and lifecycle adapters.
 - Lifecycle provider selection uses core `RemotePlatform` and
   `PersistenceMode`; CLI enums are compatibility wrappers at the edge.
 - `ssh-proxy-ssh` is the only crate that exposes Rust SSH behavior. It hides
@@ -167,7 +170,10 @@ same public behavior:
 - Remote helpers expose `ssh_proxy remote admin` JSON intents for checksum,
   defaults, status, doctor, and Git config edits. Deploy and remote setup try
   this own-binary path first, then fall back to legacy bootstrap or diagnostic
-  scripts when the helper is absent or incompatible.
+  scripts when the helper is absent or incompatible. Own-binary and native
+  provider reports include `execution_backend`, `fallback_used`, and an
+  `external_action` block; shell fallback scripts are classified as fallback
+  providers rather than normal success paths.
 
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening, listener
@@ -268,22 +274,22 @@ execution to shared modules.
   shape before returning to the control server.
 - `node_daemon::proxy_session` owns the session state machine that sequences
   remote peer ensure, route creation, Rust-native handoff, remote setup, and
-  health monitoring. `ProxySessionSpec`, SSH target details, apply policy, and
-  URL/key helpers live in the `spec` submodule so the runner consumes a stable
-  intent model. Status rendering helpers live in the `status` submodule;
+  health monitoring. `ssh-proxy-daemon` owns `ProxySessionSpec`, SSH target
+  details, apply policy, URL/key helpers, and pure session reuse matching; the
+  app `spec` submodule only adapts CLI args into that stable intent model.
+  Status rendering helpers live in the `status` submodule;
   `apply_settings` owns the direct VS Code apply-settings command path, and
   `route_ready` owns route readiness, handoff probing, remote setup, and final
   health transition. `job_runner` sequences these modules and owns route
   conflict repair, so `proxy_session.rs` remains the daemon RPC surface.
-- `node_daemon::remote_setup` owns VS Code and shell environment artifacts. Rust
-  renders payloads and uses `SshExecutor.write_artifact`; shell remains limited
-  to stdin file writes, optional Git config, cleanup, and platform commands.
-  `ssh-proxy-deploy::RemoteArtifactIntent` is the command-neutral place that
-  names the server directory, relative path, artifact kind, backup policy, and
-  read/write command shape. The app crate adapts those intents to `SshExecutor`,
-  so deploy models do not depend on SSH runtime code. `remote_setup::executor`
-  is the only app-side module that opens SSH for this flow; payload and artifact
-  helpers stay pure.
+- `node_daemon::remote_setup` owns SSH execution for VS Code and shell
+  environment artifacts. Rust renders payloads through deploy-owned DTOs and
+  uses `SshExecutor.write_artifact`; shell remains limited to stdin file writes,
+  fallback Git config, cleanup, and platform commands. `ssh-proxy-deploy` owns
+  `RemoteArtifactIntent`, remote setup payload rendering, and fallback script
+  rendering. The app crate adapts those intents to `SshExecutor`, so deploy
+  models do not depend on SSH runtime code. `remote_setup::executor` is the only
+  app-side module that opens SSH for this flow.
 - `ssh-proxy-deploy::RemoteSetupExecutionPlan` groups remote setup payloads,
   artifact intents, and optional script intents. It is the planning boundary for
   VS Code settings, server-env, and remote status updates; app modules execute

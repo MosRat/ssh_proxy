@@ -49,19 +49,20 @@ Current horizontal crates:
   QUIC stream adapters, remote helper opener runtime, peer listener runtime,
   remote helper stream/error models, SPX worker status DTOs, and SOCKS5/HTTP
   proxy parser primitives.
-- `crates/ssh-proxy-route/`: route runtime decision reports, route plan
-  rendering, pool sizing policy, preflight metadata, route task status records,
-  and route status JSON contracts.
+- `crates/ssh-proxy-route/`: route runtime decision reports, route conflict
+  policy, route plan rendering, pool sizing policy, preflight metadata, route
+  task status records, and route status JSON contracts.
 - `crates/ssh-proxy-deploy/`: remote install result DTOs, command-neutral
-  remote install plans, and remote setup artifact intents.
+  remote install plans, remote admin intents, remote setup artifact intents,
+  and remote setup script rendering.
 - `crates/ssh-proxy-service/`: local service-management contracts and provider
   report DTOs.
 - `crates/ssh-proxy-platform/`: local platform command plans, command outcomes,
   script plans, subprocess capture/spawn helpers, and external execution
   classification for service adapters and self-update.
 - `crates/ssh-proxy-daemon/`: command-neutral daemon job, session, peer,
-  update, state, request intent/payload DTOs, and daemon client fallback
-  reports.
+  update, state, proxy session spec, request intent/payload DTOs, and daemon
+  client fallback reports.
 - `crates/ssh-proxy-cli/`: Clap command and argument contracts plus adapters
   into core command-neutral intents. The binary crate converts those intents
   into daemon, lifecycle, deploy, or route calls.
@@ -77,10 +78,11 @@ large vertical subsystems are still split by semantic module:
   route supervision, peer management, and peer transport listeners.
 - `node_daemon/control_protocol/`: legacy JSON-line response rendering and
   typed payload adapters for command-neutral daemon intents.
-- `node_daemon/proxy_session/`: reusable state-machine helpers for session
-  reuse, route readiness, handoff, and setup sequencing.
-- `node_daemon/remote_setup/`: payload rendering and SSH execution adapters for
-  deploy-owned VS Code settings, server-env setup, and status-file intents.
+- `node_daemon/proxy_session/`: CLI-to-session-spec adapter plus reusable
+  state-machine helpers for session reuse, route readiness, handoff, and setup
+  sequencing.
+- `node_daemon/remote_setup/`: SSH execution adapters for deploy-owned VS Code
+  settings, server-env setup, status-file intents, and fallback scripts.
 - `node_daemon/management/update.rs`: app-side self-update orchestration using
   daemon update DTOs and platform command/script plans.
 - `quic_native/`: QUIC-native control and per-flow stream runtime.
@@ -99,6 +101,9 @@ Intent/runtime layering rules:
 - External command execution must declare its class at the plan layer:
   provider commands, diagnostic probes, self-update scripts, and emergency
   compatibility paths are not interchangeable.
+- Native and own-binary success paths must expose `execution_backend`,
+  `fallback_used`, and `external_action`; fallback shell scripts must be
+  classified as fallback or compatibility paths.
 - Boundary tests enforce production dependency direction for core/config/route/
   deploy/lifecycle/transport/daemon crates, prevent runtime imports from
   crossing layers, keep `service-manager` out of production dependencies,
