@@ -125,6 +125,61 @@ pub struct ServiceProbeSummary {
     pub details: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceProbePlan {
+    pub scope: ServiceScope,
+    pub service_name: String,
+    pub provider: String,
+    pub command: Vec<String>,
+}
+
+impl ServiceProbePlan {
+    pub fn new(
+        scope: ServiceScope,
+        service_name: impl Into<String>,
+        provider: impl Into<String>,
+        command: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            scope,
+            service_name: service_name.into(),
+            provider: provider.into(),
+            command: command.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "scope": self.scope.as_str(),
+            "service_name": self.service_name,
+            "provider": self.provider,
+            "command": self.command,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceProviderReport {
+    pub provider: String,
+    pub probe: ServiceProbeSummary,
+}
+
+impl ServiceProviderReport {
+    pub fn new(provider: impl Into<String>, probe: ServiceProbeSummary) -> Self {
+        Self {
+            provider: provider.into(),
+            probe,
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "provider": self.provider,
+            "probe": self.probe.to_json(),
+        })
+    }
+}
+
 impl ServiceProbeSummary {
     pub fn to_json(&self) -> Value {
         json!({
@@ -138,6 +193,36 @@ impl ServiceProbeSummary {
             "details": self.details.clone(),
         })
     }
+}
+
+pub fn service_probe_summary(
+    scope: ServiceScope,
+    service_name: String,
+    state: ServiceProbeState,
+    exists: bool,
+    healthy: bool,
+    accessible: bool,
+    permission_denied: bool,
+    details: Value,
+) -> ServiceProbeSummary {
+    ServiceProbeSummary {
+        scope,
+        service_name,
+        state,
+        exists,
+        healthy,
+        accessible,
+        permission_denied,
+        details,
+    }
+}
+
+pub fn contains_permission_denied(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("access is denied")
+        || lower.contains("permission denied")
+        || lower.contains("not permitted")
+        || lower.contains("operation not permitted")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -377,5 +462,40 @@ mod tests {
         assert_eq!(value["selected_scope"], "user");
         assert_eq!(value["next_action"], "reuse");
         assert_eq!(value["probe_chain"][0]["state"], "healthy");
+    }
+
+    #[test]
+    fn probe_plan_and_provider_report_render_stable_json() {
+        let plan = ServiceProbePlan::new(
+            ServiceScope::User,
+            "ssh_proxy",
+            "systemd",
+            ["systemctl", "--user", "status", "ssh_proxy.service"],
+        );
+        let report = ServiceProviderReport::new(
+            "systemd",
+            service_probe_summary(
+                ServiceScope::User,
+                "ssh_proxy".to_string(),
+                ServiceProbeState::Present,
+                true,
+                false,
+                true,
+                false,
+                json!({"capture": plan.to_json()}),
+            ),
+        );
+        let value = report.to_json();
+
+        assert_eq!(value["provider"], "systemd");
+        assert_eq!(value["probe"]["scope"], "user");
+        assert_eq!(value["probe"]["details"]["capture"]["provider"], "systemd");
+    }
+
+    #[test]
+    fn permission_denied_classifier_matches_platform_messages() {
+        assert!(contains_permission_denied("Access is denied."));
+        assert!(contains_permission_denied("operation not permitted"));
+        assert!(!contains_permission_denied("service is inactive"));
     }
 }
