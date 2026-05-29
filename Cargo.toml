@@ -33,8 +33,13 @@ ssh-proxy-cli = { path = "crates/ssh-proxy-cli" }
 ssh-proxy-config = { path = "crates/ssh-proxy-config" }
 ssh-proxy-control = { path = "crates/ssh-proxy-control" }
 ssh-proxy-core = { path = "crates/ssh-proxy-core" }
+ssh-proxy-daemon = { path = "crates/ssh-proxy-daemon" }
+ssh-proxy-deploy = { path = "crates/ssh-proxy-deploy" }
 ssh-proxy-lifecycle = { path = "crates/ssh-proxy-lifecycle" }
+ssh-proxy-platform = { path = "crates/ssh-proxy-platform" }
 ssh-proxy-protocol = { path = "crates/ssh-proxy-protocol" }
+ssh-proxy-route = { path = "crates/ssh-proxy-route" }
+ssh-proxy-service = { path = "crates/ssh-proxy-service" }
 ssh-proxy-ssh = { path = "crates/ssh-proxy-ssh" }
 ssh-proxy-transport = { path = "crates/ssh-proxy-transport" }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "net", "io-util", "io-std", "sync", "time", "fs"] }

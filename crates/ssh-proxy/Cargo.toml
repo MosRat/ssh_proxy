@@ -26,13 +26,13 @@ ssh-proxy-cli.workspace = true
 ssh-proxy-config.workspace = true
 ssh-proxy-control.workspace = true
 ssh-proxy-core.workspace = true
-ssh-proxy-daemon = { version = "0.1.1", path = "../ssh-proxy-daemon" }
-ssh-proxy-deploy = { version = "0.1.1", path = "../ssh-proxy-deploy" }
+ssh-proxy-daemon.workspace = true
+ssh-proxy-deploy.workspace = true
 ssh-proxy-lifecycle.workspace = true
-ssh-proxy-platform = { version = "0.1.1", path = "../ssh-proxy-platform" }
+ssh-proxy-platform.workspace = true
 ssh-proxy-protocol.workspace = true
-ssh-proxy-route = { version = "0.1.1", path = "../ssh-proxy-route" }
-ssh-proxy-service = { version = "0.1.1", path = "../ssh-proxy-service" }
+ssh-proxy-route.workspace = true
+ssh-proxy-service.workspace = true
 ssh-proxy-ssh.workspace = true
 ssh-proxy-transport.workspace = true
 tokio.workspace = true

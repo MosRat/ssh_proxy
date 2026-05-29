@@ -16,7 +16,7 @@ quinn.workspace = true
 rustls-pemfile.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ssh-proxy-core = { version = "0.1.1", path = "../ssh-proxy-core" }
+ssh-proxy-core.workspace = true
 ssh-proxy-protocol.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
