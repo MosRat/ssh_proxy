@@ -180,6 +180,10 @@ fn workspace_crate_boundaries_remain_layered() {
     );
 
     assert_manifest_avoids(
+        "crates/ssh-proxy/Cargo.toml",
+        &["russh", "tokio-rustls", "service-manager"],
+    );
+    assert_manifest_avoids(
         "crates/ssh-proxy-core/Cargo.toml",
         &["tokio", "russh", "clap", "windows-service"],
     );
@@ -247,6 +251,17 @@ fn workspace_crate_boundaries_remain_layered() {
             "russh",
             "tokio",
             "windows-service",
+            "ssh-proxy",
+            "service-manager",
+        ],
+    );
+    assert_manifest_avoids(
+        "crates/ssh-proxy-platform/Cargo.toml",
+        &[
+            "clap",
+            "russh",
+            "quinn",
+            "tokio-rustls",
             "ssh-proxy",
             "service-manager",
         ],
@@ -348,6 +363,43 @@ fn workspace_source_imports_remain_layered() {
             &service_runtime_imports[..],
         ]
         .concat(),
+    );
+    assert_source_avoids(
+        "crates/ssh-proxy-platform/src",
+        &[
+            &app_imports[..],
+            &ssh_runtime_imports[..],
+            &quic_runtime_imports[..],
+        ]
+        .concat(),
+    );
+}
+
+#[test]
+fn normal_source_paths_do_not_reintroduce_shell_tcp_probes() {
+    let mut violations = Vec::new();
+    let forbidden = [
+        "curl ", "curl.exe", "netcat", "/dev/tcp", "python -", "python3 ",
+    ];
+    let crates_dir = workspace_root().join("crates");
+    for entry in fs::read_dir(&crates_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", crates_dir.display()))
+    {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                crates_dir.display()
+            )
+        });
+        let src = entry.path().join("src");
+        if src.is_dir() {
+            collect_source_pattern_violations(&src, &forbidden, &mut violations);
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "normal source paths should not depend on curl/nc/python shell TCP probes:\n{}",
+        violations.join("\n")
     );
 }
 
