@@ -12,7 +12,7 @@ use crate::node_daemon::{
     state::RemoteSetupStatus,
 };
 
-use super::{ProxySessionSpec, error_chain, job_for_phase, status};
+use super::{ProxySessionSpec, error_chain, job_runner::job_for_phase, status};
 
 impl NodeManager {
     pub(super) async fn wait_for_proxy_route_ready(
