@@ -6,6 +6,19 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::peer_transport::{PeerProtocol, QuicTransportOptions};
 
+#[path = "remote_helper/client.rs"]
+pub mod client;
+
+pub mod intent {
+    pub use super::RemoteHelperOpenIntent;
+}
+
+pub mod report {
+    pub use super::{
+        AutoTransportError, RemoteHelperOpenReport, RemoteHelperTimings, TransportCandidateFailure,
+    };
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteHelperOpenIntent {
     pub transport: TransportMode,

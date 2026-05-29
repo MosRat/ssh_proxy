@@ -16,10 +16,6 @@ impl Client {
         connect_intent(install_ssh_intent(args)).await
     }
 
-    pub fn target(&self) -> &Target {
-        self.0.target()
-    }
-
     pub async fn exec_stream(&self, command: String) -> Result<SshStream> {
         self.0.exec_stream(command).await
     }
