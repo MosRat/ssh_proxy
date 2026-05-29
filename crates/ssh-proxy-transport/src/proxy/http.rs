@@ -4,11 +4,11 @@ use tokio::{
     net::TcpStream,
 };
 
-pub(super) struct HttpRequest {
-    pub(super) kind: HttpRequestKind,
+pub struct HttpRequest {
+    pub kind: HttpRequestKind,
 }
 
-pub(super) enum HttpRequestKind {
+pub enum HttpRequestKind {
     Connect {
         host: String,
         port: u16,
@@ -21,7 +21,7 @@ pub(super) enum HttpRequestKind {
 }
 
 impl HttpRequest {
-    pub(super) async fn read_from(stream: &mut TcpStream) -> Result<Self> {
+    pub async fn read_from(stream: &mut TcpStream) -> Result<Self> {
         let mut bytes = Vec::new();
         let mut buf = [0_u8; 1024];
         loop {
@@ -144,11 +144,7 @@ fn parse_host_port(authority: &str, default_port: u16) -> Result<(String, u16)> 
     }
 }
 
-pub(super) async fn write_http_error(
-    stream: &mut TcpStream,
-    status: u16,
-    reason: &str,
-) -> Result<()> {
+pub async fn write_http_error(stream: &mut TcpStream, status: u16, reason: &str) -> Result<()> {
     let body = format!("{status} {reason}\n");
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",

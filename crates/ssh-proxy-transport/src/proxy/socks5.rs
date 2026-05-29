@@ -5,9 +5,9 @@ use tokio::{
     net::TcpStream,
 };
 
-pub(super) const SOCKS_VERSION: u8 = 5;
+pub const SOCKS_VERSION: u8 = 5;
 
-pub(super) async fn negotiate_no_auth(stream: &mut TcpStream) -> Result<()> {
+pub async fn negotiate_no_auth(stream: &mut TcpStream) -> Result<()> {
     let version = stream.read_u8().await?;
     if version != SOCKS_VERSION {
         bail!("invalid SOCKS version {version}");
@@ -24,14 +24,14 @@ pub(super) async fn negotiate_no_auth(stream: &mut TcpStream) -> Result<()> {
 }
 
 #[derive(Debug)]
-pub(super) struct Request {
-    pub(super) command: Command,
-    pub(super) host: String,
-    pub(super) port: u16,
+pub struct Request {
+    pub command: Command,
+    pub host: String,
+    pub port: u16,
 }
 
 impl Request {
-    pub(super) async fn read_from(stream: &mut TcpStream) -> Result<Self> {
+    pub async fn read_from(stream: &mut TcpStream) -> Result<Self> {
         let version = stream.read_u8().await?;
         if version != SOCKS_VERSION {
             bail!("invalid SOCKS request version {version}");
@@ -57,20 +57,20 @@ impl Request {
 }
 
 #[derive(Debug)]
-pub(super) enum Command {
+pub enum Command {
     Connect,
     Bind,
     UdpAssociate,
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum Reply {
+pub enum Reply {
     Succeeded = 0,
     HostUnreachable = 4,
     CommandNotSupported = 7,
 }
 
-pub(super) async fn reply(stream: &mut TcpStream, reply: Reply, bind: SocketAddr) -> Result<()> {
+pub async fn reply(stream: &mut TcpStream, reply: Reply, bind: SocketAddr) -> Result<()> {
     let mut out = vec![SOCKS_VERSION, reply as u8, 0];
     match bind.ip() {
         IpAddr::V4(ip) => {
@@ -109,14 +109,14 @@ async fn read_addr(stream: &mut TcpStream) -> Result<String> {
     }
 }
 
-#[derive(Clone)]
-pub(super) struct UdpPacket {
-    pub(super) host: String,
-    pub(super) port: u16,
-    pub(super) data: Vec<u8>,
+#[derive(Clone, Debug)]
+pub struct UdpPacket {
+    pub host: String,
+    pub port: u16,
+    pub data: Vec<u8>,
 }
 
-pub(super) fn parse_udp_packet(bytes: &[u8]) -> Result<UdpPacket> {
+pub fn parse_udp_packet(bytes: &[u8]) -> Result<UdpPacket> {
     if bytes.len() < 4 || bytes[0] != 0 || bytes[1] != 0 {
         bail!("invalid SOCKS UDP packet");
     }
@@ -172,7 +172,7 @@ pub(super) fn parse_udp_packet(bytes: &[u8]) -> Result<UdpPacket> {
     })
 }
 
-pub(super) fn build_udp_packet(host: &str, port: u16, data: &[u8]) -> Result<Vec<u8>> {
+pub fn build_udp_packet(host: &str, port: u16, data: &[u8]) -> Result<Vec<u8>> {
     let mut out = vec![0, 0, 0];
     if let Ok(ip) = host.parse::<IpAddr>() {
         match ip {
@@ -197,4 +197,26 @@ pub(super) fn build_udp_packet(host: &str, port: u16, data: &[u8]) -> Result<Vec
     out.extend_from_slice(&port.to_be_bytes());
     out.extend_from_slice(data);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn udp_packet_round_trips_domain_target() {
+        let packet = build_udp_packet("example.com", 5353, b"hello").unwrap();
+        let parsed = parse_udp_packet(&packet).unwrap();
+
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port, 5353);
+        assert_eq!(parsed.data, b"hello");
+    }
+
+    #[test]
+    fn udp_packet_rejects_fragmented_datagrams() {
+        let err = parse_udp_packet(&[0, 0, 1, 1]).unwrap_err();
+
+        assert!(err.to_string().contains("fragmented"));
+    }
 }

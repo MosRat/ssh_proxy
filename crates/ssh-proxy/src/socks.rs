@@ -5,6 +5,13 @@ use std::{
 };
 
 use anyhow::{Result, bail};
+use ssh_proxy_transport::proxy::{
+    http::{HttpRequest, HttpRequestKind, write_http_error},
+    socks5::{
+        Command, Reply, Request, SOCKS_VERSION, build_udp_packet, negotiate_no_auth,
+        parse_udp_packet, reply,
+    },
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpStream, UdpSocket},
@@ -14,17 +21,7 @@ use tracing::warn;
 
 use crate::{cli, controller, data_plane, protocol::UdpDatagram, quic_native, ssh_native};
 
-mod http;
 mod relay;
-mod socks5;
-
-use self::{
-    http::{HttpRequest, HttpRequestKind, write_http_error},
-    socks5::{
-        Command, Reply, Request, SOCKS_VERSION, build_udp_packet, negotiate_no_auth,
-        parse_udp_packet, reply,
-    },
-};
 
 pub async fn handle_client(
     mut stream: TcpStream,
