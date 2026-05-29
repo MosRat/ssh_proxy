@@ -79,6 +79,29 @@ the normal protocol stack. They remain explicit compatibility or diagnostic
 paths and must surface `requires_external_ssh`, dependency classification, and a
 repair action when used.
 
+## Workspace Layers
+
+The workspace uses horizontal core crates plus one vertical application crate.
+Dependencies should flow upward only:
+
+```text
+core
+  <- protocol
+  <- lifecycle / config / control / ssh / transport
+  <- cli command contracts and app adapters in crates/ssh-proxy
+  <- binary bootstrap
+```
+
+The first extraction pass keeps compatibility shims in `crates/ssh-proxy/src`
+so existing module paths can migrate gradually. New shared DTOs, codecs,
+lifecycle models, control socket helpers, SSH primitives, and CLI command
+contracts should live in the appropriate workspace crate rather than expanding
+the binary crate. `ssh-proxy-cli` is a command-contract crate; command dispatch
+still lives in the app crate until service/deploy/daemon become separate
+vertical crates. Lower crates must not depend on app, daemon, deploy, service,
+or dispatch-only code unless the dependency direction is explicitly promoted in
+a separate architecture change.
+
 ## Symmetric Peer Lifecycle
 
 Local daemons and remote peer servers share the same lifecycle vocabulary:

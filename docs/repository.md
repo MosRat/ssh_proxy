@@ -20,30 +20,49 @@ generated artifacts are ignored by Git and should stay out of public commits.
 Benchmark and E2E configuration belongs in untracked local environment files
 such as `scripts/bench.local.ps1`; commit only sanitized example templates.
 
-## Rust Module Organization
+## Rust Workspace Organization
 
-The Rust code is a Cargo workspace. The default member is
-`crates/ssh-proxy`, so normal root-level Cargo commands still build the
-`ssh_proxy` binary while shared metadata and future layered crates live at the
-workspace root. Large subsystems are split into semantic modules:
+The Rust code is a Cargo workspace with a virtual root manifest. The default
+member is `crates/ssh-proxy`, so normal root-level Cargo commands still build
+the `ssh_proxy` binary while shared metadata, profiles, and layered crates live
+at the workspace root.
 
-- `crates/ssh-proxy/src/cli.rs`: command and argument contracts.
-- `crates/ssh-proxy/src/ssh_client.rs` and
-  `crates/ssh-proxy/src/ssh_auth.rs`: russh session, ProxyJump, host key,
-  and authentication handling.
-- `crates/ssh-proxy/src/peer_lifecycle/`: shared bootstrap/install/manage/config/connect/health
-  abstractions for local daemons and remote peers.
-- `crates/ssh-proxy/src/deploy/`: thin remote bootstrap entrypoints, descriptor/token helpers,
+Current horizontal crates:
+
+- `crates/ssh-proxy-core/`: shared report, repair-action, command-output, and
+  redaction primitives. It must stay free of async runtimes, SSH, CLI, and
+  service-manager dependencies.
+- `crates/ssh-proxy-protocol/`: protocol DTOs, control envelopes, descriptor
+  models, and SPX/QNC1-compatible codec helpers.
+- `crates/ssh-proxy-lifecycle/`: lifecycle specs, artifacts, stores, reports,
+  fake/local executor contracts, and provider workflow models.
+- `crates/ssh-proxy-config/`: app paths and atomic/private file helpers.
+- `crates/ssh-proxy-control/`: daemon control socket endpoints, JSON-line
+  request/response I/O limits, Unix sockets, and Windows named-pipe ACL setup.
+- `crates/ssh-proxy-ssh/`: Rust-native SSH target resolution, OpenSSH config
+  parsing, agent/private-key authentication, jump chains, exec/upload, and
+  direct-tcpip streams.
+- `crates/ssh-proxy-transport/`: peer transport contracts, TLS/QUIC helpers,
+  and QUIC stream adapters.
+- `crates/ssh-proxy-cli/`: Clap command and argument contracts. The binary
+  crate converts these intents into daemon, lifecycle, deploy, or route calls.
+
+`crates/ssh-proxy/` is now the vertical application crate. It keeps the
+`ssh_proxy` binary, mimalloc allocator, logging/runtime bootstrap, build script,
+and thin shim modules for compatibility with existing internal paths. Remaining
+large vertical subsystems are still split by semantic module:
+
+- `deploy/`: remote bootstrap entrypoints, descriptor/token helpers,
   compatibility helpers, and transport opening.
-- `crates/ssh-proxy/src/node_daemon/`: node service control protocol, route supervision, peer
+- `node_daemon/`: node service control protocol, route supervision, peer
   management, and peer transport listeners.
-- `crates/ssh-proxy/src/node_daemon/proxy_session/`: reusable state-machine helpers for session
+- `node_daemon/proxy_session/`: reusable state-machine helpers for session
   reuse, route readiness, handoff, and setup sequencing.
-- `crates/ssh-proxy/src/node_daemon/remote_setup/`: payload rendering and artifact read/write
+- `node_daemon/remote_setup/`: payload rendering and artifact read/write
   helpers for VS Code settings, server-env setup, and status files.
-- `crates/ssh-proxy/src/quic_native/`: QUIC-native control and per-flow stream runtime.
-- `crates/ssh-proxy/src/service/`: local service planning and platform execution.
-- `crates/ssh-proxy/src/socks/`: SOCKS5H, HTTP proxy parsing, and relay helpers.
+- `quic_native/`: QUIC-native control and per-flow stream runtime.
+- `service/`: local service planning and platform execution.
+- `socks/`: SOCKS5H, HTTP proxy parsing, and relay helpers.
 
 See `docs/architecture.md` for the deeper runtime model.
 
