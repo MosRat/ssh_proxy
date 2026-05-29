@@ -44,9 +44,11 @@ mod command;
 mod probe;
 #[cfg(target_os = "linux")]
 mod systemd;
+#[cfg(windows)]
+mod windows_schtasks;
 
 #[cfg(windows)]
-use command::{capture_command_output, run_command, run_command_output};
+use command::{capture_command_output, run_command_output};
 #[cfg(windows)]
 use probe::{contains_permission_denied, service_probe_summary};
 
@@ -147,10 +149,7 @@ pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
         ServiceScope::User => {
-            println!("Windows user scheduled task:");
-            println!("  {}", windows_schtasks_create(plan, &service_name));
-            println!("  schtasks /Run /TN {service_name}");
-            println!("  schtasks /Query /TN {service_name}");
+            windows_schtasks::print(plan, &service_name);
         }
         ServiceScope::System => {
             println!("Windows system service:");
@@ -166,42 +165,7 @@ pub(super) fn platform_print(plan: &ServicePlan) -> Result<()> {
 pub(super) fn platform_probe_summary(scope: ServiceScope) -> ServiceProbeSummary {
     let service_name = platform_service_name(scope);
     match scope {
-        ServiceScope::User => {
-            let capture = capture_command_output(
-                "schtasks",
-                &["/Query", "/TN", &service_name, "/FO", "LIST", "/V"],
-            );
-            let stdout = capture["stdout"].as_str().unwrap_or_default();
-            let stderr = capture["stderr"].as_str().unwrap_or_default();
-            let running = stdout.to_ascii_lowercase().contains("running");
-            let exists = capture["ok"].as_bool().unwrap_or(false);
-            let permission_denied = contains_permission_denied(stderr);
-            let state = if running {
-                ServiceProbeState::Healthy
-            } else if exists {
-                ServiceProbeState::Present
-            } else if permission_denied {
-                ServiceProbeState::PermissionDenied
-            } else if capture["ok"].as_bool().unwrap_or(false) {
-                ServiceProbeState::Missing
-            } else {
-                ServiceProbeState::Unknown
-            };
-            service_probe_summary(
-                scope,
-                service_name,
-                state,
-                exists,
-                running,
-                exists || running,
-                permission_denied,
-                json!({
-                    "program": "schtasks",
-                    "capture": capture,
-                    "running": running,
-                }),
-            )
-        }
+        ServiceScope::User => windows_schtasks::probe_summary(scope, service_name),
         ServiceScope::System => {
             let capture = capture_command_output("sc.exe", &["query", &service_name]);
             let stdout = capture["stdout"].as_str().unwrap_or_default();
@@ -247,13 +211,7 @@ pub(super) fn platform_install_requires_elevation(plan: &ServicePlan) -> bool {
 pub(super) fn platform_prepare_install(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => {
-            if windows_task_running(&service_name) {
-                run_command("schtasks", &["/End", "/TN", &service_name])?;
-                thread::sleep(Duration::from_millis(500));
-            }
-            Ok(())
-        }
+        ServiceScope::User => windows_schtasks::prepare_install(&service_name),
         ServiceScope::System => {
             ensure_admin(
                 "preparing a Windows system service install requires administrator privileges",
@@ -268,21 +226,7 @@ pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
         ServiceScope::User => {
-            run_command(
-                "schtasks",
-                &[
-                    "/Create",
-                    "/TN",
-                    &service_name,
-                    "/SC",
-                    "ONLOGON",
-                    "/RL",
-                    "LIMITED",
-                    "/F",
-                    "/TR",
-                    &plan.daemon_command(),
-                ],
-            )?;
+            windows_schtasks::install(plan, &service_name)?;
             platform_start(plan)
         }
         ServiceScope::System => {
@@ -329,7 +273,7 @@ pub(super) fn platform_install(plan: &ServicePlan) -> Result<()> {
 pub(super) fn platform_uninstall(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command("schtasks", &["/Delete", "/TN", &service_name, "/F"]),
+        ServiceScope::User => windows_schtasks::uninstall(&service_name),
         ServiceScope::System => {
             ensure_admin("removing a Windows system service requires administrator privileges")?;
             if let Some(service) = windows_open_system_service(
@@ -478,12 +422,7 @@ fn elevated_install_failed(
 pub(super) fn platform_start(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => {
-            if windows_task_running(&service_name) {
-                return Ok(());
-            }
-            run_command("schtasks", &["/Run", "/TN", &service_name])
-        }
+        ServiceScope::User => windows_schtasks::start(&service_name),
         ServiceScope::System => {
             if plan.elevate && !is_elevated_for_platform() {
                 return platform_install_elevated(plan);
@@ -515,7 +454,7 @@ pub(super) fn platform_start(plan: &ServicePlan) -> Result<()> {
 pub(super) fn platform_stop(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command("schtasks", &["/End", "/TN", &service_name]),
+        ServiceScope::User => windows_schtasks::stop(&service_name),
         ServiceScope::System => {
             let Some(service) = windows_open_system_service(
                 &service_name,
@@ -539,7 +478,7 @@ pub(super) fn platform_stop(plan: &ServicePlan) -> Result<()> {
 pub(super) fn platform_status(plan: &ServicePlan) -> Result<()> {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => run_command_output("schtasks", &["/Query", "/TN", &service_name]),
+        ServiceScope::User => windows_schtasks::status(&service_name),
         ServiceScope::System => run_command_output("sc.exe", &["query", &service_name]),
     }
 }
@@ -548,17 +487,9 @@ pub(super) fn platform_status(plan: &ServicePlan) -> Result<()> {
 pub(super) fn platform_status_summary(plan: &ServicePlan) -> Value {
     let service_name = platform_service_name(plan.scope);
     match plan.scope {
-        ServiceScope::User => capture_command_output("schtasks", &["/Query", "/TN", &service_name]),
+        ServiceScope::User => windows_schtasks::status_summary(&service_name),
         ServiceScope::System => capture_command_output("sc.exe", &["query", &service_name]),
     }
-}
-
-#[cfg(windows)]
-fn windows_schtasks_create(plan: &ServicePlan, service_name: &str) -> String {
-    format!(
-        "schtasks /Create /TN {service_name} /SC ONLOGON /RL LIMITED /F /TR {}",
-        command_quote(&plan.daemon_command())
-    )
 }
 
 #[cfg(windows)]
@@ -636,17 +567,6 @@ fn windows_wait_service_running(service_name: &str) -> Result<()> {
         status["stdout"].as_str().unwrap_or_default(),
         status["stderr"].as_str().unwrap_or_default()
     )
-}
-
-#[cfg(windows)]
-fn windows_task_running(service_name: &str) -> bool {
-    capture_command_output(
-        "schtasks",
-        &["/Query", "/TN", service_name, "/FO", "LIST", "/V"],
-    )["stdout"]
-        .as_str()
-        .map(|stdout| stdout.to_ascii_lowercase().contains("running"))
-        .unwrap_or(false)
 }
 
 #[cfg(windows)]
