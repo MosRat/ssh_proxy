@@ -1,5 +1,4 @@
 use std::{
-    net::SocketAddr,
     pin::Pin,
     sync::{
         Arc, Mutex as StdMutex,
@@ -12,8 +11,8 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use russh::client;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
-    net::{TcpListener, TcpStream},
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
     sync::{Mutex, Notify},
     time,
 };
@@ -22,6 +21,14 @@ use tracing::{debug, info, warn};
 use crate::{
     cli, protocol, socks,
     ssh_client::{self, Client},
+};
+
+mod control;
+mod scheduler;
+
+use scheduler::{
+    RECENT_FAILURE_WINDOW_MS, SSH_SESSION_GROWTH_MIN_ACTIVE_CHANNELS, SessionScoreComponents,
+    calculate_session_score, should_open_new_session,
 };
 
 pub struct State {
@@ -571,61 +578,8 @@ impl State {
     }
 }
 
-const RECENT_FAILURE_WINDOW_MS: u64 = 30_000;
-const SSH_SESSION_GROWTH_MIN_ACTIVE_CHANNELS: u32 = 2;
 const FIRST_BYTE_LATENCY_BUCKETS: [u64; 8] = [10, 25, 50, 100, 250, 500, 1_000, 5_000];
 const FIRST_BYTE_LATENCY_BUCKET_COUNT: usize = FIRST_BYTE_LATENCY_BUCKETS.len() + 1;
-
-#[derive(Debug, Clone, Copy)]
-struct SessionScoreComponents {
-    active_channels: u64,
-    open_failures: u64,
-    last_open_latency_ms: u64,
-    first_byte_latency_ms: u64,
-    bytes_in_flight: u64,
-    recent_failure_penalty: u64,
-    error_closes: u64,
-}
-
-impl SessionScoreComponents {
-    fn score(self) -> u64 {
-        calculate_session_score(self)
-    }
-
-    fn to_json(self) -> serde_json::Value {
-        serde_json::json!({
-            "active_channels": self.active_channels,
-            "open_failures": self.open_failures,
-            "last_open_latency_ms": self.last_open_latency_ms,
-            "first_byte_latency_ms": self.first_byte_latency_ms,
-            "bytes_in_flight": self.bytes_in_flight,
-            "recent_failure_penalty": self.recent_failure_penalty,
-            "error_closes": self.error_closes,
-        })
-    }
-}
-
-fn should_open_new_session(
-    existing_sessions: usize,
-    pool_size: usize,
-    min_active_channels: u32,
-) -> bool {
-    existing_sessions == 0
-        || (existing_sessions < pool_size
-            && min_active_channels >= SSH_SESSION_GROWTH_MIN_ACTIVE_CHANNELS)
-}
-
-fn calculate_session_score(components: SessionScoreComponents) -> u64 {
-    components
-        .active_channels
-        .saturating_mul(10_000)
-        .saturating_add(components.open_failures.saturating_mul(1_000))
-        .saturating_add(components.error_closes.saturating_mul(750))
-        .saturating_add(components.last_open_latency_ms.min(5_000))
-        .saturating_add(components.first_byte_latency_ms.min(5_000))
-        .saturating_add(components.bytes_in_flight / (1024 * 1024))
-        .saturating_add(components.recent_failure_penalty)
-}
 
 fn duration_millis(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
@@ -844,7 +798,7 @@ pub async fn run_with_state(args: cli::ProxyArgs, state: Arc<State>) -> Result<(
     if let Some(addr) = args.control_listen {
         let control_state = state.clone();
         tokio::spawn(async move {
-            if let Err(err) = run_control_server(addr, control_state).await {
+            if let Err(err) = control::run_control_server(addr, control_state).await {
                 warn!(%addr, error = %err, "ssh-native control server stopped");
             }
         });
@@ -878,59 +832,6 @@ pub async fn run_with_state(args: cli::ProxyArgs, state: Arc<State>) -> Result<(
             }
         }
     }
-    Ok(())
-}
-
-async fn run_control_server(addr: SocketAddr, state: Arc<State>) -> Result<()> {
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to bind ssh-native control listener {addr}"))?;
-    info!(%addr, "ssh-native control listener ready");
-    loop {
-        tokio::select! {
-            accept = listener.accept() => {
-                let (stream, peer) = accept?;
-                let state = state.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = handle_control(stream, state).await {
-                        warn!(%peer, error = %err, "ssh-native control request failed");
-                    }
-                });
-            }
-            _ = state.shutdown_notified() => break,
-        }
-    }
-    Ok(())
-}
-
-async fn handle_control(stream: TcpStream, state: Arc<State>) -> Result<()> {
-    let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
-    let mut command = String::new();
-    reader.read_line(&mut command).await?;
-    match command.trim().to_ascii_lowercase().as_str() {
-        "status" | "" => {
-            writer
-                .write_all(state.status_json().await?.as_bytes())
-                .await?
-        }
-        "shutdown" => {
-            state.request_shutdown();
-            writer
-                .write_all(b"{\"ok\":true,\"message\":\"shutdown requested\"}\n")
-                .await?;
-        }
-        other => {
-            let response = serde_json::json!({
-                "ok": false,
-                "error": format!("unknown command {other:?}; expected status or shutdown")
-            });
-            writer
-                .write_all(format!("{}\n", serde_json::to_string_pretty(&response)?).as_bytes())
-                .await?;
-        }
-    }
-    writer.shutdown().await.ok();
     Ok(())
 }
 
