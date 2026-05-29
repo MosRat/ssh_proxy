@@ -1,26 +1,24 @@
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{net::SocketAddr, sync::Arc};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::{
-    sync::Mutex,
-    task::JoinHandle,
-    time::{self, Duration},
-};
-use tracing::{error, info, warn};
+use tokio::{sync::Mutex, task::JoinHandle};
+use tracing::info;
 
-use crate::{
-    cli, config, controller, protocol_core::report::RuntimeDecisionReport, quic_native, reverse,
-    route::RouteRuntimeDecision, ssh_native,
-};
+use crate::{cli, controller, quic_native, ssh_native};
 
 use super::{NodeManager, NodeRequest, response_line};
+
+mod conflict_policy;
+mod runtime_metadata;
+mod store;
+mod supervisor;
+mod time_util;
+
+use conflict_policy::{ensure_new_route_can_start, route_specs_match, route_task_matches};
+use supervisor::spawn_route_supervisor;
+use time_util::now_unix;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RouteStartOutcome {
@@ -92,21 +90,6 @@ pub(super) enum RouteSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredRoute {
-    id: String,
-    created_at_unix: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    fallback_reason: Option<String>,
-    spec: RouteSpec,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct RouteStore {
-    version: u32,
-    routes: Vec<StoredRoute>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RouteStats {
     pub(super) state: String,
     pub(super) attempts: u64,
@@ -128,57 +111,6 @@ impl Default for RouteStats {
             last_event: Some("route task created".to_string()),
             started_at_unix: now,
             updated_at_unix: now,
-        }
-    }
-}
-
-impl RouteSpec {
-    fn direction(&self) -> &'static str {
-        match self {
-            Self::Forward { .. } => "forward",
-            Self::Reverse { .. } => "reverse",
-        }
-    }
-
-    fn detail(&self) -> String {
-        match self {
-            Self::Forward { proxy } => format!("{} -> {}", proxy.listen, proxy.target),
-            Self::Reverse { reverse } => format!("{} <- {}", reverse.remote_listen, reverse.target),
-        }
-    }
-
-    fn listen(&self) -> SocketAddr {
-        match self {
-            Self::Forward { proxy } => proxy.listen,
-            Self::Reverse { reverse } => reverse.remote_listen,
-        }
-    }
-
-    fn peer(&self) -> &str {
-        match self {
-            Self::Forward { proxy } => &proxy.target,
-            Self::Reverse { reverse } => &reverse.target,
-        }
-    }
-
-    pub(super) fn runtime_metadata(&self) -> serde_json::Value {
-        match self {
-            Self::Forward { proxy } => RouteRuntimeDecision::from_forward_task(proxy).into_value(),
-            Self::Reverse { reverse } => json!({
-                "selected_transport": "ssh-reverse-link",
-                "connection_decision": RuntimeDecisionReport::new(
-                    "ssh-reverse-link",
-                    "topology",
-                    "remote-uses-local reverse-link uses the SSH-established reverse channel",
-                ),
-                "transport_pool_size": 1,
-                "transport_pool_source": reverse.transport_pool_source.as_deref().unwrap_or("fixed"),
-                "transport_pool_reason": reverse.transport_pool_reason.as_deref().unwrap_or("reverse-link currently uses one SSH-established route link"),
-                "connect_timeout_secs": reverse.connect_timeout_secs,
-                "reconnect_delay_secs": reverse.reconnect_delay_secs,
-                "reconnect_max_delay_secs": reverse.reconnect_max_delay_secs,
-                "no_reconnect": reverse.no_reconnect,
-            }),
         }
     }
 }
@@ -401,209 +333,6 @@ impl NodeManager {
         info!(route = %id, %direction, %listen, persist, "route registered");
         Ok(RouteStartOutcome::Started)
     }
-
-    pub(super) async fn save_routes(&self) -> Result<()> {
-        let routes = self.routes.lock().await;
-        let store = RouteStore {
-            version: 1,
-            routes: routes
-                .iter()
-                .filter(|(_, task)| task.persist)
-                .map(|(id, task)| StoredRoute {
-                    id: id.clone(),
-                    created_at_unix: task.created_at_unix,
-                    fallback_reason: task.fallback_reason.clone(),
-                    spec: task.spec.clone(),
-                })
-                .collect(),
-        };
-        drop(routes);
-        let text = serde_json::to_string_pretty(&store)?;
-        config::save_text_file_private(&self.route_store_path, &text).with_context(|| {
-            format!(
-                "failed to write persistent route store {}",
-                self.route_store_path.display()
-            )
-        })?;
-        Ok(())
-    }
-
-    pub(super) async fn restore_routes(&self) {
-        let path = self.route_store_path.clone();
-        let text = match tokio::fs::read_to_string(&path).await {
-            Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                info!(path = %path.display(), "no persistent route store found");
-                return;
-            }
-            Err(err) => {
-                warn!(path = %path.display(), error = %err, "failed to read persistent route store");
-                return;
-            }
-        };
-        let store: RouteStore = match serde_json::from_str(&text) {
-            Ok(store) => store,
-            Err(err) => {
-                warn!(path = %path.display(), error = %err, "failed to parse persistent route store");
-                return;
-            }
-        };
-        for route in store.routes {
-            let id = route.id.clone();
-            match self
-                .start_route_spec(
-                    route.id,
-                    route.spec,
-                    true,
-                    route.created_at_unix,
-                    route.fallback_reason,
-                )
-                .await
-            {
-                Ok(_) => info!(route = %id, "restored persistent route"),
-                Err(err) => warn!(route = %id, error = %err, "failed to restore persistent route"),
-            }
-        }
-    }
-}
-
-fn spawn_route_supervisor(
-    id: String,
-    spec: RouteSpec,
-    config: config::AppConfig,
-    stats: Arc<Mutex<RouteStats>>,
-    link_state: Option<RouteLinkState>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut delay = Duration::from_secs(1);
-        loop {
-            {
-                let mut stats = stats.lock().await;
-                stats.state = "running".to_string();
-                stats.attempts += 1;
-                stats.last_event = Some("route task starting".to_string());
-                stats.updated_at_unix = now_unix();
-            }
-            let direction = spec.direction();
-            let result = match spec.clone() {
-                RouteSpec::Forward { proxy } => match link_state.clone() {
-                    Some(RouteLinkState::Spx(state)) => {
-                        controller::run_with_state(proxy, state).await
-                    }
-                    Some(RouteLinkState::QuicNative(state)) => {
-                        controller::run_quic_native_with_slot(proxy, state).await
-                    }
-                    Some(RouteLinkState::SshNative(state)) => {
-                        controller::run_ssh_native_with_state(proxy, state).await
-                    }
-                    None => controller::run(proxy).await,
-                },
-                RouteSpec::Reverse { reverse } => {
-                    reverse::run(reverse.into(), config.clone()).await
-                }
-            };
-            let mut stats = stats.lock().await;
-            stats.updated_at_unix = now_unix();
-            match result {
-                Ok(()) => {
-                    stats.state = "exited".to_string();
-                    stats.last_event = Some("route task exited cleanly".to_string());
-                    warn!(route = %id, %direction, "route task exited cleanly; restarting");
-                }
-                Err(err) => {
-                    stats.state = "error".to_string();
-                    stats.last_error = Some(err.to_string());
-                    stats.last_event = Some("route task failed".to_string());
-                    error!(route = %id, %direction, error = %err, "route task failed; restarting");
-                }
-            }
-            stats.restart_count += 1;
-            stats.state = "restarting".to_string();
-            stats.last_event = Some(format!("route task restarting in {}s", delay.as_secs()));
-            stats.updated_at_unix = now_unix();
-            drop(stats);
-            time::sleep(delay).await;
-            delay = (delay * 2).min(Duration::from_secs(30));
-        }
-    })
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn ensure_port_available(addr: SocketAddr) -> Result<()> {
-    let listener = std::net::TcpListener::bind(addr)
-        .with_context(|| format!("listen address {addr} is already in use or unavailable"))?;
-    drop(listener);
-    Ok(())
-}
-
-fn ensure_listener_not_reserved(
-    routes: &HashMap<String, RouteTask>,
-    direction: &str,
-    listen: SocketAddr,
-    peer: Option<&str>,
-) -> Result<()> {
-    for (id, task) in routes {
-        if task.direction != direction || task.listen != Some(listen) {
-            continue;
-        }
-        if direction == "forward" || peer.is_some_and(|peer| task.peer.as_deref() == Some(peer)) {
-            bail!("route {id:?} already owns {direction} listener {listen}");
-        }
-    }
-    Ok(())
-}
-
-fn ensure_new_route_can_start(
-    routes: &HashMap<String, RouteTask>,
-    direction: &str,
-    listen: SocketAddr,
-    peer: Option<&str>,
-    spec: &RouteSpec,
-) -> Result<()> {
-    ensure_listener_not_reserved(routes, direction, listen, peer)?;
-    if matches!(spec, RouteSpec::Forward { .. }) {
-        ensure_port_available(listen)?;
-    }
-    Ok(())
-}
-
-fn route_task_matches(
-    task: &RouteTask,
-    direction: &str,
-    listen: SocketAddr,
-    peer: Option<&str>,
-    spec: &RouteSpec,
-) -> bool {
-    task.direction == direction
-        && task.listen == Some(listen)
-        && match peer {
-            Some(peer) => task.peer.as_deref() == Some(peer),
-            None => true,
-        }
-        && route_specs_match(&task.spec, spec)
-}
-
-fn route_specs_match(left: &RouteSpec, right: &RouteSpec) -> bool {
-    match (left, right) {
-        (RouteSpec::Reverse { reverse: left }, RouteSpec::Reverse { reverse: right }) => {
-            reverse_route_specs_match(left, right)
-        }
-        _ => serde_json::to_value(left).ok() == serde_json::to_value(right).ok(),
-    }
-}
-
-fn reverse_route_specs_match(left: &cli::ReverseTaskArgs, right: &cli::ReverseTaskArgs) -> bool {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    left.identity.clear();
-    right.identity.clear();
-    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
 }
 
 #[cfg(test)]
