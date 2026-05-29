@@ -2,7 +2,9 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::inventory::ServiceProbeSummary;
-use super::plan::{ServicePlan, ServiceScope, platform_service_name};
+#[cfg(windows)]
+use super::plan::platform_service_name;
+use super::plan::{ServicePlan, ServiceScope};
 #[cfg(target_os = "macos")]
 mod launchd;
 

@@ -1,8 +1,9 @@
-use std::{fs, io::Read, net::SocketAddr, path::PathBuf};
+use std::{fs, net::SocketAddr, path::PathBuf};
 #[cfg(windows)]
 use std::{thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
+#[cfg(windows)]
 use sha2::Digest;
 use ssh_proxy_core::external::ExternalActionClass;
 use ssh_proxy_platform::{PlatformProbePlan, capture_command};
@@ -389,6 +390,9 @@ fn copy_binary(source: &PathBuf, target: &PathBuf) -> Result<()> {
 }
 
 fn default_install_dir(scope: ServiceScope, source_exe: &PathBuf) -> Result<PathBuf> {
+    #[cfg(not(windows))]
+    let _ = (scope, source_exe);
+
     #[cfg(windows)]
     if matches!(scope, ServiceScope::System) {
         let root = std::env::var_os("ProgramData")
@@ -420,7 +424,10 @@ fn default_local_install_dir() -> Result<PathBuf> {
     }
 }
 
+#[cfg(windows)]
 fn short_file_hash(path: &PathBuf) -> Result<String> {
+    use std::io::Read;
+
     let mut file =
         fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut hasher = sha2::Sha256::new();

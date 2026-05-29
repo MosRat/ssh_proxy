@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use anyhow::Context;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use ssh_proxy_core::external::ExternalActionClass;

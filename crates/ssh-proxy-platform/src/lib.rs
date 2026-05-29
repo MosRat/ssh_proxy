@@ -63,6 +63,8 @@ pub struct NativeProviderOutcome {
     pub execution_backend: ExecutionBackend,
     pub native_api_available: bool,
     pub fallback_used: bool,
+    #[serde(default = "default_external_action")]
+    pub external_action: Value,
     pub class: ExternalActionClass,
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +125,7 @@ impl NativeProviderOutcome {
         class: ExternalActionClass,
         reason: impl Into<String>,
     ) -> Self {
+        let reason = reason.into();
         Self {
             ok,
             execution_backend,
@@ -131,8 +134,14 @@ impl NativeProviderOutcome {
                 ExecutionBackend::NativeApi | ExecutionBackend::Dbus | ExecutionBackend::Com
             ),
             fallback_used: false,
+            external_action: native_provider_external_action(
+                execution_backend,
+                class,
+                false,
+                &reason,
+            ),
             class,
-            reason: reason.into(),
+            reason,
             repair_action: None,
             status: None,
             message: None,
@@ -142,6 +151,9 @@ impl NativeProviderOutcome {
 
     pub fn fallback(mut self, fallback_used: bool) -> Self {
         self.fallback_used = fallback_used;
+        if let Value::Object(object) = &mut self.external_action {
+            object.insert("fallback_used".to_string(), json!(fallback_used));
+        }
         self
     }
 
@@ -255,6 +267,24 @@ fn default_execution_backend() -> ExecutionBackend {
     ExecutionBackend::ProviderCommand
 }
 
+fn default_external_action() -> Value {
+    Value::Null
+}
+
+fn native_provider_external_action(
+    execution_backend: ExecutionBackend,
+    class: ExternalActionClass,
+    fallback_used: bool,
+    reason: &str,
+) -> Value {
+    json!({
+        "class": class.as_str(),
+        "execution_backend": execution_backend.as_str(),
+        "fallback_used": fallback_used,
+        "reason": reason,
+    })
+}
+
 pub fn capture_command(plan: PlatformCommandPlan) -> Result<PlatformCommandOutcome> {
     let output = Command::new(&plan.program)
         .args(&plan.args)
@@ -330,6 +360,8 @@ mod tests {
         assert_eq!(value["execution_backend"], "dbus");
         assert_eq!(value["native_api_available"], true);
         assert_eq!(value["fallback_used"], false);
+        assert_eq!(value["external_action"]["execution_backend"], "dbus");
+        assert_eq!(value["external_action"]["fallback_used"], false);
         assert_eq!(value["class"], "required_provider");
         assert_eq!(value["status"], "active");
     }
