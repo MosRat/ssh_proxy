@@ -13,6 +13,9 @@ blocker, and recovery fields.
 Remote install commands are executed through the lifecycle workflow rather than
 direct SSH status calls, which keeps provider failures, lifecycle JSON, and
 doctor/status redaction on one path.
+Provider output is now a lifecycle action plan, not only shell text: binary
+staging, artifact writes, TCP probes, service controls, and compatibility
+commands all pass through the same executor and event sink.
 The same contract covers:
 
 - Windows system daemon through `windows-service` and the elevated install worker.
@@ -33,5 +36,5 @@ the same change as the lifecycle extraction.
 
 `service-manager` can become a production dependency only after provider
 contract tests prove it preserves Windows SCM behavior, systemd/launchd command
-shape, remote peer install reports, rollback/error mapping, and current fast
-gate timing.
+shape, remote peer install reports, lifecycle store schema compatibility,
+rollback/error mapping, and current fast gate timing.

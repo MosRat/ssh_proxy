@@ -45,6 +45,11 @@ The implementation keeps platform differences behind small adapters:
   service state.
 - `LocalExecutor` and `SshExecutor` run the same lifecycle against local files
   or Rust SSH exec/upload/direct-tcpip.
+- `LifecyclePlan` contains executable actions (`StageBinary`, `WriteArtifact`,
+  `ReadArtifact`, `RunCommand`, `ProbeTcp`, `ServiceControl`) so daemon jobs and
+  remote peer bootstrap use one execution path instead of parallel scripts.
+- `LifecycleEventSink` streams phase reports while work is running; job records,
+  peer status, events, and doctor output are derived from the same report stream.
 - Service providers render platform operations for Windows SCM, Windows user
   scheduled tasks, systemd, launchd, and the managed nohup supervisor.
 - Remote install no longer executes service-manager commands as an ad hoc SSH
@@ -55,6 +60,8 @@ The implementation keeps platform differences behind small adapters:
 - Rust materializes peer `config.toml`, `peer_state.json`,
   `install_report.json`, `health.json`, and `routes.json`; remote shell usage is
   limited to minimal file writes and platform service commands.
+- `peer_lifecycle::store` validates and redacts peer state, install report,
+  health, and routes documents before they are written or surfaced in reports.
 - `PeerLifecycleReport` is reused by local service install reports and remote
   peer status so doctor/status output has the same state, phase, provider,
   blocker, retry, and recovery vocabulary.
@@ -155,9 +162,10 @@ Remote setup is daemon-owned. The daemon applies and repairs:
 - `~/.vscode-server/remote-proxy-status.json`.
 
 The VS Code extension calls `ssh_proxy vscode apply-settings` rather than
-running remote setup scripts itself. VS Code Machine settings are read and
-rendered by Rust, then written through a minimal SSH shell file operation; remote
-`node` is diagnostic-only and is not required for the normal settings path.
+running remote setup scripts itself. VS Code Machine settings, server-env, and
+remote status JSON are read or rendered by Rust, then written through
+`SshExecutor.write_artifact` with stdin-backed file operations. Remote `node` is
+diagnostic-only and is not required for the normal settings path.
 
 ## Updates
 
