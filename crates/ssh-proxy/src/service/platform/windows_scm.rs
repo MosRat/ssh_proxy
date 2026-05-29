@@ -52,8 +52,8 @@ pub(super) fn probe_summary(scope: ServiceScope, service_name: String) -> Servic
     let stderr = capture["stderr"].as_str().unwrap_or_default();
     let running = capture["running"].as_bool().unwrap_or(false);
     let exists = capture["exists"].as_bool().unwrap_or(false);
-    let permission_denied =
-        capture["permission_denied"].as_bool().unwrap_or(false) || contains_permission_denied(stderr);
+    let permission_denied = capture["permission_denied"].as_bool().unwrap_or(false)
+        || contains_permission_denied(stderr);
     let state = if running {
         ServiceProbeState::Healthy
     } else if exists {

@@ -160,7 +160,10 @@ pub fn run_systemd_plan(plan: &SystemdDbusPlan) -> anyhow::Result<NativeProvider
                 .context("failed to reload systemd manager through D-Bus")?;
         }
         SystemdOperation::Start | SystemdOperation::Stop | SystemdOperation::Restart => {
-            let unit = plan.unit.as_deref().context("unit operation requires unit")?;
+            let unit = plan
+                .unit
+                .as_deref()
+                .context("unit operation requires unit")?;
             let mode = plan.mode.as_deref().unwrap_or("replace");
             proxy
                 .call_method(plan.method_name(), &(unit, mode))
