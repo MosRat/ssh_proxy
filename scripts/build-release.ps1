@@ -26,14 +26,14 @@ try {
         Invoke-NativeChecked "sccache start-server" { sccache --start-server }
     }
 
-    Invoke-NativeChecked "cargo zigbuild" { cargo zigbuild --target $Target --release }
+    Invoke-NativeChecked "cargo zigbuild" { cargo zigbuild -p ssh_proxy --target $Target --release }
     $sidecar = Join-Path $root "target\$Target\release\ssh_proxy"
     if (-not (Test-Path -LiteralPath $sidecar)) {
         throw "Linux musl sidecar was not produced at $sidecar"
     }
 
     $env:SSH_PROXY_LINUX_MUSL_BIN = (Resolve-Path $sidecar).Path
-    Invoke-NativeChecked "cargo build" { cargo build --release }
+    Invoke-NativeChecked "cargo build" { cargo build -p ssh_proxy --release }
 
     if ($env:RUSTC_WRAPPER -eq "sccache") {
         Invoke-NativeChecked "sccache show-stats" { sccache --show-stats }

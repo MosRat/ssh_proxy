@@ -14,6 +14,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|path| path.parent())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.clone());
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let target = env::var("TARGET").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -24,7 +29,7 @@ fn main() {
         candidates.push(path);
     }
     candidates.push(
-        manifest_dir
+        workspace_root
             .join("target")
             .join("x86_64-unknown-linux-musl")
             .join("release")
@@ -32,14 +37,14 @@ fn main() {
     );
     if profile != "release" {
         candidates.push(
-            manifest_dir
+            workspace_root
                 .join("target")
                 .join("x86_64-unknown-linux-musl")
                 .join(&profile)
                 .join("ssh_proxy"),
         );
         candidates.push(
-            manifest_dir
+            workspace_root
                 .join("target")
                 .join("x86_64-unknown-linux-musl")
                 .join("debug")
@@ -47,7 +52,7 @@ fn main() {
         );
     }
     candidates.push(
-        manifest_dir
+        workspace_root
             .join("assets")
             .join("ssh_proxy-x86_64-unknown-linux-musl"),
     );
@@ -55,7 +60,13 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=SSH_PROXY_LINUX_MUSL_BIN");
     println!("cargo:rerun-if-env-changed=SSH_PROXY_ALLOW_MISSING_SIDECAR");
-    println!("cargo:rerun-if-changed=assets/ssh_proxy-x86_64-unknown-linux-musl");
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_root
+            .join("assets")
+            .join("ssh_proxy-x86_64-unknown-linux-musl")
+            .display()
+    );
 
     if let Some(path) = sidecar {
         let bytes = fs::read(&path).unwrap_or_else(|err| {

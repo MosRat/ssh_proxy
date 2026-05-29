@@ -53,8 +53,8 @@ try {
         if (-not $SkipFmt) {
             Invoke-NativeChecked "cargo fmt" { cargo fmt -- --check }
         }
-        Invoke-NativeChecked "cargo check" { cargo check }
-        Invoke-NativeChecked "cargo test" { cargo test --tests }
+        Invoke-NativeChecked "cargo check" { cargo check --workspace }
+        Invoke-NativeChecked "cargo test" { cargo test --workspace --tests }
     }
 
     if (-not $SkipVscode) {

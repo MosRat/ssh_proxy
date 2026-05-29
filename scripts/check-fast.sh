@@ -88,39 +88,39 @@ if [ "$SKIP_RUST" != "1" ]; then
   fi
 
   # shellcheck disable=SC2086
-  cargo $CARGO_CONFIG_ARGS check --tests
+  cargo $CARGO_CONFIG_ARGS check --workspace --tests
   if [ "$FULL" = "1" ]; then
     if cargo nextest --version >/dev/null 2>&1; then
       # shellcheck disable=SC2086
-      cargo $CARGO_CONFIG_ARGS nextest run --tests
+      cargo $CARGO_CONFIG_ARGS nextest run --workspace --tests
     else
       # shellcheck disable=SC2086
-      cargo $CARGO_CONFIG_ARGS test --tests -- --test-threads=1
+      cargo $CARGO_CONFIG_ARGS test --workspace --tests -- --test-threads=1
     fi
   else
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy protocol_core
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --bin ssh_proxy protocol_core
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy peer_lifecycle
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --bin ssh_proxy peer_lifecycle
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy deploy
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --bin ssh_proxy deploy
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy remote_config_write
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --bin ssh_proxy remote_config_write
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy remote_resolve_defaults
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --bin ssh_proxy remote_resolve_defaults
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy node_daemon::handoff
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --bin ssh_proxy node_daemon::handoff
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test --test node_daemon node_daemon_reuses_duplicate_route_start_for_same_spec -- --test-threads=1
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test node_daemon node_daemon_reuses_duplicate_route_start_for_same_spec -- --test-threads=1
     if [ "$CONTRACTS" = "1" ]; then
       # shellcheck disable=SC2086
-      cargo $CARGO_CONFIG_ARGS test --test build_contract
+      cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test build_contract
       # shellcheck disable=SC2086
-      cargo $CARGO_CONFIG_ARGS test --test cli cli_help_exposes_only_production_daemon_commands
+      cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test cli cli_help_exposes_only_production_daemon_commands
     fi
     if [ "$TRANSPORT" = "1" ]; then
       # shellcheck disable=SC2086
-      cargo $CARGO_CONFIG_ARGS test --test node_daemon fixed_tcp_target_can_proxy_to_specific_port -- --test-threads=1
+      cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test node_daemon fixed_tcp_target_can_proxy_to_specific_port -- --test-threads=1
     fi
   fi
 

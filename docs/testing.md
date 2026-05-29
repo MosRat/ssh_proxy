@@ -13,7 +13,7 @@ pwsh -NoProfile -File scripts/check-fast.ps1 -SkipVscode
 
 This runs:
 
-- `cargo check --tests`
+- `cargo check --workspace --tests`
 - protocol/control/data/report DTO contract tests
 - peer lifecycle/config/provider contract tests
 - deploy/remote install lifecycle tests
@@ -32,19 +32,19 @@ context. Avoid jumping straight to the release gate during normal edit loops.
 Add targeted Rust tests instead of the full suite when only one subsystem moved:
 
 - protocol envelopes, command aliases, descriptor DTOs, SPX/QNC1 framing, and
-  shared report DTOs: `cargo test --bin ssh_proxy protocol_core`;
+  shared report DTOs: `cargo test -p ssh_proxy --bin ssh_proxy protocol_core`;
 - peer lifecycle schema/provider/config/connection metadata:
-  `cargo test --bin ssh_proxy peer_lifecycle`;
-- data-plane frame compatibility: `cargo test --bin ssh_proxy protocol`;
-- QUIC-native control framing: `cargo test --bin ssh_proxy quic_native`;
-- remote install lifecycle execution: `cargo test --bin ssh_proxy deploy`;
-- remote setup artifact writes: `cargo test --bin ssh_proxy remote_setup`;
+  `cargo test -p ssh_proxy --bin ssh_proxy peer_lifecycle`;
+- data-plane frame compatibility: `cargo test -p ssh_proxy --bin ssh_proxy protocol`;
+- QUIC-native control framing: `cargo test -p ssh_proxy --bin ssh_proxy quic_native`;
+- remote install lifecycle execution: `cargo test -p ssh_proxy --bin ssh_proxy deploy`;
+- remote setup artifact writes: `cargo test -p ssh_proxy --bin ssh_proxy remote_setup`;
 - proxy session spec/state-machine boundaries:
-  `cargo test --bin ssh_proxy proxy_session`;
-- remote peer file command rendering: `cargo test --bin ssh_proxy remote_config_write`;
-- local service lifecycle reporting: `cargo test --bin ssh_proxy service`;
-- route transport decisions and daemon route metadata: `cargo test --bin ssh_proxy routes`;
-- repair/report schema: `cargo test --bin ssh_proxy repair diagnostics`;
+  `cargo test -p ssh_proxy --bin ssh_proxy proxy_session`;
+- remote peer file command rendering: `cargo test -p ssh_proxy --bin ssh_proxy remote_config_write`;
+- local service lifecycle reporting: `cargo test -p ssh_proxy --bin ssh_proxy service`;
+- route transport decisions and daemon route metadata: `cargo test -p ssh_proxy --bin ssh_proxy routes`;
+- repair/report schema: `cargo test -p ssh_proxy --bin ssh_proxy repair diagnostics`;
 - extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
 
 Prefer the pure lifecycle/provider tests while editing service managers. They use
@@ -66,8 +66,8 @@ the failure needs broader context:
 pwsh -NoProfile -File scripts/check-fast.ps1 -Full
 ```
 
-`-Full` uses `cargo nextest run --tests` when available. Without nextest, it
-falls back to single-threaded `cargo test --tests` to reduce port races and
+`-Full` uses `cargo nextest run --workspace --tests` when available. Without nextest, it
+falls back to single-threaded `cargo test --workspace --tests` to reduce port races and
 long-lived child-process overlap in integration tests.
 
 Use `scripts/check-all.ps1` when you also want formatting:
@@ -99,9 +99,9 @@ intentionally running the workspace debug binary outside the test harness.
 Before publishing, keep the full release gate explicit:
 
 ```powershell
-cargo test --tests
-cargo build --release
-cargo zigbuild --target x86_64-unknown-linux-musl --release
+cargo test --workspace --tests
+cargo build -p ssh_proxy --release
+cargo zigbuild -p ssh_proxy --target x86_64-unknown-linux-musl --release
 npm --prefix apps/vscode-remote-proxy test
 npm --prefix apps/vscode-remote-proxy run package:with-kernel
 ```

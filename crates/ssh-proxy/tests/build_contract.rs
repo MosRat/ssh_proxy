@@ -3,11 +3,12 @@ use std::{fs, path::Path};
 #[test]
 fn cargo_manifest_keeps_release_binary_contract() {
     let manifest = read_repo_file("Cargo.toml");
+    let package_manifest = read_package_file("Cargo.toml");
 
     assert_contains(
-        &manifest,
-        "\nmimalloc = ",
-        "Cargo.toml should keep mimalloc as a direct dependency",
+        &package_manifest,
+        "\nmimalloc.workspace = true",
+        "ssh_proxy package should keep mimalloc as a direct dependency",
     );
     assert_contains(
         &manifest,
@@ -48,7 +49,7 @@ fn cargo_manifest_keeps_release_binary_contract() {
 
 #[test]
 fn main_installs_mimalloc_global_allocator() {
-    let main_rs = read_repo_file("src/main.rs");
+    let main_rs = read_package_file("src/main.rs");
 
     assert_contains(
         &main_rs,
@@ -91,9 +92,8 @@ fn manifest_avoids_direct_c_ffi_crates() {
 
 #[test]
 fn source_avoids_direct_c_ffi_surface() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut violations = Vec::new();
-    collect_rust_source_ffi_violations(&root, &mut violations);
+    collect_workspace_source_ffi_violations(&mut violations);
 
     assert!(
         violations.is_empty(),
@@ -106,9 +106,9 @@ fn source_avoids_direct_c_ffi_surface() {
 fn release_docs_list_full_local_gate_commands() {
     let docs = read_repo_file("docs/release.md");
     let gates = [
-        "cargo test --tests",
-        "cargo build --release",
-        "cargo zigbuild --target x86_64-unknown-linux-musl --release",
+        "cargo test --workspace --tests",
+        "cargo build -p ssh_proxy --release",
+        "cargo zigbuild -p ssh_proxy --target x86_64-unknown-linux-musl --release",
         "npm --prefix apps/vscode-remote-proxy test",
         "npm --prefix apps/vscode-remote-proxy run package:with-kernel",
     ];
@@ -131,17 +131,17 @@ fn fast_check_scripts_keep_acceleration_contract() {
     for text in [&ps1, &sh] {
         assert_contains(
             text,
-            "check --tests",
+            "check --workspace --tests",
             "fast check path should compile tests before running them",
         );
         assert_contains(
             text,
-            "nextest run --tests",
+            "nextest run --workspace --tests",
             "fast check path should prefer cargo-nextest when available",
         );
         assert_contains(
             text,
-            "test --tests",
+            "test --workspace --tests",
             "fast check path should fall back to cargo test",
         );
         assert_contains(
@@ -152,9 +152,9 @@ fn fast_check_scripts_keep_acceleration_contract() {
     }
 
     for command in [
-        "cargo check --tests",
-        "cargo nextest run --tests",
-        "cargo test --tests",
+        "cargo check --workspace --tests",
+        "cargo nextest run --workspace --tests",
+        "cargo test --workspace --tests",
         "sccache",
     ] {
         assert_contains(
@@ -166,9 +166,23 @@ fn fast_check_scripts_keep_acceleration_contract() {
 }
 
 fn read_repo_file(relative: &str) -> String {
+    let path = workspace_root().join(relative);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn read_package_file(relative: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
     fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn workspace_root() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("ssh_proxy package should live under crates/ssh-proxy")
+        .to_path_buf()
 }
 
 fn assert_contains(haystack: &str, needle: &str, message: &str) {
@@ -182,6 +196,24 @@ fn manifest_has_direct_crate(manifest: &str, name: &str) -> bool {
         let trimmed = line.trim_start();
         trimmed.starts_with(&simple) || trimmed.starts_with(&quoted)
     })
+}
+
+fn collect_workspace_source_ffi_violations(violations: &mut Vec<String>) {
+    let crates_dir = workspace_root().join("crates");
+    let entries = fs::read_dir(&crates_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", crates_dir.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                crates_dir.display()
+            )
+        });
+        let src_dir = entry.path().join("src");
+        if src_dir.is_dir() {
+            collect_rust_source_ffi_violations(&src_dir, violations);
+        }
+    }
 }
 
 fn collect_rust_source_ffi_violations(path: &Path, violations: &mut Vec<String>) {

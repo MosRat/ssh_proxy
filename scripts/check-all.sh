@@ -45,8 +45,8 @@ cd "$ROOT"
 cleanup_test_binaries
 
 cargo fmt -- --check
-cargo check
-cargo test --tests
+cargo check --workspace
+cargo test --workspace --tests
 
 if [ ! -d "$EXTENSION_DIR/node_modules" ]; then
   npm --prefix "$EXTENSION_DIR" ci

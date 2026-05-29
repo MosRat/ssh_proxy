@@ -87,27 +87,27 @@ try {
             }
         }
 
-        Invoke-CargoChecked "cargo check --tests" @("check", "--tests")
+        Invoke-CargoChecked "cargo check --workspace --tests" @("check", "--workspace", "--tests")
         if ($Full) {
             if (Test-CargoNextest) {
-                Invoke-CargoChecked "cargo nextest run --tests" @("nextest", "run", "--tests")
+                Invoke-CargoChecked "cargo nextest run --workspace --tests" @("nextest", "run", "--workspace", "--tests")
             } else {
-                Invoke-CargoChecked "cargo test --tests" @("test", "--tests", "--", "--test-threads=1")
+                Invoke-CargoChecked "cargo test --workspace --tests" @("test", "--workspace", "--tests", "--", "--test-threads=1")
             }
         } else {
-            Invoke-CargoChecked "cargo test --bin ssh_proxy protocol_core" @("test", "--bin", "ssh_proxy", "protocol_core")
-            Invoke-CargoChecked "cargo test --bin ssh_proxy peer_lifecycle" @("test", "--bin", "ssh_proxy", "peer_lifecycle")
-            Invoke-CargoChecked "cargo test --bin ssh_proxy deploy" @("test", "--bin", "ssh_proxy", "deploy")
-            Invoke-CargoChecked "cargo test --bin ssh_proxy remote peer config" @("test", "--bin", "ssh_proxy", "remote_config_write")
-            Invoke-CargoChecked "cargo test --bin ssh_proxy remote resolve defaults" @("test", "--bin", "ssh_proxy", "remote_resolve_defaults")
-            Invoke-CargoChecked "cargo test --bin ssh_proxy handoff" @("test", "--bin", "ssh_proxy", "node_daemon::handoff")
-            Invoke-CargoChecked "cargo test --test node_daemon route smoke" @("test", "--test", "node_daemon", "node_daemon_reuses_duplicate_route_start_for_same_spec", "--", "--test-threads=1")
+            Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy protocol_core" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "protocol_core")
+            Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy peer_lifecycle" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "peer_lifecycle")
+            Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy deploy" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "deploy")
+            Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy remote peer config" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "remote_config_write")
+            Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy remote resolve defaults" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "remote_resolve_defaults")
+            Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy handoff" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "node_daemon::handoff")
+            Invoke-CargoChecked "cargo test -p ssh_proxy --test node_daemon route smoke" @("test", "-p", "ssh_proxy", "--test", "node_daemon", "node_daemon_reuses_duplicate_route_start_for_same_spec", "--", "--test-threads=1")
             if ($Contracts) {
-                Invoke-CargoChecked "cargo test --test build_contract" @("test", "--test", "build_contract")
-                Invoke-CargoChecked "cargo test --test cli smoke" @("test", "--test", "cli", "cli_help_exposes_only_production_daemon_commands")
+                Invoke-CargoChecked "cargo test -p ssh_proxy --test build_contract" @("test", "-p", "ssh_proxy", "--test", "build_contract")
+                Invoke-CargoChecked "cargo test -p ssh_proxy --test cli smoke" @("test", "-p", "ssh_proxy", "--test", "cli", "cli_help_exposes_only_production_daemon_commands")
             }
             if ($Transport) {
-                Invoke-CargoChecked "cargo test --test node_daemon transport smoke" @("test", "--test", "node_daemon", "fixed_tcp_target_can_proxy_to_specific_port", "--", "--test-threads=1")
+                Invoke-CargoChecked "cargo test -p ssh_proxy --test node_daemon transport smoke" @("test", "-p", "ssh_proxy", "--test", "node_daemon", "fixed_tcp_target_can_proxy_to_specific_port", "--", "--test-threads=1")
             }
         }
 

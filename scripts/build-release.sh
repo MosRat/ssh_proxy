@@ -11,7 +11,7 @@ if [ "${NO_SCCACHE:-0}" != "1" ] && command -v sccache >/dev/null 2>&1; then
   sccache --start-server >/dev/null 2>&1 || true
 fi
 
-cargo zigbuild --target "$TARGET" --release
+cargo zigbuild -p ssh_proxy --target "$TARGET" --release
 SIDECAR="$ROOT/target/$TARGET/release/ssh_proxy"
 if [ ! -f "$SIDECAR" ]; then
   echo "Linux musl sidecar was not produced at $SIDECAR" >&2
@@ -19,7 +19,7 @@ if [ ! -f "$SIDECAR" ]; then
 fi
 
 export SSH_PROXY_LINUX_MUSL_BIN="$SIDECAR"
-cargo build --release
+cargo build -p ssh_proxy --release
 
 if [ "${RUSTC_WRAPPER:-}" = "sccache" ]; then
   sccache --show-stats || true
