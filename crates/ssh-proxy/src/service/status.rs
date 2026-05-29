@@ -9,6 +9,7 @@ use super::{
     plan::{self, ServicePlan},
     platform,
 };
+use crate::peer_lifecycle::spec::PeerLifecycleRole;
 
 pub(super) async fn status_service(plan: &ServicePlan, json_output: bool) -> Result<()> {
     let summary = service_status_summary(plan).await?;
@@ -80,146 +81,52 @@ pub(super) async fn service_status_summary(plan: &ServicePlan) -> Result<Value> 
 }
 
 pub(super) fn service_state_name(daemon_reachable: bool, platform_ok: bool) -> &'static str {
-    match (daemon_reachable, platform_ok) {
-        (true, true) => "running_with_persistent_manager",
-        (true, false) => "running_without_persistent_manager",
-        (false, true) => "persistent_manager_registered_but_daemon_unreachable",
-        (false, false) => "unavailable",
-    }
+    ssh_proxy_service::service_state_name(daemon_reachable, platform_ok)
 }
 
 pub(super) fn service_next_action(daemon_reachable: bool, platform_ok: bool) -> &'static str {
-    match (daemon_reachable, platform_ok) {
-        (true, _) => "reuse_default_daemon",
-        (false, true) => "start_or_repair_persistent_service",
-        (false, false) => "install_persistent_service_or_start_session_daemon",
-    }
+    ssh_proxy_service::service_next_action(daemon_reachable, platform_ok)
 }
 
 fn service_manager_summary(plan: &ServicePlan, daemon_reachable: bool, platform_ok: bool) -> Value {
-    let fallback_recommended = !daemon_reachable;
     let lifecycle = plan.lifecycle_spec();
-    json!({
-        "kind": persistent_manager_kind(plan.scope),
-        "lifecycle_provider": lifecycle.provider.manager_name(),
-        "lifecycle_role": lifecycle.role,
-        "service_name": platform_service_name(plan.scope),
-        "requested_scope": cli_service_scope_name(plan.requested_scope),
-        "selected_scope": service_scope_name(plan.scope),
-        "selected_reason": plan.resolution.selected_reason,
-        "resolution_next_action": plan.resolution.next_action.as_str(),
-        "fallback_chain": plan.resolution.fallback_chain.iter().map(|scope| service_scope_name(*scope)).collect::<Vec<_>>(),
-        "persistent_installed_or_registered": platform_ok,
-        "daemon_reachable": daemon_reachable,
-        "session_daemon_fallback": {
-            "supported": true,
-            "recommended": fallback_recommended,
-            "reason": if fallback_recommended {
-                "default daemon endpoint is not reachable; clients may start a session-owned daemon without installing a persistent service"
-            } else {
-                "default daemon endpoint is reachable; reuse the existing daemon"
-            },
-        },
-        "next_action": service_next_action(daemon_reachable, platform_ok),
+    ssh_proxy_service::service_manager_summary(ssh_proxy_service::ServiceManagerSummaryInput {
+        kind: ssh_proxy_service::persistent_manager_kind(plan.scope),
+        lifecycle_provider: lifecycle.provider.manager_name(),
+        lifecycle_role: lifecycle_role_name(lifecycle.role),
+        service_name: &platform_service_name(plan.scope),
+        requested_scope: plan.resolution.requested_scope,
+        selected_scope: plan.scope,
+        selected_reason: &plan.resolution.selected_reason,
+        resolution_next_action: plan.resolution.next_action,
+        fallback_chain: &plan.resolution.fallback_chain,
+        persistent_installed_or_registered: platform_ok,
+        daemon_reachable,
     })
 }
 
 fn selected_control_json(plan: &ServicePlan, daemon_reachable: bool) -> Value {
-    let selected = if daemon_reachable {
-        json!({
-            "endpoint": plan.endpoint,
-            "source": "configured_or_default",
-            "reachable": true,
-            "kind": control_endpoint_kind_from_str(&plan.endpoint),
-        })
-    } else {
-        Value::Null
-    };
-    json!({
-        "selected": selected,
-        "preferred_order": [
-            "system_service",
-            "user_service",
-            "configured_endpoint",
-            "default_endpoint",
-            "tcp_legacy"
-        ],
-        "configured_endpoint": plan.endpoint,
-        "default_endpoint": crate::control_socket::default_endpoint_string(),
-    })
+    ssh_proxy_service::selected_control_summary(
+        &plan.endpoint,
+        &crate::control_socket::default_endpoint_string(),
+        daemon_reachable,
+    )
 }
 
 fn service_candidates_json(plan: &ServicePlan) -> Value {
-    let mut candidates = Vec::new();
-    for probe in &plan.resolution.probe_chain {
-        candidates.push(json!({
-            "scope": service_scope_name(probe.scope),
-            "service_name": probe.service_name,
-            "exists": probe.exists,
-            "healthy": probe.healthy,
-            "accessible": probe.accessible,
-            "permission_denied": probe.permission_denied,
-            "control_endpoint": if probe.scope == plan.scope {
-                Value::String(plan.endpoint.clone())
-            } else {
-                Value::Null
-            },
-            "version": Value::Null,
-            "binary_path": Value::Null,
-            "details": probe.details.clone(),
-        }));
-    }
-    candidates.push(json!({
-        "scope": "configured",
-        "service_name": "configured_endpoint",
-        "exists": true,
-        "healthy": false,
-        "accessible": true,
-        "permission_denied": false,
-        "control_endpoint": plan.endpoint,
-        "version": env!("CARGO_PKG_VERSION"),
-        "binary_path": plan.exe.clone(),
-        "details": {
-            "kind": control_endpoint_kind_from_str(&plan.endpoint),
-        },
-    }));
-    Value::Array(candidates)
+    ssh_proxy_service::service_candidates_summary(
+        &plan.resolution.probe_chain,
+        plan.scope,
+        &plan.endpoint,
+        env!("CARGO_PKG_VERSION"),
+        &plan.exe.display().to_string(),
+    )
 }
 
-fn control_endpoint_kind_from_str(endpoint: &str) -> &'static str {
-    if endpoint.starts_with("npipe://") {
-        "named-pipe"
-    } else if endpoint.starts_with("unix://") {
-        "unix"
-    } else {
-        "tcp"
-    }
-}
-
-fn persistent_manager_kind(scope: plan::ServiceScope) -> &'static str {
-    match scope {
-        plan::ServiceScope::User => {
-            if cfg!(windows) {
-                "windows_scheduled_task_user"
-            } else if cfg!(target_os = "macos") {
-                "launchd_user"
-            } else if cfg!(target_os = "linux") {
-                "systemd_user"
-            } else {
-                "user_service"
-            }
-        }
-        plan::ServiceScope::System => {
-            if cfg!(windows) {
-                "windows_service_system"
-            } else if cfg!(target_os = "macos") {
-                "launchd_system"
-            } else if cfg!(target_os = "linux") {
-                "systemd_system"
-            } else {
-                "system_service"
-            }
-        }
+fn lifecycle_role_name(role: PeerLifecycleRole) -> &'static str {
+    match role {
+        PeerLifecycleRole::LocalDaemon => "local_daemon",
+        PeerLifecycleRole::RemotePeer => "remote_peer",
     }
 }
 
