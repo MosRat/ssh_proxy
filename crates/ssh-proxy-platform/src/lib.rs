@@ -21,6 +21,12 @@ pub struct PlatformCommandPlan {
     pub repair_action: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformProbePlan {
+    pub command: PlatformCommandPlan,
+    pub expected_state: String,
+}
+
 impl PlatformCommandPlan {
     pub fn new(
         program: impl Into<String>,
@@ -47,6 +53,30 @@ impl PlatformCommandPlan {
             .chain(self.args.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+impl PlatformProbePlan {
+    pub fn new(
+        program: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        class: ExternalActionClass,
+        reason: impl Into<String>,
+        expected_state: impl Into<String>,
+    ) -> Self {
+        Self {
+            command: PlatformCommandPlan::new(program, args, class, reason),
+            expected_state: expected_state.into(),
+        }
+    }
+
+    pub fn with_repair_action(mut self, repair_action: impl Into<String>) -> Self {
+        self.command = self.command.with_repair_action(repair_action);
+        self
+    }
+
+    pub fn command_plan(&self) -> &PlatformCommandPlan {
+        &self.command
     }
 }
 
@@ -178,5 +208,27 @@ mod tests {
 
         assert_eq!(plan.command_plan().class, ExternalActionClass::SelfUpdate);
         assert_eq!(plan.script_path, "switch.sh");
+    }
+
+    #[test]
+    fn probe_plan_carries_external_classification() {
+        let plan = PlatformProbePlan::new(
+            "systemctl",
+            ["--user", "status", "ssh_proxy.service"],
+            ExternalActionClass::RequiredProvider,
+            "probe local systemd service",
+            "service should be queryable",
+        )
+        .with_repair_action("rerun daemon install");
+
+        assert_eq!(
+            plan.command_plan().class,
+            ExternalActionClass::RequiredProvider
+        );
+        assert_eq!(plan.expected_state, "service should be queryable");
+        assert_eq!(
+            plan.command_plan().repair_action.as_deref(),
+            Some("rerun daemon install")
+        );
     }
 }

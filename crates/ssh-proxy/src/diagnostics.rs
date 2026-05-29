@@ -1,6 +1,8 @@
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{env, fs, path::PathBuf};
 
 use serde_json::{Map, Value, json};
+use ssh_proxy_core::external::ExternalActionClass;
+use ssh_proxy_platform::{PlatformProbePlan, capture_command};
 
 use crate::{config, control_socket, paths, peer_lifecycle, repair};
 
@@ -275,13 +277,14 @@ fn ssh_agent_dependency() -> Value {
 }
 
 fn program_available(program: &str) -> bool {
-    Command::new(program)
-        .arg(if cfg!(windows) { "/?" } else { "--version" })
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok()
+    let probe = PlatformProbePlan::new(
+        program,
+        [if cfg!(windows) { "/?" } else { "--version" }],
+        ExternalActionClass::DiagnosticOnly,
+        "check local diagnostic dependency availability",
+        "program should be invokable for diagnostic classification",
+    );
+    capture_command(probe.command_plan().clone()).is_ok()
 }
 
 fn recent_install_logs() -> Value {

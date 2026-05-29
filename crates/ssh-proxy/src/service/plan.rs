@@ -1,9 +1,11 @@
-use std::{fs, io::Read, net::SocketAddr, path::PathBuf, process::Command};
+use std::{fs, io::Read, net::SocketAddr, path::PathBuf};
 #[cfg(windows)]
 use std::{thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use sha2::Digest;
+use ssh_proxy_core::external::ExternalActionClass;
+use ssh_proxy_platform::{PlatformProbePlan, capture_command};
 pub(crate) use ssh_proxy_service::ServiceScope;
 
 use super::inventory::ServiceInventory;
@@ -458,20 +460,31 @@ pub(crate) fn ensure_admin(message: &str) -> Result<()> {
 
 #[cfg(unix)]
 pub(crate) fn is_admin() -> bool {
-    Command::new("id")
-        .arg("-u")
-        .output()
+    let probe = PlatformProbePlan::new(
+        "id",
+        ["-u"],
+        ExternalActionClass::RequiredProvider,
+        "check unix privilege level for service management",
+        "uid 0 means service operations can use system scope",
+    )
+    .with_repair_action("rerun with sudo/root or use --scope user");
+    capture_command(probe.command_plan().clone())
         .ok()
-        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|out| out.stdout)
         .is_some_and(|uid| uid.trim() == "0")
 }
 
 #[cfg(windows)]
 pub(crate) fn is_admin() -> bool {
-    Command::new("net")
-        .arg("session")
-        .output()
-        .is_ok_and(|out| out.status.success())
+    let probe = PlatformProbePlan::new(
+        "net",
+        ["session"],
+        ExternalActionClass::RequiredProvider,
+        "check Windows administrator privilege for service management",
+        "net session succeeds only for elevated administrators",
+    )
+    .with_repair_action("rerun elevated or use --scope user");
+    capture_command(probe.command_plan().clone()).is_ok_and(|out| out.ok)
 }
 
 #[cfg(windows)]

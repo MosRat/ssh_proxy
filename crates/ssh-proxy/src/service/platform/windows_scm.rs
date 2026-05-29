@@ -2,13 +2,13 @@ use std::{
     ffi::{OsStr, OsString},
     os::windows::ffi::OsStrExt,
     path::Path,
-    process::Command,
     thread,
     time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
+use ssh_proxy_core::external::ExternalActionClass;
 use ssh_proxy_platform::windows_service::{
     Error as WindowsServiceError,
     service::{
@@ -25,6 +25,7 @@ use ssh_proxy_platform::windows_sys::Win32::{
         WindowsAndMessaging::SW_HIDE,
     },
 };
+use ssh_proxy_platform::{PlatformCommandPlan, capture_command};
 
 use crate::{
     install_report,
@@ -430,17 +431,22 @@ fn run_powershell_elevated(exe: &Path, service_args: &[String]) -> Result<u32> {
         "$p = Start-Process -FilePath 'powershell.exe' -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; if ($null -eq $p.ExitCode) {{ exit 1223 }}; exit $p.ExitCode",
         powershell_quote(&join_windows_args(&elevated_args)),
     );
-    let output = Command::new("powershell.exe")
-        .args([
+    let plan = PlatformCommandPlan::new(
+        "powershell.exe",
+        [
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
             &command,
-        ])
-        .output()
-        .context("failed to run elevated PowerShell installer fallback")?;
-    Ok(output.status.code().unwrap_or(1) as u32)
+        ],
+        ExternalActionClass::RequiredProvider,
+        "run elevated PowerShell installer fallback for Windows service install",
+    )
+    .with_repair_action("approve the elevation prompt or rerun from an elevated shell");
+    let outcome =
+        capture_command(plan).context("failed to run elevated PowerShell installer fallback")?;
+    Ok(outcome.status_code.unwrap_or(1) as u32)
 }
 
 fn elevated_install_failed(

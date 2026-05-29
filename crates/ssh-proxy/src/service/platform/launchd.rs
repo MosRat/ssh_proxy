@@ -1,7 +1,9 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use ssh_proxy_core::external::ExternalActionClass;
+use ssh_proxy_platform::{PlatformProbePlan, capture_command};
 
 use crate::service::{
     inventory::{ServiceProbeState, ServiceProbeSummary},
@@ -221,8 +223,17 @@ fn manifest_path(scope: ServiceScope) -> Option<PathBuf> {
 }
 
 fn current_uid() -> Result<String> {
-    let output = Command::new("id").arg("-u").output()?;
-    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    let probe = PlatformProbePlan::new(
+        "id",
+        ["-u"],
+        ExternalActionClass::RequiredProvider,
+        "resolve current uid for launchd user domain",
+        "launchd user domain requires the numeric uid",
+    )
+    .with_repair_action("install id/coreutils or use system service scope");
+    let outcome = capture_command(probe.command_plan().clone())
+        .context("failed to resolve current uid for launchd user domain")?;
+    Ok(outcome.stdout.trim().to_string())
 }
 
 fn xml_escape(value: &str) -> String {
