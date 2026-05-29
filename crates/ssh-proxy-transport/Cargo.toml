@@ -1,0 +1,24 @@
+[package]
+name = "ssh-proxy-transport"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+quinn.workspace = true
+rustls-pemfile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ssh-proxy-protocol.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true

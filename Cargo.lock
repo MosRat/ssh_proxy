@@ -2270,6 +2270,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh-proxy-transport"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "quinn",
+ "rcgen",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "ssh-proxy-protocol",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "ssh_proxy"
 version = "0.1.1"
 dependencies = [
@@ -2290,6 +2305,7 @@ dependencies = [
  "ssh-proxy-core",
  "ssh-proxy-lifecycle",
  "ssh-proxy-protocol",
+ "ssh-proxy-transport",
  "tokio",
  "tokio-rustls",
  "toml",
