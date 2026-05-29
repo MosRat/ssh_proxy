@@ -2,12 +2,13 @@ use std::{fs, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 
-use crate::{peer_lifecycle::artifacts::PeerArtifact, ssh_client::ExecOutput};
+use crate::artifacts::PeerArtifact;
+use ssh_proxy_core::command::ExecOutput;
 
 use super::model::{BoxExecutorFuture, PeerExecutor, ServiceControlAction};
 
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct LocalExecutor;
+pub struct LocalExecutor;
 
 impl PeerExecutor for LocalExecutor {
     fn exec_capture<'a>(
@@ -92,7 +93,7 @@ impl PeerExecutor for LocalExecutor {
     }
 }
 
-pub(crate) fn write_local_file(path: &Path, bytes: &[u8], preserve_existing: bool) -> Result<()> {
+pub fn write_local_file(path: &Path, bytes: &[u8], preserve_existing: bool) -> Result<()> {
     if preserve_existing && path.exists() {
         return Ok(());
     }

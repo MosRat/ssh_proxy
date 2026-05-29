@@ -14,13 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, error, info, warn};
 
 use crate::{cli, ssh_auth};
-
-#[derive(Debug, Clone)]
-pub struct ExecOutput {
-    pub exit_status: u32,
-    pub stdout: String,
-    pub stderr: String,
-}
+pub use ssh_proxy_core::command::ExecOutput;
 
 #[derive(Debug, Clone)]
 pub struct Target {

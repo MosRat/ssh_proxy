@@ -96,7 +96,7 @@ try {
             }
         } else {
             Invoke-CargoChecked "cargo test -p ssh-proxy-protocol" @("test", "-p", "ssh-proxy-protocol")
-            Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy peer_lifecycle" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "peer_lifecycle")
+            Invoke-CargoChecked "cargo test -p ssh-proxy-lifecycle" @("test", "-p", "ssh-proxy-lifecycle")
             Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy deploy" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "deploy")
             Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy remote peer config" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "remote_config_write")
             Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy remote resolve defaults" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "remote_resolve_defaults")

@@ -1,31 +1,32 @@
 use anyhow::Context;
 
-use crate::{peer_lifecycle::artifacts::PeerArtifact, ssh_client::ExecOutput};
+use crate::artifacts::PeerArtifact;
+use ssh_proxy_core::command::ExecOutput;
 
 use super::model::{BoxExecutorFuture, PeerExecutor, ServiceControlAction};
 
 #[derive(Debug, Default)]
-pub(crate) struct FakeExecutor {
-    pub(crate) outputs: std::sync::Mutex<Vec<ExecOutput>>,
-    pub(crate) commands: std::sync::Mutex<Vec<String>>,
-    pub(crate) artifacts: std::sync::Mutex<Vec<(String, PeerArtifact, Vec<u8>)>>,
-    pub(crate) service_controls: std::sync::Mutex<Vec<(String, ServiceControlAction)>>,
+pub struct FakeExecutor {
+    pub outputs: std::sync::Mutex<Vec<ExecOutput>>,
+    pub commands: std::sync::Mutex<Vec<String>>,
+    pub artifacts: std::sync::Mutex<Vec<(String, PeerArtifact, Vec<u8>)>>,
+    pub service_controls: std::sync::Mutex<Vec<(String, ServiceControlAction)>>,
 }
 
 impl FakeExecutor {
-    pub(crate) fn push_output(&self, output: ExecOutput) {
+    pub fn push_output(&self, output: ExecOutput) {
         self.outputs.lock().unwrap().push(output);
     }
 
-    pub(crate) fn commands(&self) -> Vec<String> {
+    pub fn commands(&self) -> Vec<String> {
         self.commands.lock().unwrap().clone()
     }
 
-    pub(crate) fn artifacts(&self) -> Vec<(String, PeerArtifact, Vec<u8>)> {
+    pub fn artifacts(&self) -> Vec<(String, PeerArtifact, Vec<u8>)> {
         self.artifacts.lock().unwrap().clone()
     }
 
-    pub(crate) fn service_controls(&self) -> Vec<(String, ServiceControlAction)> {
+    pub fn service_controls(&self) -> Vec<(String, ServiceControlAction)> {
         self.service_controls.lock().unwrap().clone()
     }
 }

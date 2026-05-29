@@ -4,7 +4,7 @@ use anyhow::{Context, bail};
 
 use crate::{ssh_client, ssh_client::ExecOutput};
 
-use super::model::{BoxExecutorFuture, PeerExecutor};
+use super::{BoxExecutorFuture, PeerExecutor};
 
 pub(crate) struct SshExecutor<'a> {
     client: &'a ssh_client::Client,

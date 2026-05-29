@@ -3,12 +3,13 @@ use std::{future::Future, net::SocketAddr, pin::Pin};
 use anyhow::{Context, Result, bail};
 use tokio::net::TcpStream;
 
-use crate::{peer_lifecycle::artifacts::PeerArtifact, ssh_client::ExecOutput};
+use crate::artifacts::PeerArtifact;
+use ssh_proxy_core::command::ExecOutput;
 
-pub(crate) type BoxExecutorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+pub type BoxExecutorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ServiceControlAction {
+pub enum ServiceControlAction {
     Install,
     Start,
     Stop,
@@ -17,7 +18,7 @@ pub(crate) enum ServiceControlAction {
 }
 
 impl ServiceControlAction {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Install => "install",
             Self::Start => "start",
@@ -28,7 +29,7 @@ impl ServiceControlAction {
     }
 }
 
-pub(crate) trait PeerExecutor {
+pub trait PeerExecutor {
     fn exec_capture<'a>(
         &'a self,
         command: String,

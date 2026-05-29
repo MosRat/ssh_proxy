@@ -30,6 +30,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
 ssh-proxy-core = { path = "crates/ssh-proxy-core" }
+ssh-proxy-lifecycle = { path = "crates/ssh-proxy-lifecycle" }
 ssh-proxy-protocol = { path = "crates/ssh-proxy-protocol" }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "net", "io-util", "io-std", "sync", "time", "fs"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "logging", "tls12"] }

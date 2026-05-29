@@ -1,12 +1,8 @@
-mod local;
-mod model;
 mod ssh;
 
-#[cfg(test)]
-mod fake;
-
-#[cfg(test)]
-pub(crate) use fake::FakeExecutor;
-pub(crate) use local::LocalExecutor;
-pub(crate) use model::{BoxExecutorFuture, PeerExecutor, ServiceControlAction};
 pub(crate) use ssh::SshExecutor;
+#[cfg(test)]
+pub(crate) use ssh_proxy_lifecycle::executor::FakeExecutor;
+pub(crate) use ssh_proxy_lifecycle::executor::{
+    BoxExecutorFuture, LocalExecutor, PeerExecutor, ServiceControlAction,
+};

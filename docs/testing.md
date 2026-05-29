@@ -34,7 +34,8 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
 - protocol envelopes, command aliases, descriptor DTOs, SPX/QNC1 framing, and
   shared report DTOs: `cargo test -p ssh-proxy-protocol`;
 - peer lifecycle schema/provider/config/connection metadata:
-  `cargo test -p ssh_proxy --bin ssh_proxy peer_lifecycle`;
+  `cargo test -p ssh-proxy-lifecycle` for shared lifecycle contracts, and
+  `cargo test -p ssh_proxy --bin ssh_proxy peer_lifecycle` for app adapters;
 - data-plane frame compatibility: `cargo test -p ssh-proxy-protocol`;
 - QUIC-native control framing: `cargo test -p ssh_proxy --bin ssh_proxy quic_native`;
 - remote install lifecycle execution: `cargo test -p ssh_proxy --bin ssh_proxy deploy`;
