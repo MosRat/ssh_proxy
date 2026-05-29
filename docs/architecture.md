@@ -105,6 +105,32 @@ remaining runtime orchestration is promoted. Lower crates must not depend on
 app, CLI dispatch, SSH executors, or platform service runtimes unless the
 dependency direction is explicitly promoted in a separate architecture change.
 
+Command-neutral intent models sit below CLI parsing and above runtime adapters:
+
+- `ssh-proxy-core::intent` owns SSH target, route endpoint, route runtime,
+  remote install, peer bootstrap, deployment, and tuning intents. These types
+  use core enums and serde only; they do not depend on Clap, Tokio, Russh, the
+  app crate, or platform service crates.
+- `ssh-proxy-cli` owns Clap structs and implements conversion into core
+  intents. CLI help text, aliases, and hidden compatibility commands remain in
+  this crate, while lower layers consume the command-neutral form.
+- `ssh-proxy-config` plans profile/default values into core enums, endpoint
+  defaults, path-expanded artifacts, and runtime tuning before the app shim
+  applies them to legacy CLI-shaped structs.
+- `ssh-proxy-route` owns pool sizing and runtime decision policy in terms of
+  core route inputs. The app route modules adapt CLI/config data and run async
+  probes, but pure policy should not grow in the app crate.
+- `ssh-proxy-deploy` owns command-neutral remote install plans and remote setup
+  artifact intents. The app crate keeps SSH execution and lifecycle adapters.
+- Lifecycle provider selection uses core `RemotePlatform` and
+  `PersistenceMode`; CLI enums are compatibility wrappers at the edge.
+
+Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
+behavior in the app crate but separates control listening and session
+scheduling into focused submodules. `controller` keeps SPX behavior stable while
+splitting command dispatch, control-client requests, and SOCKS listener
+orchestration from shared state and status accounting.
+
 ## Symmetric Peer Lifecycle
 
 Local daemons and remote peer servers share the same lifecycle vocabulary:
