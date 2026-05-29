@@ -3,6 +3,7 @@ use serde_json::{Map, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::repair;
+pub(crate) use ssh_proxy_core::redaction::redact_value;
 
 use super::{
     spec::PeerLifecycleSpec,
@@ -147,55 +148,10 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-pub(crate) fn redact_value(value: &Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(redact_object(object)),
-        Value::Array(array) => Value::Array(array.iter().map(redact_value).collect()),
-        other => other.clone(),
-    }
-}
-
-fn redact_object(object: &Map<String, Value>) -> Map<String, Value> {
-    let mut redacted = Map::new();
-    for (key, value) in object {
-        let lower = key.to_ascii_lowercase();
-        if lower.contains("token")
-            || lower.contains("password")
-            || lower.contains("passphrase")
-            || lower.contains("secret")
-            || lower.contains("credential")
-        {
-            redacted.insert(key.clone(), json!("<redacted>"));
-            continue;
-        }
-        if lower.contains("identity") || lower.contains("known_hosts") {
-            redacted.insert(key.clone(), redact_pathish(value));
-            continue;
-        }
-        redacted.insert(key.clone(), redact_value(value));
-    }
-    redacted
-}
-
-fn redact_pathish(value: &Value) -> Value {
-    match value {
-        Value::String(path) => json!(redacted_path(path)),
-        Value::Array(values) => Value::Array(values.iter().map(redact_pathish).collect()),
-        _ => redact_value(value),
-    }
-}
-
-fn redacted_path(path: &str) -> String {
-    let file = std::path::Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("<path>");
-    format!("<redacted>/{file}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn report_redaction_hides_tokens_and_keeps_path_basenames() {

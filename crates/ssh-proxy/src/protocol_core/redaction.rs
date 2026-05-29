@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 pub(crate) fn redact_value(value: &Value) -> Value {
-    crate::peer_lifecycle::report::redact_value(value)
+    ssh_proxy_core::redaction::redact_value(value)
 }
 
 #[cfg(test)]
@@ -10,7 +10,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn redaction_reuses_lifecycle_rules() {
+    fn redaction_reuses_core_rules() {
         let value = json!({
             "auth_token": "secret",
             "identity_file": "C:/Users/me/.ssh/id_rsa",
