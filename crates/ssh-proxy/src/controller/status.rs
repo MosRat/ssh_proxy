@@ -273,11 +273,11 @@ impl SharedState {
         );
         status.insert(
             "pool_policy".to_string(),
-            serde_json::to_value(self.pool_policy.clone()).expect("pool policy serializable"),
+            json_value(self.pool_policy.clone()),
         );
         status.insert(
             "workload_hint".to_string(),
-            serde_json::to_value(self.workload_hint.clone()).expect("workload hint serializable"),
+            json_value(self.workload_hint.clone()),
         );
         status.insert("active_bridges".to_string(), active_bridges.into());
         status.insert("healthy_workers".to_string(), healthy_workers.into());
@@ -288,22 +288,17 @@ impl SharedState {
         );
         status.insert(
             "pool_degraded_reason".to_string(),
-            serde_json::to_value(pool_degraded_reason).expect("pool degraded reason serializable"),
+            json_value(pool_degraded_reason),
         );
         status.insert(
             "selected_protocol".to_string(),
-            serde_json::to_value(selected_protocol.clone())
-                .expect("selected protocol serializable"),
+            json_value(selected_protocol.clone()),
         );
         status.insert(
             "tls_peer_auth_mode".to_string(),
-            serde_json::to_value(self.tls_peer_auth_mode.clone())
-                .expect("tls peer auth mode serializable"),
+            json_value(self.tls_peer_auth_mode.clone()),
         );
-        status.insert(
-            "workers".to_string(),
-            serde_json::to_value(workers).expect("workers serializable"),
-        );
+        status.insert("workers".to_string(), json_value(workers));
         status.insert(
             "uptime_secs".to_string(),
             self.started.elapsed().as_secs().into(),
@@ -346,11 +341,10 @@ impl SharedState {
         );
         status.insert(
             "last_tcp_open_latency_ms".to_string(),
-            serde_json::to_value(last_sampled_u64(
+            json_value(last_sampled_u64(
                 self.tcp_open_attempts.load(Ordering::Relaxed),
                 self.last_tcp_open_latency_ms.load(Ordering::Relaxed),
-            ))
-            .expect("tcp open latency serializable"),
+            )),
         );
         status.insert(
             "ssh_direct_channel_open_samples".to_string(),
@@ -360,12 +354,11 @@ impl SharedState {
         );
         status.insert(
             "last_ssh_direct_channel_open_latency_ms".to_string(),
-            serde_json::to_value(last_sampled_u64(
+            json_value(last_sampled_u64(
                 self.ssh_direct_channel_open_samples.load(Ordering::Relaxed),
                 self.last_ssh_direct_channel_open_latency_ms
                     .load(Ordering::Relaxed),
-            ))
-            .expect("ssh direct channel open latency serializable"),
+            )),
         );
         status.insert(
             "spx_peer_handshake_samples".to_string(),
@@ -375,12 +368,11 @@ impl SharedState {
         );
         status.insert(
             "last_spx_peer_handshake_latency_ms".to_string(),
-            serde_json::to_value(last_sampled_u64(
+            json_value(last_sampled_u64(
                 self.spx_peer_handshake_samples.load(Ordering::Relaxed),
                 self.last_spx_peer_handshake_latency_ms
                     .load(Ordering::Relaxed),
-            ))
-            .expect("spx peer handshake latency serializable"),
+            )),
         );
         status.insert(
             "bytes_client_to_remote".to_string(),
@@ -396,11 +388,10 @@ impl SharedState {
         );
         status.insert(
             "last_spx_tcp_relay_duration_ms".to_string(),
-            serde_json::to_value(last_sampled_u64(
+            json_value(last_sampled_u64(
                 self.spx_tcp_relay_samples.load(Ordering::Relaxed),
                 self.last_spx_tcp_relay_duration_ms.load(Ordering::Relaxed),
-            ))
-            .expect("spx relay duration serializable"),
+            )),
         );
         status.insert(
             "last_spx_tcp_client_to_remote_bytes".to_string(),
@@ -416,8 +407,7 @@ impl SharedState {
         );
         status.insert(
             "last_spx_tcp_relay_close_reason".to_string(),
-            serde_json::to_value(self.last_spx_tcp_relay_close_reason.read().await.clone())
-                .expect("spx relay close reason serializable"),
+            json_value(self.last_spx_tcp_relay_close_reason.read().await.clone()),
         );
         status.insert(
             "link".to_string(),
@@ -542,8 +532,7 @@ impl SharedState {
         );
         status.insert(
             "quic_runtime".to_string(),
-            serde_json::to_value(peer_transport::quic_runtime_diagnostics(self.quic_options))
-                .expect("quic runtime diagnostics serializable"),
+            json_value(peer_transport::quic_runtime_diagnostics(self.quic_options)),
         );
         status.insert(
             "quic_udp_runtime".to_string(),
@@ -560,18 +549,15 @@ impl SharedState {
         );
         status.insert(
             "last_error".to_string(),
-            serde_json::to_value(self.last_error.read().await.clone())
-                .expect("last error serializable"),
+            json_value(self.last_error.read().await.clone()),
         );
         status.insert(
             "candidate_failures".to_string(),
-            serde_json::to_value(self.candidate_failures.read().await.clone())
-                .expect("candidate failures serializable"),
+            json_value(self.candidate_failures.read().await.clone()),
         );
         status.insert(
             "last_tcp_open_error".to_string(),
-            serde_json::to_value(self.last_tcp_open_error.read().await.clone())
-                .expect("last tcp open error serializable"),
+            json_value(self.last_tcp_open_error.read().await.clone()),
         );
 
         serde_json::Value::Object(status)
@@ -585,4 +571,8 @@ impl SharedState {
 
 fn last_sampled_u64(sample_count: u64, value: u64) -> Option<u64> {
     (sample_count > 0).then_some(value)
+}
+
+fn json_value<T: serde::Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
 }

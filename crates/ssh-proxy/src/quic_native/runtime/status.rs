@@ -70,7 +70,7 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     status.insert("route_id".to_string(), state.route_id.clone().into());
     status.insert(
         "remote_quic".to_string(),
-        serde_json::to_value(state.args.remote_quic).expect("remote_quic serializable"),
+        json_value(state.args.remote_quic),
     );
     status.insert(
         "remote_name".to_string(),
@@ -78,7 +78,7 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "egress_proxy".to_string(),
-        serde_json::to_value(state.args.egress_proxy.clone()).expect("egress proxy serializable"),
+        json_value(state.args.egress_proxy.clone()),
     );
     status.insert("uptime_secs".to_string(), snapshot.uptime_secs.into());
     status.insert(
@@ -91,8 +91,7 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "quic_connection_pool_workload_hint".to_string(),
-        serde_json::to_value(quic_connection_pool_workload_hint(&state.args))
-            .expect("quic pool workload hint serializable"),
+        json_value(quic_connection_pool_workload_hint(&state.args)),
     );
     status.insert(
         "quic_connection_pool_reason".to_string(),
@@ -121,13 +120,11 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_quic_stream_open_latency_ms".to_string(),
-        serde_json::to_value(last_quic_stream_open_latency_ms)
-            .expect("stream open latency serializable"),
+        json_value(last_quic_stream_open_latency_ms),
     );
     status.insert(
         "max_quic_stream_open_latency_ms".to_string(),
-        serde_json::to_value(max_quic_stream_open_latency_ms)
-            .expect("max stream open latency serializable"),
+        json_value(max_quic_stream_open_latency_ms),
     );
     status.insert(
         "quic_stream_open_failures".to_string(),
@@ -139,13 +136,11 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_quic_header_write_latency_ms".to_string(),
-        serde_json::to_value(last_quic_header_write_latency_ms)
-            .expect("header write latency serializable"),
+        json_value(last_quic_header_write_latency_ms),
     );
     status.insert(
         "max_quic_header_write_latency_ms".to_string(),
-        serde_json::to_value(max_quic_header_write_latency_ms)
-            .expect("max header write latency serializable"),
+        json_value(max_quic_header_write_latency_ms),
     );
     status.insert(
         "quic_header_write_failures".to_string(),
@@ -166,13 +161,11 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_quic_flow_first_byte_latency_ms".to_string(),
-        serde_json::to_value(last_quic_flow_first_byte_latency_ms)
-            .expect("first byte latency serializable"),
+        json_value(last_quic_flow_first_byte_latency_ms),
     );
     status.insert(
         "max_quic_flow_first_byte_latency_ms".to_string(),
-        serde_json::to_value(max_quic_flow_first_byte_latency_ms)
-            .expect("max first byte latency serializable"),
+        json_value(max_quic_flow_first_byte_latency_ms),
     );
     status.insert(
         "quic_copy_duration_samples".to_string(),
@@ -180,32 +173,28 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_quic_copy_duration_ms".to_string(),
-        serde_json::to_value(last_quic_copy_duration_ms).expect("copy duration serializable"),
+        json_value(last_quic_copy_duration_ms),
     );
     status.insert(
         "max_quic_copy_duration_ms".to_string(),
-        serde_json::to_value(max_quic_copy_duration_ms).expect("max copy duration serializable"),
+        json_value(max_quic_copy_duration_ms),
     );
     status.insert("quic_copy_failures".to_string(), quic_copy_failures.into());
     status.insert(
         "last_quic_copy_client_to_remote_bytes".to_string(),
-        serde_json::to_value(last_quic_copy_client_to_remote_bytes)
-            .expect("copy bytes serializable"),
+        json_value(last_quic_copy_client_to_remote_bytes),
     );
     status.insert(
         "last_quic_copy_remote_to_client_bytes".to_string(),
-        serde_json::to_value(last_quic_copy_remote_to_client_bytes)
-            .expect("copy bytes serializable"),
+        json_value(last_quic_copy_remote_to_client_bytes),
     );
     status.insert(
         "max_quic_copy_client_to_remote_bytes".to_string(),
-        serde_json::to_value(max_quic_copy_client_to_remote_bytes)
-            .expect("max copy bytes serializable"),
+        json_value(max_quic_copy_client_to_remote_bytes),
     );
     status.insert(
         "max_quic_copy_remote_to_client_bytes".to_string(),
-        serde_json::to_value(max_quic_copy_remote_to_client_bytes)
-            .expect("max copy bytes serializable"),
+        json_value(max_quic_copy_remote_to_client_bytes),
     );
     status.insert("active_tcp".to_string(), snapshot.active_tcp.into());
     status.insert("total_tcp".to_string(), snapshot.total_tcp.into());
@@ -223,8 +212,7 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_tcp_open_latency_ms".to_string(),
-        serde_json::to_value(snapshot.last_tcp_open_latency_ms)
-            .expect("tcp open latency serializable"),
+        json_value(snapshot.last_tcp_open_latency_ms),
     );
     status.insert(
         "bytes_client_to_remote".to_string(),
@@ -243,8 +231,7 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_control_pong_latency_ms".to_string(),
-        serde_json::to_value(last_control_pong_latency_ms)
-            .expect("control pong latency serializable"),
+        json_value(last_control_pong_latency_ms),
     );
     status.insert(
         "control_keepalive_interval_secs".to_string(),
@@ -256,7 +243,7 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_control_error".to_string(),
-        serde_json::to_value(last_control_error.clone()).expect("control error serializable"),
+        json_value(last_control_error.clone()),
     );
     status.insert(
         "read_buffer_size".to_string(),
@@ -306,10 +293,7 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
         "quic_idle_timeout_secs".to_string(),
         quic_options.idle_timeout_secs.into(),
     );
-    status.insert(
-        "quic_runtime".to_string(),
-        serde_json::to_value(quic_runtime.clone()).expect("quic runtime diagnostics serializable"),
-    );
+    status.insert("quic_runtime".to_string(), json_value(quic_runtime.clone()));
     status.insert(
         "quic_udp_runtime".to_string(),
         peer_transport::QUIC_UDP_RUNTIME.into(),
@@ -329,13 +313,13 @@ pub(super) async fn status_value(state: &State) -> serde_json::Value {
     );
     status.insert(
         "last_quic_flow_close_reason".to_string(),
-        serde_json::to_value(last_quic_flow_close_reason.clone())
-            .expect("flow close reason serializable"),
+        json_value(last_quic_flow_close_reason.clone()),
     );
-    status.insert(
-        "last_error".to_string(),
-        serde_json::to_value(last_error.clone()).expect("last error serializable"),
-    );
+    status.insert("last_error".to_string(), json_value(last_error.clone()));
     status.insert("link".to_string(), profile::link_value(state, &snapshot));
     serde_json::Value::Object(status)
+}
+
+fn json_value<T: serde::Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
 }
