@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use ssh_proxy_core::model;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TcpTarget {
@@ -47,6 +48,24 @@ impl FromStr for TcpTarget {
     }
 }
 
+impl From<TcpTarget> for model::TcpTarget {
+    fn from(value: TcpTarget) -> Self {
+        Self {
+            host: value.host,
+            port: value.port,
+        }
+    }
+}
+
+impl From<model::TcpTarget> for TcpTarget {
+    fn from(value: model::TcpTarget) -> Self {
+        Self {
+            host: value.host,
+            port: value.port,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeployMode {
@@ -69,6 +88,26 @@ pub enum RemoteOs {
     Unix,
     #[serde(alias = "Windows")]
     Windows,
+}
+
+impl From<RemoteOs> for model::RemotePlatform {
+    fn from(value: RemoteOs) -> Self {
+        match value {
+            RemoteOs::Auto => Self::Auto,
+            RemoteOs::Unix => Self::Unix,
+            RemoteOs::Windows => Self::Windows,
+        }
+    }
+}
+
+impl From<model::RemotePlatform> for RemoteOs {
+    fn from(value: model::RemotePlatform) -> Self {
+        match value {
+            model::RemotePlatform::Auto => Self::Auto,
+            model::RemotePlatform::Unix => Self::Unix,
+            model::RemotePlatform::Windows => Self::Windows,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,6 +137,36 @@ pub enum RemoteTransport {
     Tcp,
 }
 
+impl From<RemoteTransport> for model::TransportMode {
+    fn from(value: RemoteTransport) -> Self {
+        match value {
+            RemoteTransport::Auto => Self::Auto,
+            RemoteTransport::SshNative => Self::SshNative,
+            RemoteTransport::QuicNative => Self::QuicNative,
+            RemoteTransport::Quic => Self::Quic,
+            RemoteTransport::TlsTcp => Self::TlsTcp,
+            RemoteTransport::PlainTcp => Self::PlainTcp,
+            RemoteTransport::Exec => Self::Exec,
+            RemoteTransport::Tcp => Self::Tcp,
+        }
+    }
+}
+
+impl From<model::TransportMode> for RemoteTransport {
+    fn from(value: model::TransportMode) -> Self {
+        match value {
+            model::TransportMode::Auto => Self::Auto,
+            model::TransportMode::SshNative => Self::SshNative,
+            model::TransportMode::QuicNative => Self::QuicNative,
+            model::TransportMode::Quic => Self::Quic,
+            model::TransportMode::TlsTcp => Self::TlsTcp,
+            model::TransportMode::PlainTcp => Self::PlainTcp,
+            model::TransportMode::Exec => Self::Exec,
+            model::TransportMode::Tcp => Self::Tcp,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum PersistMode {
     None,
@@ -106,4 +175,30 @@ pub enum PersistMode {
     Nohup,
     Launchd,
     Schtasks,
+}
+
+impl From<PersistMode> for model::PersistenceMode {
+    fn from(value: PersistMode) -> Self {
+        match value {
+            PersistMode::None => Self::None,
+            PersistMode::Auto => Self::Auto,
+            PersistMode::Systemd => Self::Systemd,
+            PersistMode::Nohup => Self::Nohup,
+            PersistMode::Launchd => Self::Launchd,
+            PersistMode::Schtasks => Self::Schtasks,
+        }
+    }
+}
+
+impl From<model::PersistenceMode> for PersistMode {
+    fn from(value: model::PersistenceMode) -> Self {
+        match value {
+            model::PersistenceMode::None => Self::None,
+            model::PersistenceMode::Auto => Self::Auto,
+            model::PersistenceMode::Systemd => Self::Systemd,
+            model::PersistenceMode::Nohup => Self::Nohup,
+            model::PersistenceMode::Launchd => Self::Launchd,
+            model::PersistenceMode::Schtasks => Self::Schtasks,
+        }
+    }
 }

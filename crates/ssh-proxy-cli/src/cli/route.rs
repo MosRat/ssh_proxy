@@ -5,6 +5,7 @@ use std::{
 
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use ssh_proxy_core::model;
 
 use ssh_proxy_control as control_socket;
 
@@ -212,6 +213,24 @@ pub enum RouteDirection {
     RemoteUsesLocal,
 }
 
+impl From<RouteDirection> for model::RouteDirection {
+    fn from(value: RouteDirection) -> Self {
+        match value {
+            RouteDirection::LocalUsesRemote => Self::LocalUsesRemote,
+            RouteDirection::RemoteUsesLocal => Self::RemoteUsesLocal,
+        }
+    }
+}
+
+impl From<model::RouteDirection> for RouteDirection {
+    fn from(value: model::RouteDirection) -> Self {
+        match value {
+            model::RouteDirection::LocalUsesRemote => Self::LocalUsesRemote,
+            model::RouteDirection::RemoteUsesLocal => Self::RemoteUsesLocal,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RouteConnectMode {
@@ -220,10 +239,50 @@ pub enum RouteConnectMode {
     ReverseLink,
 }
 
+impl From<RouteConnectMode> for model::RouteConnectMode {
+    fn from(value: RouteConnectMode) -> Self {
+        match value {
+            RouteConnectMode::Auto => Self::Auto,
+            RouteConnectMode::Direct => Self::Direct,
+            RouteConnectMode::ReverseLink => Self::ReverseLink,
+        }
+    }
+}
+
+impl From<model::RouteConnectMode> for RouteConnectMode {
+    fn from(value: model::RouteConnectMode) -> Self {
+        match value {
+            model::RouteConnectMode::Auto => Self::Auto,
+            model::RouteConnectMode::Direct => Self::Direct,
+            model::RouteConnectMode::ReverseLink => Self::ReverseLink,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RouteWorkloadHint {
     Large,
     Concurrent,
     Mixed,
+}
+
+impl From<RouteWorkloadHint> for model::WorkloadHint {
+    fn from(value: RouteWorkloadHint) -> Self {
+        match value {
+            RouteWorkloadHint::Large => Self::Large,
+            RouteWorkloadHint::Concurrent => Self::Concurrent,
+            RouteWorkloadHint::Mixed => Self::Mixed,
+        }
+    }
+}
+
+impl From<model::WorkloadHint> for RouteWorkloadHint {
+    fn from(value: model::WorkloadHint) -> Self {
+        match value {
+            model::WorkloadHint::Large => Self::Large,
+            model::WorkloadHint::Concurrent => Self::Concurrent,
+            model::WorkloadHint::Mixed => Self::Mixed,
+        }
+    }
 }

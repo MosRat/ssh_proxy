@@ -1,5 +1,6 @@
 use super::*;
 use clap::CommandFactory;
+use ssh_proxy_core::model;
 
 #[test]
 fn production_help_hides_legacy_entrypoints() {
@@ -246,4 +247,40 @@ fn vscode_up_accepts_workspace_session_shape() {
         },
         other => panic!("unexpected command: {other:?}"),
     }
+}
+
+#[test]
+fn cli_values_convert_to_command_neutral_models() {
+    let target: model::TcpTarget = "example.com:443".parse::<TcpTarget>().unwrap().into();
+    assert_eq!(target.host, "example.com");
+    assert_eq!(target.port, 443);
+
+    assert_eq!(
+        model::TransportMode::from(RemoteTransport::TlsTcp),
+        model::TransportMode::TlsTcp
+    );
+    assert_eq!(
+        RemoteTransport::from(model::TransportMode::QuicNative),
+        RemoteTransport::QuicNative
+    );
+    assert_eq!(
+        model::RemotePlatform::from(RemoteOs::Windows),
+        model::RemotePlatform::Windows
+    );
+    assert_eq!(
+        PersistMode::from(model::PersistenceMode::Launchd),
+        PersistMode::Launchd
+    );
+    assert_eq!(
+        model::RouteDirection::from(RouteDirection::RemoteUsesLocal),
+        model::RouteDirection::RemoteUsesLocal
+    );
+    assert_eq!(
+        model::RouteConnectMode::from(RouteConnectMode::ReverseLink),
+        model::RouteConnectMode::ReverseLink
+    );
+    assert_eq!(
+        model::WorkloadHint::from(RouteWorkloadHint::Concurrent),
+        model::WorkloadHint::Concurrent
+    );
 }

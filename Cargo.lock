@@ -2245,6 +2245,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ssh-proxy-control",
+ "ssh-proxy-core",
  "ssh-proxy-transport",
 ]
 

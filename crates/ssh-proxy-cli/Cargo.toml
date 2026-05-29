@@ -15,4 +15,5 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ssh-proxy-control.workspace = true
+ssh-proxy-core.workspace = true
 ssh-proxy-transport.workspace = true
