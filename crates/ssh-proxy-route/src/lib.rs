@@ -6,6 +6,7 @@ mod conflict;
 mod decision;
 mod plan;
 mod policy;
+mod preflight;
 mod status;
 
 pub use conflict::{
@@ -22,6 +23,11 @@ pub use plan::{RoutePlanReport, RouteRuntimePlanReport, refresh_route_decision_c
 pub use policy::{
     RoutePoolSizingInput, RouteSshSessionPoolPolicy, RouteTransportPoolPolicy,
     plan_ssh_session_pool, plan_transport_pool, pool_policy_name,
+};
+pub use preflight::{
+    RouteFallbackDecision, RouteFallbackInput, RoutePreflightDecision, RoutePreflightInput,
+    RouteProbeResult, candidate_failures, decide_route_fallback, decide_route_preflight,
+    is_direct_probe_protocol,
 };
 pub use status::{RouteReadinessReport, RouteStats, RouteStatusReport, RouteTaskRecord};
 

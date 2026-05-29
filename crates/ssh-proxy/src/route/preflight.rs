@@ -1,14 +1,17 @@
 use std::{net::SocketAddr, time::Duration};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use ssh_proxy_core::model::TransportMode;
-use ssh_proxy_route::{ssh_data_plane_reason, ssh_mode_reason};
+use ssh_proxy_route::{
+    RouteFallbackInput, RoutePreflightInput, RouteProbeResult, SshSessionPoolReport,
+    decide_route_fallback, decide_route_preflight,
+};
 use ssh_proxy_transport::quic::connect_client;
 use tokio::{net::TcpStream, time};
 
 use crate::{cli, peer_transport};
 
-use super::response::{candidate_failures, is_direct_probe_protocol, refresh_decision_chain};
+use super::response::refresh_decision_chain;
 
 pub(crate) async fn add_local_transport_probe_results(
     plan: &mut Value,
@@ -29,66 +32,32 @@ pub(crate) async fn add_local_transport_probe_results(
         results.push(probe_tcp_endpoint("plain-tcp", forward.remote_tcp, timeout).await);
     }
 
-    results.push(json!({
-        "protocol": "ssh-direct-tcpip",
-        "endpoint": forward.remote_tcp.to_string(),
-        "reachable": Value::Null,
-        "status": "not-probed",
-        "message": "SSH direct-tcpip reachability follows the SSH session and may work even when direct private endpoints do not",
-    }));
-    results.push(json!({
-        "protocol": "ssh-exec",
-        "endpoint": Value::Null,
-        "reachable": Value::Null,
-        "status": "not-probed",
-        "message": "SSH exec fallback is validated when the route connects over SSH",
-    }));
+    results.push(RouteProbeResult::new(
+        "ssh-direct-tcpip",
+        Some(forward.remote_tcp.to_string()),
+        None,
+        "not-probed",
+        "SSH direct-tcpip reachability follows the SSH session and may work even when direct private endpoints do not",
+    ));
+    results.push(RouteProbeResult::new(
+        "ssh-exec",
+        None,
+        None,
+        "not-probed",
+        "SSH exec fallback is validated when the route connects over SSH",
+    ));
 
-    let candidate_failures = candidate_failures(&results);
-    let direct_failures = candidate_failures.len();
-    let direct_successes = results
-        .iter()
-        .filter(|result| {
-            is_direct_probe_protocol(result["protocol"].as_str()) && result["reachable"] == true
-        })
-        .count();
-    let recommended_fallback = if direct_failures > 0 && direct_successes == 0 {
-        Some("ssh-native")
-    } else {
-        None
-    };
-    let selected_reason = if recommended_fallback.is_some() {
-        "all probed direct peer transports failed; SSH fallback is recommended before starting the route"
-    } else if direct_successes > 0 {
-        "at least one direct peer transport was reachable before route start"
-    } else {
-        "no failing direct peer transport was observed before route start"
-    };
-    let repair_hint = if recommended_fallback.is_some() {
-        "use ssh-native fallback, or publish a peer endpoint reachable from this client"
-    } else if candidate_failures.is_empty() {
-        "none"
-    } else {
-        "publish a reachable peer endpoint, adjust firewall/NAT, or switch to an SSH fallback transport"
-    };
-    forward.preflight_recommended_fallback = recommended_fallback.map(str::to_string);
-    forward.preflight_selected_reason = Some(selected_reason.to_string());
-    forward.preflight_repair_hint = Some(repair_hint.to_string());
-    forward.preflight_candidate_failures = candidate_failures.clone();
+    let decision = decide_route_preflight(RoutePreflightInput {
+        timeout_ms: timeout.as_millis() as u64,
+        results,
+    });
+    forward.preflight_recommended_fallback = decision.recommended_fallback.clone();
+    forward.preflight_selected_reason = Some(decision.selected_reason.clone());
+    forward.preflight_repair_hint = Some(decision.repair_hint.clone());
+    forward.preflight_candidate_failures = decision.candidate_failures.clone();
 
     if let Some(object) = plan.as_object_mut() {
-        object.insert(
-            "preflight".to_string(),
-            json!({
-                "kind": "local-direct-transport-probe",
-                "timeout_ms": timeout.as_millis(),
-                "results": results,
-                "candidate_failures": candidate_failures,
-                "recommended_fallback": recommended_fallback,
-                "selected_reason": selected_reason,
-                "repair_hint": repair_hint,
-            }),
-        );
+        object.insert("preflight".to_string(), decision.to_plan_value());
     }
     refresh_decision_chain(plan);
 }
@@ -104,125 +73,64 @@ pub(crate) fn apply_local_forward_fallback(
     let Some(recommended) = recommended else {
         return None;
     };
-    let source = forward
-        .transport_selection_source
-        .as_deref()
-        .unwrap_or("unknown");
-    let may_override = forward.remote_transport == cli::RemoteTransport::Auto
-        || matches!(source, "topology" | "benchmark-tuned default");
-    if !may_override {
-        return None;
-    }
-    if recommended != "ssh-native" && recommended != "ssh-direct-tcpip" {
-        return None;
-    }
-    forward.remote_transport = cli::RemoteTransport::SshNative;
-    let reason =
-        "direct private transport preflight failed; selected SSH native direct-tcpip fallback"
-            .to_string();
-    forward.transport_selection_source = Some("route-preflight".to_string());
-    forward.transport_selection_reason = Some(reason.clone());
-    if let Some(object) = plan.as_object_mut() {
-        object.insert("selected_transport".to_string(), json!("ssh-native"));
-        object.insert(
-            "transport_selection_source".to_string(),
-            json!("route-preflight"),
-        );
-        object.insert(
-            "transport_selection_reason".to_string(),
-            json!(reason.clone()),
-        );
-        object.insert("ssh_mode".to_string(), json!("native-direct-tcpip"));
-        object.insert(
-            "ssh_mode_reason".to_string(),
-            ssh_mode_reason(TransportMode::SshNative),
-        );
-        object.insert(
-            "ssh_data_plane_reason".to_string(),
-            ssh_data_plane_reason(
-                TransportMode::SshNative,
-                forward.transport_selection_source.as_deref(),
-            ),
-        );
-        object.insert(
-            "ssh_session_pool_size".to_string(),
-            json!(forward.ssh_session_pool_size.unwrap_or(1)),
-        );
-        object.insert(
-            "ssh_session_pool_source".to_string(),
-            json!(
-                forward
-                    .ssh_session_pool_source
-                    .as_deref()
-                    .unwrap_or("unknown")
-            ),
-        );
-        object.insert(
-            "ssh_session_pool_reason".to_string(),
-            json!(
-                forward
-                    .ssh_session_pool_reason
-                    .as_deref()
-                    .unwrap_or("unknown")
-            ),
-        );
-        object.insert(
-            "ssh_session_pool_warning".to_string(),
-            json!(forward.ssh_session_pool_warning.as_deref()),
-        );
-        object.insert("fallback_reason".to_string(), json!(reason.clone()));
-        object.insert(
-            "next_action".to_string(),
-            json!("using ssh-native fallback; no user action required"),
-        );
-    }
-    refresh_decision_chain(plan);
-    Some(reason)
+    let decision = decide_route_fallback(RouteFallbackInput {
+        recommended_fallback: Some(recommended.as_str()),
+        current_transport: TransportMode::from(forward.remote_transport),
+        selection_source: forward.transport_selection_source.as_deref(),
+    });
+    let selected = decision.selected_transport?;
+    forward.remote_transport = remote_transport_from_mode(selected)?;
+    forward.transport_selection_source = decision.selection_source.clone();
+    forward.transport_selection_reason = decision.selection_reason.clone();
+
+    let ssh_session_pool = ssh_session_pool_report(forward);
+    decision.apply_to_plan(plan, ssh_session_pool.as_ref());
+    decision.reason().map(ToOwned::to_owned)
 }
 
 async fn probe_quic_endpoint(
     forward: &cli::NodeForwardArgs,
     addr: SocketAddr,
     timeout: Duration,
-) -> Value {
+) -> RouteProbeResult {
     if addr.ip().is_loopback() {
-        return json!({
-            "protocol": "quic",
-            "endpoint": addr.to_string(),
-            "reachable": Value::Null,
-            "status": "skipped",
-            "message": "loopback QUIC endpoint is local to the caller; probing it here would not prove reachability to the peer daemon",
-        });
+        return RouteProbeResult::new(
+            "quic",
+            Some(addr.to_string()),
+            None,
+            "skipped",
+            "loopback QUIC endpoint is local to the caller; probing it here would not prove reachability to the peer daemon",
+        );
     }
     let Some(ca) = forward.remote_ca.as_deref() else {
-        return json!({
-            "protocol": "quic",
-            "endpoint": addr.to_string(),
-            "reachable": Value::Null,
-            "status": "skipped",
-            "message": "QUIC handshake probe requires --remote-ca or profile remote_ca",
-        });
+        return RouteProbeResult::new(
+            "quic",
+            Some(addr.to_string()),
+            None,
+            "skipped",
+            "QUIC handshake probe requires --remote-ca or profile remote_ca",
+        );
     };
     if forward.remote_client_cert.is_some() || forward.remote_client_key.is_some() {
-        return json!({
-            "protocol": "quic",
-            "endpoint": addr.to_string(),
-            "reachable": Value::Null,
-            "status": "skipped",
-            "message": "QUIC mTLS probing is not implemented yet; use TLS/TCP probing for mTLS routes",
-        });
+        return RouteProbeResult::new(
+            "quic",
+            Some(addr.to_string()),
+            None,
+            "skipped",
+            "QUIC mTLS probing is not implemented yet; use TLS/TCP probing for mTLS routes",
+        );
     }
 
     let roots = match peer_transport::load_cert_chain(ca) {
         Ok(roots) => roots,
         Err(err) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "probe-config-error",
-                "message": format!("failed to load QUIC probe CA {}: {err:#}", ca.display()),
-            });
+            return RouteProbeResult::new(
+                "quic",
+                Some(addr.to_string()),
+                Some(false),
+                "probe-config-error",
+                format!("failed to load QUIC probe CA {}: {err:#}", ca.display()),
+            );
         }
     };
     let quic_options = match peer_transport::QuicTransportOptions::new(
@@ -234,13 +142,13 @@ async fn probe_quic_endpoint(
     ) {
         Ok(options) => options,
         Err(err) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "probe-config-error",
-                "message": format!("invalid QUIC probe transport config: {err:#}"),
-            });
+            return RouteProbeResult::new(
+                "quic",
+                Some(addr.to_string()),
+                Some(false),
+                "probe-config-error",
+                format!("invalid QUIC probe transport config: {err:#}"),
+            );
         }
     };
     let connection = match connect_client(
@@ -255,13 +163,13 @@ async fn probe_quic_endpoint(
     {
         Ok(connection) => connection,
         Err(err) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "handshake-failed",
-                "message": format!("{err:#}"),
-            });
+            return RouteProbeResult::new(
+                "quic",
+                Some(addr.to_string()),
+                Some(false),
+                "handshake-failed",
+                format!("{err:#}"),
+            );
         }
     };
     let mut stream = match connection
@@ -270,13 +178,13 @@ async fn probe_quic_endpoint(
     {
         Ok(stream) => stream,
         Err(err) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "stream-open-failed",
-                "message": format!("{err:#}"),
-            });
+            return RouteProbeResult::new(
+                "quic",
+                Some(addr.to_string()),
+                Some(false),
+                "stream-open-failed",
+                format!("{err:#}"),
+            );
         }
     };
     match time::timeout(
@@ -291,66 +199,108 @@ async fn probe_quic_endpoint(
     {
         Ok(Ok(welcome)) => {
             stream.finish();
-            json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": true,
-                "status": "reachable",
-                "message": format!("QUIC handshake succeeded before route start; remote node {}", welcome.node),
-            })
+            RouteProbeResult::new(
+                "quic",
+                Some(addr.to_string()),
+                Some(true),
+                "reachable",
+                format!(
+                    "QUIC handshake succeeded before route start; remote node {}",
+                    welcome.node
+                ),
+            )
         }
-        Ok(Err(err)) => json!({
-            "protocol": "quic",
-            "endpoint": addr.to_string(),
-            "reachable": false,
-            "status": "peer-handshake-failed",
-            "message": format!("{err:#}"),
-        }),
-        Err(_) => json!({
-            "protocol": "quic",
-            "endpoint": addr.to_string(),
-            "reachable": false,
-            "status": "timeout",
-            "message": format!("QUIC peer handshake timed out after {} ms", timeout.as_millis()),
-        }),
+        Ok(Err(err)) => RouteProbeResult::new(
+            "quic",
+            Some(addr.to_string()),
+            Some(false),
+            "peer-handshake-failed",
+            format!("{err:#}"),
+        ),
+        Err(_) => RouteProbeResult::new(
+            "quic",
+            Some(addr.to_string()),
+            Some(false),
+            "timeout",
+            format!(
+                "QUIC peer handshake timed out after {} ms",
+                timeout.as_millis()
+            ),
+        ),
     }
 }
 
-async fn probe_tcp_endpoint(protocol: &str, addr: SocketAddr, timeout: Duration) -> Value {
+async fn probe_tcp_endpoint(
+    protocol: &str,
+    addr: SocketAddr,
+    timeout: Duration,
+) -> RouteProbeResult {
     if addr.ip().is_loopback() {
-        return json!({
-            "protocol": protocol,
-            "endpoint": addr.to_string(),
-            "reachable": Value::Null,
-            "status": "skipped",
-            "message": "loopback endpoint is local to the caller; probing it here would not prove reachability to the peer daemon",
-        });
+        return RouteProbeResult::new(
+            protocol,
+            Some(addr.to_string()),
+            None,
+            "skipped",
+            "loopback endpoint is local to the caller; probing it here would not prove reachability to the peer daemon",
+        );
     }
 
     match time::timeout(timeout, TcpStream::connect(addr)).await {
         Ok(Ok(stream)) => {
             drop(stream);
-            json!({
-                "protocol": protocol,
-                "endpoint": addr.to_string(),
-                "reachable": true,
-                "status": "reachable",
-                "message": "TCP connect succeeded before route start",
-            })
+            RouteProbeResult::new(
+                protocol,
+                Some(addr.to_string()),
+                Some(true),
+                "reachable",
+                "TCP connect succeeded before route start",
+            )
         }
-        Ok(Err(err)) => json!({
-            "protocol": protocol,
-            "endpoint": addr.to_string(),
-            "reachable": false,
-            "status": "connect-failed",
-            "message": err.to_string(),
-        }),
-        Err(_) => json!({
-            "protocol": protocol,
-            "endpoint": addr.to_string(),
-            "reachable": false,
-            "status": "timeout",
-            "message": format!("TCP connect timed out after {} ms", timeout.as_millis()),
-        }),
+        Ok(Err(err)) => RouteProbeResult::new(
+            protocol,
+            Some(addr.to_string()),
+            Some(false),
+            "connect-failed",
+            err.to_string(),
+        ),
+        Err(_) => RouteProbeResult::new(
+            protocol,
+            Some(addr.to_string()),
+            Some(false),
+            "timeout",
+            format!("TCP connect timed out after {} ms", timeout.as_millis()),
+        ),
     }
+}
+
+fn remote_transport_from_mode(transport: TransportMode) -> Option<cli::RemoteTransport> {
+    match transport {
+        TransportMode::Auto => Some(cli::RemoteTransport::Auto),
+        TransportMode::SshNative => Some(cli::RemoteTransport::SshNative),
+        TransportMode::QuicNative => Some(cli::RemoteTransport::QuicNative),
+        TransportMode::Quic => Some(cli::RemoteTransport::Quic),
+        TransportMode::TlsTcp => Some(cli::RemoteTransport::TlsTcp),
+        TransportMode::PlainTcp => Some(cli::RemoteTransport::PlainTcp),
+        TransportMode::Exec => Some(cli::RemoteTransport::Exec),
+        TransportMode::Tcp => Some(cli::RemoteTransport::Tcp),
+    }
+}
+
+fn ssh_session_pool_report(forward: &cli::NodeForwardArgs) -> Option<SshSessionPoolReport> {
+    matches!(forward.remote_transport, cli::RemoteTransport::SshNative).then(|| {
+        SshSessionPoolReport {
+            size: forward.ssh_session_pool_size.unwrap_or(1),
+            source: forward
+                .ssh_session_pool_source
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string(),
+            reason: forward
+                .ssh_session_pool_reason
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string(),
+            warning: forward.ssh_session_pool_warning.clone(),
+        }
+    })
 }

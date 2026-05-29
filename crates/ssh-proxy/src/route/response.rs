@@ -216,19 +216,6 @@ pub(crate) fn remote_uses_local_direct_plan(
     .to_json()
 }
 
-pub(super) fn candidate_failures(results: &[Value]) -> Vec<Value> {
-    results
-        .iter()
-        .filter(|result| is_direct_probe_protocol(result["protocol"].as_str()))
-        .filter(|result| result["reachable"] == false)
-        .cloned()
-        .collect()
-}
-
-pub(super) fn is_direct_probe_protocol(protocol: Option<&str>) -> bool {
-    matches!(protocol, Some("quic" | "tls-tcp" | "plain-tcp"))
-}
-
 fn route_runtime_plan_report(
     reconnect_delay_secs: u64,
     reconnect_max_delay_secs: u64,
