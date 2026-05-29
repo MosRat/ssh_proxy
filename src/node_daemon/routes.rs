@@ -16,7 +16,7 @@ mod store;
 mod supervisor;
 mod time_util;
 
-use conflict_policy::{ensure_new_route_can_start, route_specs_match, route_task_matches};
+use conflict_policy::{ensure_new_route_can_start, route_task_matches};
 use supervisor::spawn_route_supervisor;
 use time_util::now_unix;
 
@@ -337,6 +337,7 @@ impl NodeManager {
 
 #[cfg(test)]
 mod tests {
+    use super::conflict_policy::route_specs_match;
     use super::*;
 
     fn proxy_args() -> cli::ProxyArgs {

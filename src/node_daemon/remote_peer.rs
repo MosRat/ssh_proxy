@@ -20,8 +20,8 @@ mod report;
 use job::{remote_peer_job, sanitize_key};
 use phase_mapping::{job_phase_from_lifecycle, lifecycle_phase_from_job};
 use report::{
-    now_unix, peer_status_from_descriptor, remote_dependency_report, remote_peer_blocker,
-    remote_peer_lifecycle_report, remote_peer_lifecycle_report_record, remote_transport_protocols,
+    now_unix, peer_status_from_descriptor, remote_dependency_report, remote_peer_lifecycle_report,
+    remote_peer_lifecycle_report_record, remote_transport_protocols,
 };
 
 impl NodeManager {
@@ -458,6 +458,7 @@ impl RemotePeerLifecycleSink<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::report::remote_peer_blocker;
     use super::*;
 
     fn install_args() -> cli::InstallRemoteArgs {
