@@ -383,6 +383,143 @@ fn workspace_source_imports_remain_layered() {
 }
 
 #[test]
+fn runtime_control_uses_command_neutral_intents() {
+    let daemon_control = read_repo_file("crates/ssh-proxy-daemon/src/control.rs");
+    assert_contains(
+        &daemon_control,
+        "pub struct NodeRequestIntent",
+        "daemon crate should own command-neutral request intents",
+    );
+    assert_contains(
+        &daemon_control,
+        "pub enum NodeRequestPayload",
+        "daemon crate should own typed request payload summaries",
+    );
+
+    let app_control = read_repo_file("crates/ssh-proxy/src/node_daemon/control_protocol.rs");
+    assert_contains(
+        &app_control,
+        "pub(crate) fn typed_intent(&self) -> NodeRequestIntent",
+        "app control protocol should adapt legacy JSON to typed intents",
+    );
+    assert_contains(
+        &app_control,
+        "NodeRequestPayload::RouteStart",
+        "legacy route payload fields should map into command-neutral payloads",
+    );
+
+    let server = read_repo_file("crates/ssh-proxy/src/node_daemon/control_server.rs");
+    assert_contains(
+        &server,
+        "request.typed_intent()",
+        "control server should parse the typed view before dispatch",
+    );
+}
+
+#[test]
+fn self_update_execution_goes_through_platform_plans() {
+    let update = read_repo_file("crates/ssh-proxy/src/node_daemon/management/update.rs");
+    assert_contains(
+        &update,
+        "PlatformScriptPlan",
+        "self-update switch scripts should be described as platform plans",
+    );
+    assert_contains(
+        &update,
+        "ExternalActionClass::SelfUpdate",
+        "self-update external execution should carry explicit classification",
+    );
+    assert_contains(
+        &update,
+        "ssh_proxy_platform::spawn_command",
+        "self-update script launch should go through the platform crate",
+    );
+    assert_contains(
+        &update,
+        "ssh_proxy_platform::capture_command",
+        "self-update version probing should go through the platform crate",
+    );
+    assert_not_contains(
+        &update,
+        "Command::new(",
+        "self-update should not spawn commands directly from daemon runtime code",
+    );
+}
+
+#[test]
+fn remote_setup_execution_plans_stay_in_deploy_crate() {
+    let deploy_setup = read_repo_file("crates/ssh-proxy-deploy/src/remote_setup.rs");
+    assert_contains(
+        &deploy_setup,
+        "pub struct RemoteSetupExecutionPlan",
+        "deploy crate should own remote setup execution plans",
+    );
+    assert_contains(
+        &deploy_setup,
+        "pub struct RemoteArtifactIntent",
+        "deploy crate should own artifact write intents",
+    );
+    assert_contains(
+        &deploy_setup,
+        "cat > \\\"$tmp\\\"",
+        "remote artifact writes should use stdin file writes",
+    );
+    let deploy_setup_production = deploy_setup.split("#[cfg(test)]").next().unwrap_or("");
+    assert_not_contains(
+        deploy_setup_production,
+        "<<",
+        "remote setup plans should not embed heredoc payloads",
+    );
+
+    let app_payload = read_repo_file("crates/ssh-proxy/src/node_daemon/remote_setup/payload.rs");
+    assert_contains(
+        &app_payload,
+        "build_remote_setup_payload(RemoteSetupPayloadInput",
+        "app remote setup payload code should adapt into deploy crate plans",
+    );
+}
+
+#[test]
+fn runtime_reports_and_proxy_dispatch_use_typed_adapters() {
+    let transport_spx = read_repo_file("crates/ssh-proxy-transport/src/spx.rs");
+    assert_contains(
+        &transport_spx,
+        "pub struct SpxBridgeWorkerSnapshot",
+        "transport crate should own SPX worker report DTOs",
+    );
+
+    let controller_status = read_repo_file("crates/ssh-proxy/src/controller/status.rs");
+    assert_contains(
+        &controller_status,
+        "ssh_proxy_transport::spx::SpxBridgeWorkerSnapshot",
+        "controller status should render through the transport DTO",
+    );
+
+    let socks_main = read_repo_file("crates/ssh-proxy/src/socks.rs");
+    let socks_tunnel = read_repo_file("crates/ssh-proxy/src/socks/tunnel.rs");
+    assert_contains(
+        &socks_main,
+        "mod tunnel;",
+        "SOCKS entrypoint should delegate tunnel backend dispatch",
+    );
+    assert_contains(
+        &socks_tunnel,
+        "pub(super) enum TunnelBackend",
+        "SOCKS tunnel module should centralize backend selection",
+    );
+    assert_not_contains(
+        &socks_main,
+        "handle_http_proxy_ssh_native",
+        "SOCKS entrypoint should not keep duplicate HTTP proxy handlers",
+    );
+    assert_not_contains(
+        &socks_main,
+        "handle_http_proxy_quic_native",
+        "SOCKS entrypoint should not keep duplicate HTTP proxy handlers",
+    );
+}
+
+#[test]
 fn normal_source_paths_do_not_reintroduce_shell_tcp_probes() {
     let mut violations = Vec::new();
     let forbidden = [
@@ -432,6 +569,13 @@ fn workspace_root() -> std::path::PathBuf {
 
 fn assert_contains(haystack: &str, needle: &str, message: &str) {
     assert!(haystack.contains(needle), "{message}: missing `{needle}`");
+}
+
+fn assert_not_contains(haystack: &str, needle: &str, message: &str) {
+    assert!(
+        !haystack.contains(needle),
+        "{message}: unexpected `{needle}`"
+    );
 }
 
 fn manifest_has_direct_crate(manifest: &str, name: &str) -> bool {
