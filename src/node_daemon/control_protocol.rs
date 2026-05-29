@@ -6,6 +6,7 @@ use super::proxy_session::ProxySessionSpec;
 use crate::{
     cli,
     protocol_core::{
+        control::DaemonControlCommand,
         envelope::{ControlError, ControlResponse},
         version::CONTROL_API_VERSION,
     },
@@ -437,6 +438,10 @@ impl NodeRequest {
             );
         }
         Ok(())
+    }
+
+    pub(crate) fn command_kind(&self) -> DaemonControlCommand {
+        DaemonControlCommand::parse(&self.cmd)
     }
 
     pub(crate) fn with_auth_token(mut self, token: Option<&str>) -> Self {

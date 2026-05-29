@@ -6,6 +6,7 @@ use tokio::time;
 use tracing::{info, warn};
 
 use crate::control_socket;
+use crate::protocol_core::control::DaemonControlCommand;
 
 use super::{NodeManager, NodeRequest, NodeResponse};
 
@@ -117,67 +118,61 @@ fn token_matches(provided: &str, expected: &str) -> bool {
 }
 
 async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Result<String> {
-    match request.cmd.to_ascii_lowercase().as_str() {
-        "status" | "" => manager.status_json().await,
-        "descriptor" | "describe" => manager.descriptor_json().await,
-        "links" => manager.links_json().await,
-        "shutdown" => manager.shutdown().await,
-        "nodes" | "node_list" | "node-list" => manager.nodes_json().await,
-        "jobs" | "job_list" | "job-list" => manager.jobs_json().await,
-        "job_status" | "job-status" => manager.job_status_json(request).await,
-        "job_events" | "job-events" => manager.job_events_json(request).await,
-        "ensure_proxy_session" | "ensure-proxy-session" => {
-            manager.ensure_proxy_session(request).await
-        }
-        "proxy_session_status" | "proxy-session-status" => {
-            manager.proxy_session_status(request).await
-        }
-        "proxy_session_down" | "proxy-session-down" => manager.proxy_session_down(request).await,
-        "daemon_update" | "daemon-update" => manager.daemon_update(request).await,
-        "apply_remote_settings" | "apply-remote-settings" => {
-            manager.apply_remote_settings(request).await
-        }
-        "node_ensure" | "node-ensure" => manager.node_ensure(request).await,
-        "node_start" | "node-start" => manager.node_start(request).await,
-        "node_stop" | "node-stop" => manager.node_stop(request).await,
-        "node_restart" | "node-restart" => manager.node_restart(request).await,
-        "connect" => {
+    match request.command_kind() {
+        DaemonControlCommand::Status => manager.status_json().await,
+        DaemonControlCommand::Descriptor => manager.descriptor_json().await,
+        DaemonControlCommand::Links => manager.links_json().await,
+        DaemonControlCommand::Shutdown => manager.shutdown().await,
+        DaemonControlCommand::Nodes => manager.nodes_json().await,
+        DaemonControlCommand::Jobs => manager.jobs_json().await,
+        DaemonControlCommand::JobStatus => manager.job_status_json(request).await,
+        DaemonControlCommand::JobEvents => manager.job_events_json(request).await,
+        DaemonControlCommand::EnsureProxySession => manager.ensure_proxy_session(request).await,
+        DaemonControlCommand::ProxySessionStatus => manager.proxy_session_status(request).await,
+        DaemonControlCommand::ProxySessionDown => manager.proxy_session_down(request).await,
+        DaemonControlCommand::DaemonUpdate => manager.daemon_update(request).await,
+        DaemonControlCommand::ApplyRemoteSettings => manager.apply_remote_settings(request).await,
+        DaemonControlCommand::NodeEnsure => manager.node_ensure(request).await,
+        DaemonControlCommand::NodeStart => manager.node_start(request).await,
+        DaemonControlCommand::NodeStop => manager.node_stop(request).await,
+        DaemonControlCommand::NodeRestart => manager.node_restart(request).await,
+        DaemonControlCommand::Connect => {
             let profile = request
                 .profile
                 .ok_or_else(|| anyhow!("connect requires a profile"))?;
             let message = manager.connect_profile(&profile).await?;
             NodeResponse::ok_message(message).to_line()
         }
-        "disconnect" => {
+        DaemonControlCommand::Disconnect => {
             let profile = request
                 .profile
                 .ok_or_else(|| anyhow!("disconnect requires a profile"))?;
             let message = manager.disconnect_profile(&profile).await?;
             NodeResponse::ok_message(message).to_line()
         }
-        "route_start" => manager.start_route(request).await,
-        "route_plan" | "route-plan" => manager.handle_route_plan(request).await,
-        "route_intent" => manager.handle_route_intent(request).await,
-        "route_stop" => manager.stop_route(request).await,
-        "route_restart" => manager.restart_route(request).await,
-        "route_list" | "routes" => manager.route_list_json().await,
-        "peer_list" | "peers" => manager.peers_json().await,
-        "remote_peer_ensure" | "remote-peer-ensure" => manager.remote_peer_ensure(request).await,
-        "remote_peer_status" | "remote-peer-status" => manager.remote_peer_status(request).await,
-        "remote_peer_repair" | "remote-peer-repair" => manager.remote_peer_ensure(request).await,
-        "remote_peer_update" | "remote-peer-update" => manager.remote_peer_ensure(request).await,
-        "token_rotate" | "token-rotate" => manager.rotate_token().await,
-        "peer_bootstrap" => manager.bootstrap_peer(request).await,
-        "peer_ensure" | "peer-ensure" => manager.ensure_peer(request).await,
-        "peer_update" | "peer-update" => manager.update_peer(request).await,
-        "peer_refresh" => manager.refresh_peer(request).await,
-        "peer_diff" | "peer-diff" => manager.diff_peer(request).await,
-        "peer_reconcile" | "peer-reconcile" => manager.reconcile_peer(request).await,
-        "peer_check_version" | "peer-check-version" => manager.check_peer_version(request).await,
-        "peer_rotate_token" | "peer-rotate-token" => manager.rotate_peer_token(request).await,
-        "peer_forget" => manager.forget_peer(request).await,
-        "report" => manager.record_report(request).await,
-        other => Ok(NodeResponse::error_line(
+        DaemonControlCommand::RouteStart => manager.start_route(request).await,
+        DaemonControlCommand::RoutePlan => manager.handle_route_plan(request).await,
+        DaemonControlCommand::RouteIntent => manager.handle_route_intent(request).await,
+        DaemonControlCommand::RouteStop => manager.stop_route(request).await,
+        DaemonControlCommand::RouteRestart => manager.restart_route(request).await,
+        DaemonControlCommand::RouteList => manager.route_list_json().await,
+        DaemonControlCommand::PeerList => manager.peers_json().await,
+        DaemonControlCommand::RemotePeerEnsure => manager.remote_peer_ensure(request).await,
+        DaemonControlCommand::RemotePeerStatus => manager.remote_peer_status(request).await,
+        DaemonControlCommand::RemotePeerRepair => manager.remote_peer_ensure(request).await,
+        DaemonControlCommand::RemotePeerUpdate => manager.remote_peer_ensure(request).await,
+        DaemonControlCommand::TokenRotate => manager.rotate_token().await,
+        DaemonControlCommand::PeerBootstrap => manager.bootstrap_peer(request).await,
+        DaemonControlCommand::PeerEnsure => manager.ensure_peer(request).await,
+        DaemonControlCommand::PeerUpdate => manager.update_peer(request).await,
+        DaemonControlCommand::PeerRefresh => manager.refresh_peer(request).await,
+        DaemonControlCommand::PeerDiff => manager.diff_peer(request).await,
+        DaemonControlCommand::PeerReconcile => manager.reconcile_peer(request).await,
+        DaemonControlCommand::PeerCheckVersion => manager.check_peer_version(request).await,
+        DaemonControlCommand::PeerRotateToken => manager.rotate_peer_token(request).await,
+        DaemonControlCommand::PeerForget => manager.forget_peer(request).await,
+        DaemonControlCommand::Report => manager.record_report(request).await,
+        DaemonControlCommand::Unknown(other) => Ok(NodeResponse::error_line(
             "unknown_command",
             format!("unknown node command {other:?}"),
         )),
