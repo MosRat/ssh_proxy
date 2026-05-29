@@ -151,7 +151,14 @@ execution to shared modules.
   `PeerLifecycleSpec(remote_peer)` through `SshExecutor`.
 - `node_daemon::remote_peer` owns daemon RPC/job glue, retry/adopt policy, and
   peer registry updates. It streams lifecycle events instead of rebuilding
-  install phase reports.
+  install phase reports. The public RPC wrapper stays in `remote_peer.rs`;
+  `remote_peer::job_runner` sequences descriptor adoption, install fallback,
+  and terminal failure recording; `remote_peer::report` and `phase_mapping`
+  own status DTOs and lifecycle/job phase conversion.
+- `node_daemon::peers` owns peer command dispatch and peer registry operations.
+  Route intent orchestration lives in `peers::route_intent`, which builds route
+  plans, ensures peer prerequisites, and preserves the daemon route response
+  shape before returning to the control server.
 - `node_daemon::proxy_session` owns the session state machine that sequences
   remote peer ensure, route creation, Rust-native handoff, remote setup, and
   health monitoring. `ProxySessionSpec`, SSH target details, apply policy, and
@@ -159,8 +166,8 @@ execution to shared modules.
   intent model. Status rendering helpers live in the `status` submodule;
   `apply_settings` owns the direct VS Code apply-settings command path, and
   `route_ready` owns route readiness, handoff probing, remote setup, and final
-  health transition. The async runner should sequence these modules instead of
-  assembling proxy-session response JSON inline.
+  health transition. `job_runner` sequences these modules and owns route
+  conflict repair, so `proxy_session.rs` remains the daemon RPC surface.
 - `node_daemon::remote_setup` owns VS Code and shell environment artifacts. Rust
   renders payloads and uses `SshExecutor.write_artifact`; shell remains limited
   to stdin file writes, optional Git config, cleanup, and platform commands.
@@ -168,10 +175,21 @@ execution to shared modules.
   relative path, artifact kind, backup policy, and read/write command shape.
 - `quic_native::runtime` owns listener orchestration and data-flow accounting.
   Connection establishment lives in `runtime::connection`; status rendering
-  lives in `runtime::status`; worker metric extraction lives in
-  `runtime::metrics_snapshot`; control keepalive and stream I/O stay in their
-  existing focused modules. `QNC1` control framing and stream behavior remain
-  compatibility-owned by the protocol modules, not by status rendering.
+  lives in `runtime::status` with `snapshot`, `profile`, and `render`
+  submodules; worker metric mutation lives in `runtime::worker_metrics`, while
+  status-only worker snapshots live in `runtime::metrics_snapshot`. Control
+  keepalive and stream I/O stay in their existing focused modules. `QNC1`
+  control framing and stream behavior remain compatibility-owned by the
+  protocol modules, not by status rendering.
+- `node_daemon::management` owns daemon update transactions and the preview node
+  control surface. User/report JSON for nodes, jobs, job events, and peer
+  ensure/update wrappers lives in `management::report`; staged self-update
+  helpers remain in the parent module until the update workflow is split.
+- `node_daemon::state` owns the daemon state schema. The parent module keeps the
+  serialized record types and compatibility helpers, while `daemon_store`,
+  `session_store`, `peer_store`, and `file_store` own persistence methods for
+  each state file. Store files keep the existing JSON schema and corrupt-file
+  quarantine behavior.
 - `route` owns user-visible route plans and preflight probes. Transport names,
   direct-policy labels, SSH-mode labels, and data-plane reasons come from
   `peer_lifecycle::connection` so status, doctor, daemon, and route output use
