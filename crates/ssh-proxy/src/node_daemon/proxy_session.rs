@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
+#[cfg(test)]
 use ssh_proxy_core::model::RouteConnectMode;
 
 use super::{

@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::{peer_lifecycle::artifacts::PeerArtifact, ssh_client};
 
+#[cfg(test)]
 use super::proxy_session::ProxySessionSpec;
 
 mod artifacts;
@@ -14,6 +15,7 @@ mod shell;
 
 use artifacts::{read_remote_setup_artifact, write_remote_setup_artifact};
 pub(super) use executor::{apply_remote_settings, cleanup_remote_settings};
+#[cfg(test)]
 use payload::{setup_hash, setup_payload};
 use shell::shell_quote;
 

@@ -10,7 +10,9 @@ pub(crate) const NODE_CONTROL_VERSION: u16 = CONTROL_API_VERSION;
 mod payload_adapter;
 mod response;
 
-pub(crate) use response::{NodeResponse, response_line, response_value};
+#[cfg(test)]
+pub(crate) use response::response_value;
+pub(crate) use response::{NodeResponse, response_line};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
