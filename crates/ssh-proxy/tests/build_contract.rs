@@ -396,7 +396,8 @@ fn runtime_control_uses_command_neutral_intents() {
         "daemon crate should own typed request payload summaries",
     );
 
-    let app_control = read_repo_file("crates/ssh-proxy/src/node_daemon/control_protocol.rs");
+    let app_control =
+        read_repo_file("crates/ssh-proxy/src/node_daemon/control_protocol/payload_adapter.rs");
     assert_contains(
         &app_control,
         "pub(crate) fn typed_intent(&self) -> NodeRequestIntent",

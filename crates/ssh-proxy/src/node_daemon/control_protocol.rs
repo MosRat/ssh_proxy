@@ -1,81 +1,16 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ssh_proxy_daemon::control::{NodeRequestIntent, NodeRequestPayload};
 
 use super::proxy_session::ProxySessionSpec;
-use crate::{
-    cli,
-    protocol_core::{
-        control::{DaemonControlCommand, DaemonControlPayloadShape},
-        envelope::{ControlError, ControlResponse},
-        version::CONTROL_API_VERSION,
-    },
-};
+use crate::{cli, protocol_core::version::CONTROL_API_VERSION};
 
 pub(crate) const NODE_CONTROL_VERSION: u16 = CONTROL_API_VERSION;
 
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct NodeResponse {
-    pub(crate) api_version: u16,
-    pub(crate) ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) data: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) blocker: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) repair_action: Option<Value>,
-}
+mod payload_adapter;
+mod response;
 
-impl NodeResponse {
-    pub(crate) fn ok_message(message: impl Into<String>) -> Self {
-        Self::from_control(ControlResponse::<Value>::ok_message(message))
-    }
-
-    pub(crate) fn error(code: impl Into<String>, error: impl Into<String>) -> Self {
-        Self::from_control(ControlResponse::error(ControlError::new(code, error)))
-    }
-
-    pub(crate) fn to_line(&self) -> Result<String> {
-        Ok(format!("{}\n", serde_json::to_string_pretty(self)?))
-    }
-
-    pub(crate) fn error_line(code: impl Into<String>, error: impl Into<String>) -> String {
-        Self::error(code, error)
-            .to_line()
-            .unwrap_or_else(|_| "{\"api_version\":1,\"ok\":false,\"code\":\"internal\",\"error\":\"failed to encode node response\"}\n".to_string())
-    }
-
-    fn from_control(response: ControlResponse<Value>) -> Self {
-        Self {
-            api_version: response.api_version,
-            ok: response.ok,
-            code: response.code,
-            message: response.message,
-            error: response.error,
-            data: response.data,
-            blocker: response.blocker,
-            repair_action: response.repair_action,
-        }
-    }
-}
-
-pub(crate) fn response_line(value: Value) -> Result<String> {
-    Ok(format!(
-        "{}\n",
-        serde_json::to_string_pretty(&response_value(value))?
-    ))
-}
-
-pub(crate) fn response_value(value: Value) -> Value {
-    ControlResponse::public_ok_value(value)
-}
+pub(crate) use response::{NodeResponse, response_line, response_value};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -430,87 +365,6 @@ impl NodeRequest {
         serde_json::to_value(self).context("failed to encode node control request")
     }
 
-    pub(crate) fn validate_compatible(&self) -> Result<()> {
-        if let Some(version) = self.api_version
-            && version > NODE_CONTROL_VERSION
-        {
-            anyhow::bail!(
-                "unsupported node control api_version {version}; local daemon supports {NODE_CONTROL_VERSION}"
-            );
-        }
-        Ok(())
-    }
-
-    pub(crate) fn command_kind(&self) -> DaemonControlCommand {
-        DaemonControlCommand::parse(&self.cmd)
-    }
-
-    pub(crate) fn payload_shape(&self) -> DaemonControlPayloadShape {
-        self.command_kind().payload_shape()
-    }
-
-    pub(crate) fn typed_payload(&self) -> NodeRequestPayload {
-        match self.payload_shape() {
-            DaemonControlPayloadShape::Empty => NodeRequestPayload::Empty,
-            DaemonControlPayloadShape::Profile => NodeRequestPayload::Profile {
-                profile: self.profile.clone(),
-            },
-            DaemonControlPayloadShape::Id => NodeRequestPayload::Id {
-                id: self.id.clone(),
-            },
-            DaemonControlPayloadShape::RouteStart => NodeRequestPayload::RouteStart {
-                id: self.id.clone(),
-                direction: self.direction.clone(),
-                persist: self.persist,
-                has_proxy: self.proxy.is_some(),
-                has_reverse: self.reverse.is_some(),
-                connect_mode: self.connect_mode.clone(),
-            },
-            DaemonControlPayloadShape::RouteArgs => NodeRequestPayload::RouteArgs {
-                has_route: self.route.is_some(),
-            },
-            DaemonControlPayloadShape::PeerBootstrap => NodeRequestPayload::PeerBootstrap {
-                has_bootstrap: self.bootstrap.is_some(),
-            },
-            DaemonControlPayloadShape::Report => NodeRequestPayload::Report {
-                node: self.node.clone(),
-                has_status: self.status.is_some(),
-            },
-            DaemonControlPayloadShape::ProxySession => NodeRequestPayload::ProxySession {
-                id: self.id.clone(),
-                has_spec: self.proxy_session.is_some(),
-            },
-            DaemonControlPayloadShape::RemoteSettings => NodeRequestPayload::RemoteSettings {
-                target: self.alias.clone(),
-                workspace: self.id.clone(),
-                remote_url: self.remote_url.clone(),
-            },
-            DaemonControlPayloadShape::DaemonUpdate => NodeRequestPayload::DaemonUpdate {
-                source: self.update_source.clone(),
-            },
-            DaemonControlPayloadShape::JobEvents => NodeRequestPayload::JobEvents {
-                id: self.id.clone(),
-            },
-            DaemonControlPayloadShape::Unknown => NodeRequestPayload::Unknown,
-        }
-    }
-
-    pub(crate) fn typed_intent(&self) -> NodeRequestIntent {
-        let command = self.command_kind();
-        NodeRequestIntent::new(
-            command.canonical_name(),
-            self.api_version,
-            self.id.clone(),
-            self.alias.clone().or_else(|| self.node.clone()),
-            self.typed_payload(),
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn typed_view(&self) -> ssh_proxy_daemon::control::NodeRequestView {
-        self.typed_intent().view()
-    }
-
     pub(crate) fn with_auth_token(mut self, token: Option<&str>) -> Self {
         if let Some(token) = token {
             self.auth_token = Some(token.to_string());
@@ -533,8 +387,9 @@ pub(crate) fn attach_auth_token(value: &mut Value, token: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol_core::control::{DaemonControlCommand, DaemonControlPayloadShape};
     use serde_json::json;
-    use ssh_proxy_daemon::control::{NodeRequestKind, NodeRequestView};
+    use ssh_proxy_daemon::control::{NodeRequestKind, NodeRequestPayload, NodeRequestView};
 
     #[test]
     fn node_response_uses_shared_control_shape() {
