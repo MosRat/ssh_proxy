@@ -302,6 +302,52 @@ fn workspace_members_do_not_depend_on_service_manager() {
 }
 
 #[test]
+fn workspace_member_dependencies_use_workspace_table() {
+    let root = read_repo_file("Cargo.toml");
+    let local_crates = local_workspace_crate_names();
+    for name in &local_crates {
+        assert_contains(
+            &root,
+            &format!("{name} = {{ path = \"crates/{name}\" }}"),
+            "root workspace dependencies should list every internal crate once",
+        );
+    }
+
+    let mut violations = Vec::new();
+    for manifest_path in workspace_member_manifests() {
+        let relative = relative_workspace_path(&manifest_path);
+        let text = fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
+        let mut in_dependency_section = false;
+        for (line_number, line) in text.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                in_dependency_section = trimmed.contains("dependencies");
+                continue;
+            }
+            if !in_dependency_section {
+                continue;
+            }
+            for name in &local_crates {
+                if dependency_line_matches(trimmed, name) && !trimmed.contains(".workspace = true")
+                {
+                    violations.push(format!(
+                        "{relative}:{} uses `{}` without `.workspace = true`",
+                        line_number + 1,
+                        name
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "workspace members should depend on internal crates through [workspace.dependencies]:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn workspace_source_imports_remain_layered() {
     let app_imports = [
         "crate::cli::",
@@ -548,6 +594,31 @@ fn normal_source_paths_do_not_reintroduce_shell_tcp_probes() {
     );
 }
 
+#[test]
+fn production_command_execution_stays_in_execution_crates() {
+    let mut violations = Vec::new();
+    let crates_dir = workspace_root().join("crates");
+    for entry in fs::read_dir(&crates_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", crates_dir.display()))
+    {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                crates_dir.display()
+            )
+        });
+        let src = entry.path().join("src");
+        if src.is_dir() {
+            collect_command_execution_violations(&src, &mut violations);
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "production Command::new should stay behind platform or lifecycle executors:\n{}",
+        violations.join("\n")
+    );
+}
+
 fn read_repo_file(relative: &str) -> String {
     let path = workspace_root().join(relative);
     fs::read_to_string(&path)
@@ -566,6 +637,44 @@ fn workspace_root() -> std::path::PathBuf {
         .nth(2)
         .expect("ssh_proxy package should live under crates/ssh-proxy")
         .to_path_buf()
+}
+
+fn workspace_member_manifests() -> Vec<std::path::PathBuf> {
+    let crates_dir = workspace_root().join("crates");
+    let mut manifests = Vec::new();
+    for entry in fs::read_dir(&crates_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", crates_dir.display()))
+    {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                crates_dir.display()
+            )
+        });
+        let manifest = entry.path().join("Cargo.toml");
+        if manifest.is_file() {
+            manifests.push(manifest);
+        }
+    }
+    manifests.sort();
+    manifests
+}
+
+fn local_workspace_crate_names() -> Vec<String> {
+    workspace_member_manifests()
+        .into_iter()
+        .filter_map(|manifest| {
+            let dir_name = manifest.parent()?.file_name()?.to_str()?;
+            (dir_name.starts_with("ssh-proxy-")).then(|| dir_name.to_string())
+        })
+        .collect()
+}
+
+fn relative_workspace_path(path: &Path) -> String {
+    path.strip_prefix(workspace_root())
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 fn assert_contains(haystack: &str, needle: &str, message: &str) {
@@ -665,6 +774,64 @@ fn collect_source_pattern_violations(
             }
         }
     }
+}
+
+fn collect_command_execution_violations(path: &Path, violations: &mut Vec<String>) {
+    let entries =
+        fs::read_dir(path).unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                path.display()
+            )
+        });
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_command_execution_violations(&entry_path, violations);
+            continue;
+        }
+        if entry_path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        if command_execution_path_is_allowed(&entry_path) {
+            continue;
+        }
+
+        let text = fs::read_to_string(&entry_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", entry_path.display()));
+        for pattern in ["Command::new(", "process::Command"] {
+            let contains = if pattern == "Command::new(" {
+                text.lines().any(contains_process_command_new)
+            } else {
+                text.contains(pattern)
+            };
+            if contains {
+                violations.push(format!(
+                    "{} contains `{pattern}`",
+                    relative_workspace_path(&entry_path)
+                ));
+            }
+        }
+    }
+}
+
+fn command_execution_path_is_allowed(path: &Path) -> bool {
+    let relative = relative_workspace_path(path).replace('\\', "/");
+    relative.starts_with("crates/ssh-proxy-platform/src/")
+        || relative == "crates/ssh-proxy-lifecycle/src/executor/local.rs"
+        || relative.ends_with("/tests.rs")
+        || relative.contains("/tests/")
+}
+
+fn contains_process_command_new(line: &str) -> bool {
+    let Some(index) = line.find("Command::new(") else {
+        return false;
+    };
+    line[..index]
+        .chars()
+        .next_back()
+        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_')
 }
 
 fn collect_workspace_source_ffi_violations(violations: &mut Vec<String>) {
