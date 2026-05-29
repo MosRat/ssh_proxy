@@ -2,6 +2,9 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use ssh_proxy_platform::systemd::{
+    SystemdDbusPlan, SystemdOperation, SystemdScope, run_systemd_plan,
+};
 
 use crate::service::{
     inventory::{ServiceProbeState, ServiceProbeSummary},
@@ -105,33 +108,65 @@ pub(super) fn probe_summary(scope: ServiceScope) -> ServiceProbeSummary {
 pub(super) fn install(plan: &ServicePlan) -> Result<()> {
     let path = unit_path(plan)?;
     write_text(&path, &unit(plan))?;
+    let scope = dbus_scope(plan.scope);
+    let unit = "ssh_proxy.service";
     if plan.scope == ServiceScope::User {
-        run_command("systemctl", &["--user", "daemon-reload"])?;
+        run_dbus_or_command(
+            SystemdDbusPlan::reload(scope),
+            "systemctl",
+            &["--user", "daemon-reload"],
+        )?;
         run_command("loginctl", &["enable-linger", &current_user()])
             .map_err(|err| {
                 eprintln!("warning: failed to enable systemd user linger: {err}");
                 err
             })
             .ok();
-        run_command(
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Enable, unit),
             "systemctl",
             &["--user", "enable", "--now", "ssh_proxy.service"],
+        )?;
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Start, unit),
+            "systemctl",
+            &["--user", "start", "ssh_proxy.service"],
         )
     } else {
-        run_command("systemctl", &["daemon-reload"])?;
-        run_command("systemctl", &["enable", "--now", "ssh_proxy.service"])
+        run_dbus_or_command(
+            SystemdDbusPlan::reload(scope),
+            "systemctl",
+            &["daemon-reload"],
+        )?;
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Enable, unit),
+            "systemctl",
+            &["enable", "--now", "ssh_proxy.service"],
+        )?;
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Start, unit),
+            "systemctl",
+            &["start", "ssh_proxy.service"],
+        )
     }
 }
 
 pub(super) fn uninstall(plan: &ServicePlan) -> Result<()> {
+    let scope = dbus_scope(plan.scope);
     if plan.scope == ServiceScope::User {
-        run_command(
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Disable, "ssh_proxy.service"),
             "systemctl",
             &["--user", "disable", "--now", "ssh_proxy.service"],
         )
         .ok();
     } else {
-        run_command("systemctl", &["disable", "--now", "ssh_proxy.service"]).ok();
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Disable, "ssh_proxy.service"),
+            "systemctl",
+            &["disable", "--now", "ssh_proxy.service"],
+        )
+        .ok();
     }
     let path = unit_path(plan)?;
     if path.exists() {
@@ -141,18 +176,36 @@ pub(super) fn uninstall(plan: &ServicePlan) -> Result<()> {
 }
 
 pub(super) fn start(plan: &ServicePlan) -> Result<()> {
+    let scope = dbus_scope(plan.scope);
     if plan.scope == ServiceScope::User {
-        run_command("systemctl", &["--user", "start", "ssh_proxy.service"])
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Start, "ssh_proxy.service"),
+            "systemctl",
+            &["--user", "start", "ssh_proxy.service"],
+        )
     } else {
-        run_command("systemctl", &["start", "ssh_proxy.service"])
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Start, "ssh_proxy.service"),
+            "systemctl",
+            &["start", "ssh_proxy.service"],
+        )
     }
 }
 
 pub(super) fn stop(plan: &ServicePlan) -> Result<()> {
+    let scope = dbus_scope(plan.scope);
     if plan.scope == ServiceScope::User {
-        run_command("systemctl", &["--user", "stop", "ssh_proxy.service"])
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Stop, "ssh_proxy.service"),
+            "systemctl",
+            &["--user", "stop", "ssh_proxy.service"],
+        )
     } else {
-        run_command("systemctl", &["stop", "ssh_proxy.service"])
+        run_dbus_or_command(
+            SystemdDbusPlan::unit(scope, SystemdOperation::Stop, "ssh_proxy.service"),
+            "systemctl",
+            &["stop", "ssh_proxy.service"],
+        )
     }
 }
 
@@ -169,6 +222,16 @@ pub(super) fn status(plan: &ServicePlan) -> Result<()> {
 }
 
 pub(super) fn status_summary(plan: &ServicePlan) -> Value {
+    let native = run_systemd_plan(&SystemdDbusPlan::unit(
+        dbus_scope(plan.scope),
+        SystemdOperation::Status,
+        "ssh_proxy.service",
+    ));
+    if let Ok(outcome) = native {
+        if outcome.ok {
+            return outcome.to_json();
+        }
+    }
     if plan.scope == ServiceScope::User {
         capture_command_output(
             "systemctl",
@@ -176,6 +239,39 @@ pub(super) fn status_summary(plan: &ServicePlan) -> Value {
         )
     } else {
         capture_command_output("systemctl", &["status", "--no-pager", "ssh_proxy.service"])
+    }
+}
+
+fn dbus_scope(scope: ServiceScope) -> SystemdScope {
+    match scope {
+        ServiceScope::User => SystemdScope::User,
+        ServiceScope::System => SystemdScope::System,
+    }
+}
+
+fn run_dbus_or_command(
+    dbus_plan: SystemdDbusPlan,
+    fallback_program: &str,
+    fallback_args: &[&str],
+) -> Result<()> {
+    match run_systemd_plan(&dbus_plan) {
+        Ok(outcome) if outcome.ok => Ok(()),
+        Ok(outcome) => {
+            eprintln!(
+                "warning: systemd D-Bus {} was not successful; falling back to {}",
+                outcome.status.as_deref().unwrap_or("operation"),
+                fallback_program
+            );
+            run_command(fallback_program, fallback_args)
+        }
+        Err(err) => {
+            eprintln!(
+                "warning: systemd D-Bus {} failed: {err}; falling back to {}",
+                dbus_plan.method_name(),
+                fallback_program
+            );
+            run_command(fallback_program, fallback_args)
+        }
     }
 }
 

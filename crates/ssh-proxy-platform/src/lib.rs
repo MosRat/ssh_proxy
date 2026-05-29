@@ -10,6 +10,8 @@ pub use windows_service;
 #[cfg(windows)]
 pub use windows_sys;
 
+pub mod systemd;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionBackend {
