@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 use tracing::info;
 
@@ -90,86 +90,6 @@ impl NodeManager {
         NodeResponse::ok_message(format!("report accepted from {node}")).to_line()
     }
 
-    pub(super) async fn handle_route_intent(&self, request: NodeRequest) -> Result<String> {
-        let args = request
-            .route
-            .ok_or_else(|| anyhow!("route_intent requires route args"))?;
-
-        match args.direction {
-            cli::RouteDirection::LocalUsesRemote => {
-                let config = self.config.lock().await.clone();
-                let mut forward =
-                    route::node_forward_from_route(&args, &config, args.target.clone(), false)?;
-                let id = route::route_id(&args, "local-via-remote");
-                let mut plan = route::local_uses_remote_plan(&args, &id, &forward);
-                route::add_local_transport_probe_results(&mut plan, &mut forward).await;
-                let mut fallback_reason =
-                    route::apply_local_forward_fallback(&mut forward, &mut plan);
-                if !matches!(forward.remote_transport, cli::RemoteTransport::SshNative) {
-                    self.ensure_peer_for_route(&args).await?;
-                    let config = self.config.lock().await.clone();
-                    forward =
-                        route::node_forward_from_route(&args, &config, args.target.clone(), false)?;
-                    plan = route::local_uses_remote_plan(&args, &id, &forward);
-                    route::add_local_transport_probe_results(&mut plan, &mut forward).await;
-                    fallback_reason = route::apply_local_forward_fallback(&mut forward, &mut plan);
-                }
-                let request = match fallback_reason {
-                    Some(reason) => route::route_start_request_with_reason(
-                        &id,
-                        forward,
-                        !args.volatile,
-                        Some(reason),
-                    ),
-                    None => route::route_start_request(&id, forward, !args.volatile),
-                };
-                let request: NodeRequest = serde_json::from_value(request)
-                    .context("failed to build local route request")?;
-                let response = self.start_route(request).await?;
-                route_intent::route_response_with_plan(&response, plan)
-            }
-            cli::RouteDirection::RemoteUsesLocal => {
-                let config = self.config.lock().await.clone();
-                let decision = route::remote_use_decision(&args, &config)?;
-                match decision.plan {
-                    route::RemoteUsePlan::ReverseLink => {
-                        let reverse = route::node_reverse_from_route(&args, &config)?;
-                        let id = route::route_id(&args, "remote-via-local-reverse-link");
-                        let plan = route::remote_uses_local_reverse_link_plan(
-                            &args,
-                            &id,
-                            &reverse,
-                            decision.fallback_reason.as_deref(),
-                        );
-                        let request =
-                            route::reverse_route_start_request(&id, reverse, !args.volatile);
-                        let request: NodeRequest = serde_json::from_value(request)
-                            .context("failed to build reverse-link route request")?;
-                        let response = self.start_route(request).await?;
-                        route_intent::route_response_with_plan(&response, plan)
-                    }
-                    route::RemoteUsePlan::Direct(local_peer) => {
-                        self.ensure_peer_for_route(&args).await?;
-                        let token = self.ensure_local_transport_token().await?;
-                        let config = self.config.lock().await.clone();
-                        let host_args =
-                            route::remote_direct_host_args(&args, &config, local_peer, token)?;
-                        let plan = route_intent::remote_direct_route_plan(
-                            &args,
-                            &host_args.command,
-                            local_peer,
-                        );
-                        deploy::host(host_args, config).await?;
-                        response_line(route_intent::remote_direct_route_response(
-                            &args.target,
-                            plan,
-                        ))
-                    }
-                }
-            }
-        }
-    }
-
     pub(super) async fn handle_route_plan(&self, request: NodeRequest) -> Result<String> {
         let args = request
             .route
@@ -182,57 +102,6 @@ impl NodeManager {
             "message": "route plan generated",
             "plan": plan,
         }))
-    }
-
-    async fn ensure_peer_for_route(&self, args: &cli::RouteArgs) -> Result<()> {
-        if self.peer_is_recorded(&args.target).await {
-            return Ok(());
-        }
-
-        let (install_args, profile_name) = {
-            let mut config = self.config.lock().await;
-            let identity = config.ensure_node_identity()?;
-            if config.daemon.control_endpoint.is_none() && config.daemon.control_listen.is_none() {
-                config.daemon.control_endpoint = Some(self.control_endpoint.to_string());
-            }
-            if config.daemon.transport_listen.is_none() {
-                config.daemon.transport_listen = self.transport;
-            }
-            if config.daemon.token.is_none() {
-                config.ensure_daemon_token()?;
-            }
-            config.save_default()?;
-
-            let mut install_args = route::install_args_from_route(args, &config)?;
-            install_args.local_node_id = identity.node_id;
-            install_args.local_node_name = identity.node_name;
-            install_args.local_control_endpoint = Some(self.control_endpoint.to_string());
-            install_args.local_transport = self.transport;
-            install_args.persist = cli::PersistMode::Auto;
-            (install_args, args.target.clone())
-        };
-
-        info!(target = %profile_name, "trying to adopt existing peer node through SSH descriptor");
-        match deploy::refresh_remote_peer_descriptor(install_args.clone()).await {
-            Ok(result) => {
-                let mut config = self.config.lock().await;
-                deploy::record_remote_descriptor_profile(&mut config, &profile_name, &result)?;
-                return Ok(());
-            }
-            Err(err) => {
-                info!(
-                    target = %profile_name,
-                    error = %err,
-                    "peer descriptor refresh failed; falling back to SSH bootstrap"
-                );
-            }
-        }
-
-        info!(target = %profile_name, "bootstrapping peer node through SSH");
-        let result = deploy::install_remote(install_args).await?;
-        let mut config = self.config.lock().await;
-        deploy::record_remote_install_profile(&mut config, &profile_name, &result)?;
-        Ok(())
     }
 
     pub(super) async fn bootstrap_peer_from_args(
@@ -360,13 +229,6 @@ impl NodeManager {
     pub(super) async fn peer_is_recorded(&self, target: &str) -> bool {
         let config = self.config.lock().await;
         registry::peer_is_route_ready(&config, target)
-    }
-
-    async fn ensure_local_transport_token(&self) -> Result<String> {
-        let mut config = self.config.lock().await;
-        let token = config.ensure_daemon_token()?;
-        config.save_default()?;
-        Ok(token)
     }
 }
 
