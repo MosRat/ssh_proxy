@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ssh_proxy_daemon::control::{
-    NodeRequestIntent, NodeRequestKind, NodeRequestPayload, NodeRequestView,
-};
+use ssh_proxy_daemon::control::{NodeRequestIntent, NodeRequestPayload};
 
 use super::proxy_session::ProxySessionSpec;
 use crate::{
@@ -508,7 +506,8 @@ impl NodeRequest {
         )
     }
 
-    pub(crate) fn typed_view(&self) -> NodeRequestView {
+    #[cfg(test)]
+    pub(crate) fn typed_view(&self) -> ssh_proxy_daemon::control::NodeRequestView {
         self.typed_intent().view()
     }
 
@@ -535,6 +534,7 @@ pub(crate) fn attach_auth_token(value: &mut Value, token: Option<&str>) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use ssh_proxy_daemon::control::{NodeRequestKind, NodeRequestView};
 
     #[test]
     fn node_response_uses_shared_control_shape() {
