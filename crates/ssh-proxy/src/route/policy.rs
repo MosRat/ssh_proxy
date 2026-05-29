@@ -1,4 +1,5 @@
 use anyhow::Result;
+use ssh_proxy_route::RoutePoolSizingInput;
 
 use crate::{cli, config, peer_transport};
 
@@ -24,43 +25,14 @@ pub(super) fn transport_pool_policy(
     profile: Option<&config::ProxyProfile>,
     defaults: &config::ProxyProfile,
 ) -> TransportPoolPolicy {
-    if let Some(value) = args.transport_pool_size {
-        let size = value.max(1);
-        return TransportPoolPolicy {
-            size,
-            source: "command-line".to_string(),
-            reason: pool_reason("--transport-pool-size", value, size),
-            pool_policy: "explicit".to_string(),
-            workload_hint: workload_hint_policy(args, profile, defaults),
-        };
-    }
-    if let Some(value) = profile.and_then(|profile| profile.transport_pool_size) {
-        let size = value.max(1);
-        return TransportPoolPolicy {
-            size,
-            source: "profile".to_string(),
-            reason: pool_reason("target profile transport_pool_size", value, size),
-            pool_policy: "explicit".to_string(),
-            workload_hint: workload_hint_policy(args, profile, defaults),
-        };
-    }
-    if let Some(value) = defaults.transport_pool_size {
-        let size = value.max(1);
-        return TransportPoolPolicy {
-            size,
-            source: "defaults".to_string(),
-            reason: pool_reason("[defaults].transport_pool_size", value, size),
-            pool_policy: "explicit".to_string(),
-            workload_hint: workload_hint_policy(args, profile, defaults),
-        };
-    }
-    let hint = workload_hint_policy(args, profile, defaults);
+    let input = pool_input(args, profile, defaults);
+    let policy = ssh_proxy_route::plan_transport_pool(&input);
     TransportPoolPolicy {
-        size: implicit_transport_pool_size(args, hint),
-        source: "implicit".to_string(),
-        reason: implicit_transport_pool_reason(args, hint),
-        pool_policy: pool_policy_name(hint).to_string(),
-        workload_hint: hint,
+        size: policy.size,
+        source: policy.source,
+        reason: policy.reason,
+        pool_policy: policy.pool_policy,
+        workload_hint: policy.workload_hint.into(),
     }
 }
 
@@ -93,64 +65,8 @@ pub(super) fn quic_transport_policy(
     )
 }
 
-pub(super) fn workload_hint_policy(
-    args: &cli::RouteArgs,
-    profile: Option<&config::ProxyProfile>,
-    defaults: &config::ProxyProfile,
-) -> cli::RouteWorkloadHint {
-    args.workload_hint
-        .or_else(|| profile.and_then(|profile| profile.workload_hint.map(Into::into)))
-        .or(defaults.workload_hint.map(Into::into))
-        .unwrap_or_else(|| {
-            if args.tcp_target.is_some() {
-                cli::RouteWorkloadHint::Large
-            } else {
-                cli::RouteWorkloadHint::Concurrent
-            }
-        })
-}
-
-fn implicit_transport_pool_size(args: &cli::RouteArgs, hint: cli::RouteWorkloadHint) -> usize {
-    match hint {
-        cli::RouteWorkloadHint::Large => 1,
-        cli::RouteWorkloadHint::Concurrent | cli::RouteWorkloadHint::Mixed => {
-            if args.tcp_target.is_some() { 1 } else { 4 }
-        }
-    }
-}
-
-fn implicit_transport_pool_reason(args: &cli::RouteArgs, hint: cli::RouteWorkloadHint) -> String {
-    match (args.tcp_target.is_some(), hint) {
-        (true, cli::RouteWorkloadHint::Large) => {
-            "pool_policy=large: implicit single-worker default for fixed --tcp-target routes"
-                .to_string()
-        }
-        (true, _) => {
-            format!(
-                "pool_policy={}: fixed --tcp-target routes stay at pool=1 unless --transport-pool-size is explicit",
-                pool_policy_name(hint)
-            )
-        }
-        (false, cli::RouteWorkloadHint::Large) => {
-            "pool_policy=large: single-worker default favors one large transfer".to_string()
-        }
-        (false, cli::RouteWorkloadHint::Concurrent) => {
-            "pool_policy=concurrent: implicit pool=4 default for multi-flow SOCKS/HTTP proxy routes"
-                .to_string()
-        }
-        (false, cli::RouteWorkloadHint::Mixed) => {
-            "pool_policy=mixed: implicit pool=4 default balances large and concurrent proxy traffic"
-                .to_string()
-        }
-    }
-}
-
 pub(super) fn pool_policy_name(hint: cli::RouteWorkloadHint) -> &'static str {
-    match hint {
-        cli::RouteWorkloadHint::Large => "large",
-        cli::RouteWorkloadHint::Concurrent => "concurrent",
-        cli::RouteWorkloadHint::Mixed => "mixed",
-    }
+    ssh_proxy_route::pool_policy_name(hint.into())
 }
 
 pub(super) fn ssh_session_pool_policy(
@@ -158,80 +74,31 @@ pub(super) fn ssh_session_pool_policy(
     profile: Option<&config::ProxyProfile>,
     defaults: &config::ProxyProfile,
 ) -> SshSessionPoolPolicy {
-    if let Some(value) = args.ssh_session_pool_size {
-        let size = value.max(1);
-        return SshSessionPoolPolicy {
-            size,
-            source: "command-line".to_string(),
-            reason: pool_reason("--ssh-session-pool-size", value, size),
-            warning: ssh_session_pool_warning(size),
-        };
-    }
-    if let Some(value) = profile.and_then(|profile| profile.ssh_session_pool_size) {
-        let size = value.max(1);
-        return SshSessionPoolPolicy {
-            size,
-            source: "profile".to_string(),
-            reason: pool_reason("target profile ssh_session_pool_size", value, size),
-            warning: ssh_session_pool_warning(size),
-        };
-    }
-    if let Some(value) = defaults.ssh_session_pool_size {
-        let requested = value.max(1);
-        let size = requested.min(2);
-        return SshSessionPoolPolicy {
-            size,
-            source: "defaults".to_string(),
-            reason: if requested == size {
-                pool_reason("[defaults].ssh_session_pool_size", value, size)
-            } else {
-                format!(
-                    "loaded from [defaults].ssh_session_pool_size={value}; capped to pool=2 because only command-line/profile benchmark experiments may exceed the implicit-safe ssh-native range"
-                )
-            },
-            warning: if requested > size {
-                Some(
-                    "ssh-native defaults above 2 are not auto-selected; use --ssh-session-pool-size or a target profile for explicit benchmark experiments"
-                        .to_string(),
-                )
-            } else {
-                ssh_session_pool_warning(size)
-            },
-        };
-    }
-
-    let size = implicit_ssh_session_pool_size(args);
+    let input = pool_input(args, profile, defaults);
+    let policy = ssh_proxy_route::plan_ssh_session_pool(&input);
     SshSessionPoolPolicy {
-        size,
-        source: "implicit".to_string(),
-        reason: implicit_ssh_session_pool_reason(args),
-        warning: None,
+        size: policy.size,
+        source: policy.source,
+        reason: policy.reason,
+        warning: policy.warning,
     }
 }
 
-fn implicit_ssh_session_pool_size(args: &cli::RouteArgs) -> usize {
-    if args.tcp_target.is_some() { 1 } else { 2 }
-}
-
-fn implicit_ssh_session_pool_reason(args: &cli::RouteArgs) -> String {
-    if args.tcp_target.is_some() {
-        "implicit ssh-native single-session default for fixed --tcp-target routes".to_string()
-    } else {
-        "implicit ssh-native two-session default for multi-flow SOCKS/HTTP proxy routes".to_string()
-    }
-}
-
-fn ssh_session_pool_warning(size: usize) -> Option<String> {
-    (size > 2).then(|| {
-        "ssh-native session pools above 2 can lose to handshake and scheduling overhead; benchmark before relying on this explicit value"
-            .to_string()
-    })
-}
-
-fn pool_reason(source: &str, requested: usize, effective: usize) -> String {
-    if requested == effective {
-        format!("loaded from {source}")
-    } else {
-        format!("loaded from {source}; clamped to minimum 1")
+fn pool_input(
+    args: &cli::RouteArgs,
+    profile: Option<&config::ProxyProfile>,
+    defaults: &config::ProxyProfile,
+) -> RoutePoolSizingInput {
+    RoutePoolSizingInput {
+        has_tcp_target: args.tcp_target.is_some(),
+        command_transport_pool_size: args.transport_pool_size,
+        profile_transport_pool_size: profile.and_then(|profile| profile.transport_pool_size),
+        default_transport_pool_size: defaults.transport_pool_size,
+        command_ssh_session_pool_size: args.ssh_session_pool_size,
+        profile_ssh_session_pool_size: profile.and_then(|profile| profile.ssh_session_pool_size),
+        default_ssh_session_pool_size: defaults.ssh_session_pool_size,
+        command_workload_hint: args.workload_hint.map(Into::into),
+        profile_workload_hint: profile.and_then(|profile| profile.workload_hint),
+        default_workload_hint: defaults.workload_hint,
     }
 }

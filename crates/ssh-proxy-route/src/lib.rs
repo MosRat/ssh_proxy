@@ -2,8 +2,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ssh_proxy_core::report::RuntimeDecisionReport;
 
+mod policy;
 mod status;
 
+pub use policy::{
+    RoutePoolSizingInput, RouteSshSessionPoolPolicy, RouteTransportPoolPolicy,
+    plan_ssh_session_pool, plan_transport_pool, pool_policy_name,
+};
 pub use status::{RouteReadinessReport, RouteStats, RouteStatusReport, RouteTaskRecord};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
