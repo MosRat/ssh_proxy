@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
 
+use crate::ssh_client::ExecOutput;
 use crate::{cli, config, install_report, peer_lifecycle, repair};
 
 mod broker;
@@ -19,6 +20,10 @@ mod plan;
 mod platform;
 
 use inventory::{ServiceNextAction, inventory_json};
+use peer_lifecycle::executor::{
+    BoxExecutorFuture, LocalExecutor, PeerExecutor, ServiceControlAction,
+};
+use peer_lifecycle::workflow::{LifecycleAction, LifecyclePlan, LifecycleStep, PeerLifecyclePhase};
 use plan::ServicePlan;
 
 pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()> {
@@ -27,7 +32,7 @@ pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()
     match plan.command {
         cli::ServiceCommand::Print => print_service(&plan),
         cli::ServiceCommand::Ensure => ensure_service(&plan, json).await,
-        cli::ServiceCommand::Install => match install_service(&plan) {
+        cli::ServiceCommand::Install => match install_service(&plan).await {
             Ok(()) => {
                 if json {
                     println!("{}", serde_json::to_string(&install_success_report(&plan))?);
@@ -44,9 +49,17 @@ pub async fn run(args: cli::ServiceArgs, config: config::AppConfig) -> Result<()
                 Err(err)
             }
         },
-        cli::ServiceCommand::Uninstall => platform::platform_uninstall(&plan),
-        cli::ServiceCommand::Start => platform::platform_start(&plan),
-        cli::ServiceCommand::Stop => platform::platform_stop(&plan),
+        cli::ServiceCommand::Uninstall => {
+            run_local_service_lifecycle(&plan, service_operation(&plan))
+                .await
+                .map(|_| ())
+        }
+        cli::ServiceCommand::Start => run_local_service_lifecycle(&plan, service_operation(&plan))
+            .await
+            .map(|_| ()),
+        cli::ServiceCommand::Stop => run_local_service_lifecycle(&plan, service_operation(&plan))
+            .await
+            .map(|_| ()),
         cli::ServiceCommand::Status => status_service(&plan, json).await,
     }
 }
@@ -182,7 +195,7 @@ async fn ensure_service(plan: &ServicePlan, json_output: bool) -> Result<()> {
         return Ok(());
     }
 
-    let outcome = match install_or_repair_service(plan) {
+    let outcome = match install_or_repair_service(plan).await {
         Ok(()) => service_status_summary(plan).await?,
         Err(err) => {
             let mut value = service_status_summary(plan).await?;
@@ -240,11 +253,11 @@ fn print_service(plan: &ServicePlan) -> Result<()> {
     platform::platform_print(plan)
 }
 
-fn install_service(plan: &ServicePlan) -> Result<()> {
-    install_or_repair_service(plan)
+async fn install_service(plan: &ServicePlan) -> Result<()> {
+    install_or_repair_service(plan).await
 }
 
-fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
+async fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
     let action = plan.resolution.next_action;
     if matches!(
         action,
@@ -282,15 +295,16 @@ fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
         ServiceNextAction::Reuse
         | ServiceNextAction::StartOrRepair
         | ServiceNextAction::Install => {
-            let install_result = (|| -> Result<()> {
+            let install_result = async {
                 if let Some(config) = &plan.config_to_save {
                     config.save_default()?;
                     println!("saved daemon defaults to {}", plan.config_path.display());
                 }
-                platform::platform_prepare_install(plan)?;
-                plan.install_binary()?;
-                platform::platform_install(plan)
-            })();
+                run_local_service_lifecycle(plan, service_operation(plan))
+                    .await
+                    .map(|_| ())
+            }
+            .await;
             if let Err(err) = install_result {
                 if let Some(snapshot) = original_config {
                     restore_config_snapshot(&plan.config_path, snapshot)?;
@@ -312,6 +326,145 @@ fn install_or_repair_service(plan: &ServicePlan) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn run_local_service_lifecycle(
+    plan: &ServicePlan,
+    operation: peer_lifecycle::workflow::LifecycleOperation,
+) -> Result<peer_lifecycle::workflow::PeerLifecycleWorkflowResult> {
+    let executor = ServiceLifecycleExecutor::new(plan);
+    let spec = plan.lifecycle_spec();
+    let lifecycle = local_service_lifecycle_plan(plan, operation);
+    let mut sink = peer_lifecycle::workflow::VecLifecycleEventSink::default();
+    peer_lifecycle::workflow::run_lifecycle_plan(&executor, &spec, lifecycle, &mut sink).await
+}
+
+fn local_service_lifecycle_plan(
+    plan: &ServicePlan,
+    operation: peer_lifecycle::workflow::LifecycleOperation,
+) -> LifecyclePlan {
+    let mut lifecycle = LifecyclePlan::new(operation).push(LifecycleStep::new(
+        PeerLifecyclePhase::DependencyCheck,
+        LifecycleAction::Noop,
+    ));
+    match operation {
+        peer_lifecycle::workflow::LifecycleOperation::Install
+        | peer_lifecycle::workflow::LifecycleOperation::Ensure
+        | peer_lifecycle::workflow::LifecycleOperation::Repair => {
+            lifecycle = lifecycle.push(LifecycleStep::new(
+                PeerLifecyclePhase::StageBinary,
+                LifecycleAction::StageBinary {
+                    source: plan.source_exe.display().to_string(),
+                    target: plan.exe.display().to_string(),
+                },
+            ));
+            lifecycle.push(LifecycleStep::new(
+                PeerLifecyclePhase::InstallService,
+                LifecycleAction::ServiceControl {
+                    service_name: platform_service_name(plan.scope),
+                    action: ServiceControlAction::Install,
+                },
+            ))
+        }
+        peer_lifecycle::workflow::LifecycleOperation::Start => lifecycle.push(LifecycleStep::new(
+            PeerLifecyclePhase::StartService,
+            LifecycleAction::ServiceControl {
+                service_name: platform_service_name(plan.scope),
+                action: ServiceControlAction::Start,
+            },
+        )),
+        peer_lifecycle::workflow::LifecycleOperation::Stop => lifecycle.push(LifecycleStep::new(
+            PeerLifecyclePhase::Repairing,
+            LifecycleAction::ServiceControl {
+                service_name: platform_service_name(plan.scope),
+                action: ServiceControlAction::Stop,
+            },
+        )),
+        peer_lifecycle::workflow::LifecycleOperation::Status => lifecycle.push(LifecycleStep::new(
+            PeerLifecyclePhase::HealthProbe,
+            LifecycleAction::ServiceControl {
+                service_name: platform_service_name(plan.scope),
+                action: ServiceControlAction::Status,
+            },
+        )),
+        peer_lifecycle::workflow::LifecycleOperation::Rollback => {
+            lifecycle.push(LifecycleStep::new(
+                PeerLifecyclePhase::Rollback,
+                LifecycleAction::ServiceControl {
+                    service_name: platform_service_name(plan.scope),
+                    action: ServiceControlAction::Rollback,
+                },
+            ))
+        }
+    }
+}
+
+struct ServiceLifecycleExecutor<'a> {
+    plan: &'a ServicePlan,
+    local: LocalExecutor,
+}
+
+impl<'a> ServiceLifecycleExecutor<'a> {
+    fn new(plan: &'a ServicePlan) -> Self {
+        Self {
+            plan,
+            local: LocalExecutor,
+        }
+    }
+}
+
+impl PeerExecutor for ServiceLifecycleExecutor<'_> {
+    fn exec_capture<'a>(
+        &'a self,
+        command: String,
+        stdin: Option<Vec<u8>>,
+    ) -> BoxExecutorFuture<'a, ExecOutput> {
+        self.local.exec_capture(command, stdin)
+    }
+
+    fn upload_bytes<'a>(&'a self, path: String, bytes: Vec<u8>) -> BoxExecutorFuture<'a, ()> {
+        self.local.upload_bytes(path, bytes)
+    }
+
+    fn stage_binary<'a>(&'a self, _source: String, _target: String) -> BoxExecutorFuture<'a, ()> {
+        Box::pin(async move {
+            platform::platform_prepare_install(self.plan)?;
+            self.plan.install_binary()
+        })
+    }
+
+    fn service_control<'a>(
+        &'a self,
+        _service_name: String,
+        action: ServiceControlAction,
+    ) -> BoxExecutorFuture<'a, ExecOutput> {
+        Box::pin(async move {
+            let result = match action {
+                ServiceControlAction::Install => platform::platform_install(self.plan),
+                ServiceControlAction::Start => platform::platform_start(self.plan),
+                ServiceControlAction::Stop => platform::platform_stop(self.plan),
+                ServiceControlAction::Status => Ok(()),
+                ServiceControlAction::Rollback => platform::platform_uninstall(self.plan),
+            };
+            match result {
+                Ok(()) => Ok(ExecOutput {
+                    exit_status: 0,
+                    stdout: match action {
+                        ServiceControlAction::Status => {
+                            platform::platform_status_summary(self.plan).to_string()
+                        }
+                        _ => String::new(),
+                    },
+                    stderr: String::new(),
+                }),
+                Err(err) => Ok(ExecOutput {
+                    exit_status: 1,
+                    stdout: String::new(),
+                    stderr: format!("{err:#}"),
+                }),
+            }
+        })
+    }
 }
 
 fn requires_elevation(plan: &ServicePlan, error: &str) -> bool {
@@ -1082,6 +1235,49 @@ mod tests {
                 .expect("token metadata")
                 .scope,
             "daemon-control-transport"
+        );
+    }
+
+    #[test]
+    fn local_service_lifecycle_plan_models_install_and_start() {
+        let install_plan = ServicePlan::new(
+            service_args(cli::ServiceCommand::Install),
+            config::AppConfig::default(),
+        )
+        .unwrap();
+        let install_lifecycle = local_service_lifecycle_plan(
+            &install_plan,
+            peer_lifecycle::workflow::LifecycleOperation::Install,
+        );
+
+        assert_eq!(install_lifecycle.operation.as_str(), "install");
+        assert_eq!(
+            install_lifecycle.steps[0].phase,
+            PeerLifecyclePhase::DependencyCheck
+        );
+        assert_eq!(
+            install_lifecycle.steps[1].phase,
+            PeerLifecyclePhase::StageBinary
+        );
+        assert_eq!(
+            install_lifecycle.steps[2].phase,
+            PeerLifecyclePhase::InstallService
+        );
+
+        let start_plan = ServicePlan::new(
+            service_args(cli::ServiceCommand::Start),
+            config::AppConfig::default(),
+        )
+        .unwrap();
+        let start_lifecycle = local_service_lifecycle_plan(
+            &start_plan,
+            peer_lifecycle::workflow::LifecycleOperation::Start,
+        );
+
+        assert_eq!(start_lifecycle.operation.as_str(), "start");
+        assert_eq!(
+            start_lifecycle.steps[1].phase,
+            PeerLifecyclePhase::StartService
         );
     }
 
