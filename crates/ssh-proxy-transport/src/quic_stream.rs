@@ -62,6 +62,10 @@ impl QuicBiStream {
         let _ = self.recv.stop(error_code);
     }
 
+    pub fn reset_u32(&mut self, error_code: u32) {
+        self.reset(quinn::VarInt::from_u32(error_code));
+    }
+
     pub fn finish(&mut self) {
         let _ = self.send.finish();
     }

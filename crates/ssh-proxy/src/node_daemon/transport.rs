@@ -12,7 +12,7 @@ use ssh_proxy_transport::{
     remote_helper::BoxedRemoteStream,
     server::{
         PeerTransportServer, PlainTransportListenerConfig, QuicTransportListenerConfig,
-        ServerFuture, TlsTransportListenerConfig,
+        ServerFuture, ServerQuicConnection, TlsTransportListenerConfig,
     },
 };
 
@@ -125,7 +125,7 @@ impl PeerTransportServer for NodeTransportHandler {
 
     fn handle_quic_connection<'a>(
         &'a self,
-        connection: quinn::Connection,
+        connection: ServerQuicConnection,
         peer: SocketAddr,
     ) -> ServerFuture<'a, Result<()>> {
         Box::pin(async move {

@@ -48,9 +48,29 @@ pub trait PeerTransportServer: Clone + Send + Sync + 'static {
     ) -> ServerFuture<'a, Result<()>>;
     fn handle_quic_connection<'a>(
         &'a self,
-        connection: quinn::Connection,
+        connection: ServerQuicConnection,
         peer: SocketAddr,
     ) -> ServerFuture<'a, Result<()>>;
+}
+
+#[derive(Clone)]
+pub struct ServerQuicConnection {
+    inner: quinn::Connection,
+}
+
+impl ServerQuicConnection {
+    fn new(inner: quinn::Connection) -> Self {
+        Self { inner }
+    }
+
+    pub async fn accept_bi(&self) -> Result<QuicBiStream> {
+        let (send, recv) = self.inner.accept_bi().await?;
+        Ok(QuicBiStream::new(send, recv))
+    }
+
+    pub fn close(&self, code: u32, reason: &'static [u8]) {
+        self.inner.close(code.into(), reason);
+    }
 }
 
 pub async fn run_plain_transport_listener<H>(
@@ -179,7 +199,9 @@ where
                     let Ok(connection) = incoming.await else {
                         return;
                     };
-                    let _ = handler.handle_quic_connection(connection, peer).await;
+                    let _ = handler
+                        .handle_quic_connection(ServerQuicConnection::new(connection), peer)
+                        .await;
                 });
             }
             _ = handler.shutdown() => break,
@@ -189,21 +211,20 @@ where
 }
 
 pub async fn accept_quic_peer_control(
-    connection: &quinn::Connection,
+    connection: &ServerQuicConnection,
     node_name: String,
     supported: &[PeerProtocol],
-) -> Result<(QuicBiStream, PeerProtocol)> {
-    let (send, recv) = connection
+) -> Result<(QuicBiStream, PeerProtocol, peer_transport::PeerHello)> {
+    let mut stream = connection
         .accept_bi()
         .await
         .context("node QUIC transport stream accept failed")?;
-    let mut stream = QuicBiStream::new(send, recv);
     let hello = peer_transport::server_handshake(&mut stream, node_name, supported)
         .await
         .context("node QUIC transport handshake failed")?;
     let accepted = peer_transport::select_supported_protocol(&hello.protocols, supported)
         .ok_or_else(|| anyhow::anyhow!("accepted QUIC protocol is missing after handshake"))?;
-    Ok((stream, accepted))
+    Ok((stream, accepted, hello))
 }
 
 async fn verify_token<S>(stream: &mut S, expected: Option<&str>) -> Result<()>

@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use ssh_proxy_transport::server::{ServerQuicConnection, accept_quic_peer_control};
 use tokio::{io::AsyncWriteExt, sync::watch, time};
 use tracing::{debug, info, trace, warn};
 
@@ -24,37 +25,26 @@ enum NativeQuicStreamOutcome {
 }
 
 pub(super) async fn handle_connection(
-    connection: quinn::Connection,
+    connection: ServerQuicConnection,
     peer: SocketAddr,
     manager: Arc<NodeManager>,
 ) {
     let result = handle_connection_inner(connection.clone(), peer, manager).await;
     if let Err(err) = result {
         warn!(%peer, error = %err, "node QUIC transport failed");
-        connection.close(0_u32.into(), b"error");
+        connection.close(0, b"error");
     }
 }
 
 async fn handle_connection_inner(
-    connection: quinn::Connection,
+    connection: ServerQuicConnection,
     peer: SocketAddr,
     manager: Arc<NodeManager>,
 ) -> Result<()> {
-    let (send, recv) = connection
-        .accept_bi()
-        .await
-        .context("node QUIC transport stream accept failed")?;
-    let mut stream = quic_stream::QuicBiStream::new(send, recv);
-    let hello = peer_transport::server_handshake(
-        &mut stream,
-        manager.name.clone(),
-        SUPPORTED_QUIC_PROTOCOLS,
-    )
-    .await
-    .context("node QUIC transport handshake failed")?;
-    let accepted =
-        peer_transport::select_supported_protocol(&hello.protocols, SUPPORTED_QUIC_PROTOCOLS)
-            .ok_or_else(|| anyhow::anyhow!("accepted QUIC protocol is missing after handshake"))?;
+    let (stream, accepted, hello) =
+        accept_quic_peer_control(&connection, manager.name.clone(), SUPPORTED_QUIC_PROTOCOLS)
+            .await
+            .context("node QUIC transport handshake failed")?;
     info!(
         %peer,
         remote_node = %hello.node,
@@ -91,7 +81,7 @@ async fn run_framed_quic(
 }
 
 async fn run_native_quic(
-    connection: quinn::Connection,
+    connection: ServerQuicConnection,
     mut control_stream: quic_stream::QuicBiStream,
     peer: SocketAddr,
     manager: Arc<NodeManager>,
@@ -123,7 +113,7 @@ async fn run_native_quic(
     let close_connection = connection.clone();
     let result = run_native_quic_data_plane(connection, peer, manager, route_id).await;
     control_task.abort();
-    close_connection.close(0_u32.into(), b"done");
+    close_connection.close(0, b"done");
     result
 }
 
@@ -151,7 +141,7 @@ async fn run_native_quic_control_loop(mut stream: quic_stream::QuicBiStream) -> 
 }
 
 async fn run_native_quic_data_plane(
-    connection: quinn::Connection,
+    connection: ServerQuicConnection,
     peer: SocketAddr,
     manager: Arc<NodeManager>,
     route_id: String,
@@ -160,8 +150,8 @@ async fn run_native_quic_data_plane(
     manager.active_transports.fetch_add(1, Ordering::Relaxed);
     let result = async {
         loop {
-            let (send, recv) = match connection.accept_bi().await {
-                Ok(streams) => streams,
+            let stream = match connection.accept_bi().await {
+                Ok(stream) => stream,
                 Err(err) => {
                     warn!(%peer, error = %err, "node QUIC-native stream accept ended");
                     break;
@@ -171,7 +161,7 @@ async fn run_native_quic_data_plane(
             let peer = peer;
             let route_id = route_id.clone();
             tokio::spawn(async move {
-                if let Err(err) = handle_native_quic_stream(send, recv, peer, route_id).await {
+                if let Err(err) = handle_native_quic_stream(stream, peer, route_id).await {
                     warn!(%peer, error = %err, "node QUIC-native stream failed");
                 }
             });
@@ -187,12 +177,10 @@ async fn run_native_quic_data_plane(
 }
 
 async fn handle_native_quic_stream(
-    send: quinn::SendStream,
-    recv: quinn::RecvStream,
+    mut stream: quic_stream::QuicBiStream,
     peer: SocketAddr,
     route_id: String,
 ) -> Result<()> {
-    let mut stream = quic_stream::QuicBiStream::new(send, recv);
     let header_started = std::time::Instant::now();
     let header = time::timeout(
         Duration::from_secs(10),
@@ -215,7 +203,7 @@ async fn handle_native_quic_stream(
             stream_id = header.stream_id,
             "node QUIC-native stream reset after route mismatch"
         );
-        stream.reset(quinn::VarInt::from_u32(quic_native::FLOW_RESET_ERROR_CODE));
+        stream.reset_u32(quic_native::FLOW_RESET_ERROR_CODE);
         bail!(
             "node QUIC-native route mismatch: expected {}, got {}",
             route_id,
@@ -247,7 +235,7 @@ async fn handle_native_quic_stream(
                 error = %err,
                 "node QUIC-native stream reset after egress open failure"
             );
-            stream.reset(quinn::VarInt::from_u32(quic_native::FLOW_RESET_ERROR_CODE));
+            stream.reset_u32(quic_native::FLOW_RESET_ERROR_CODE);
             return Err(err);
         }
     };
@@ -291,7 +279,7 @@ async fn handle_native_quic_stream(
             Err(err) => NativeQuicStreamOutcome::CopyFailed(err.into()),
         },
         _ = cancel_rx.changed() => {
-            stream.reset(quinn::VarInt::from_u32(quic_native::FLOW_RESET_ERROR_CODE));
+            stream.reset_u32(quic_native::FLOW_RESET_ERROR_CODE);
             remote.shutdown().await.ok();
             NativeQuicStreamOutcome::FirstByteTimeout
         }
@@ -323,7 +311,7 @@ async fn handle_native_quic_stream(
                 error = %err,
                 "node QUIC-native stream reset after copy failure"
             );
-            stream.reset(quinn::VarInt::from_u32(quic_native::FLOW_RESET_ERROR_CODE));
+            stream.reset_u32(quic_native::FLOW_RESET_ERROR_CODE);
             Err(err).context("node QUIC-native stream copy failed")
         }
     }
