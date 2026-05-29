@@ -84,8 +84,9 @@ fn provider_status_classification_is_stable() {
 #[test]
 fn remote_install_plan_preserves_auto_reporting_contract() {
     let args = install_args(cli::PersistMode::Auto);
+    let intent: ssh_proxy_core::intent::RemoteInstallIntent = (&args).into();
 
-    let plan = remote_service_install_plan("/home/me/bin/ssh_proxy", &args);
+    let plan = remote_service_install_plan("/home/me/bin/ssh_proxy", &intent);
 
     assert_eq!(plan.provider.kind, ServiceProviderKind::SystemdUser);
     assert_eq!(plan.reported_service_manager, "auto");

@@ -1,4 +1,3 @@
-use crate::cli;
 use ssh_proxy_core::{
     intent::RemoteInstallIntent,
     model::{PersistenceMode, RemotePlatform},
@@ -20,15 +19,6 @@ pub(crate) struct RemoteServiceInstallPlan {
 
 pub(crate) fn remote_service_install_plan(
     remote_path: &str,
-    args: &cli::InstallRemoteArgs,
-) -> RemoteServiceInstallPlan {
-    let intent: RemoteInstallIntent = args.into();
-    remote_service_install_plan_for_intent(remote_path, args, &intent)
-}
-
-pub(crate) fn remote_service_install_plan_for_intent(
-    remote_path: &str,
-    _args: &cli::InstallRemoteArgs,
     intent: &RemoteInstallIntent,
 ) -> RemoteServiceInstallPlan {
     let kind = provider_for_platform(intent.remote_platform, intent.persistence);

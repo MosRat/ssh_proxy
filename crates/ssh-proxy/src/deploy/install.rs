@@ -33,7 +33,7 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
     .await?;
 
     let (service_manager, install_report) =
-        install_remote_service(&client, &remote_path, &args).await?;
+        install_remote_service(&client, &remote_path, &args, &install_intent).await?;
     let descriptor = if !install_plan.requires_persistent_service() {
         None
     } else {
@@ -59,8 +59,9 @@ async fn install_remote_service(
     client: &ssh_client::Client,
     remote_path: &str,
     args: &cli::InstallRemoteArgs,
+    intent: &ssh_proxy_core::intent::RemoteInstallIntent,
 ) -> Result<(String, Option<Value>)> {
-    let plan = peer_lifecycle::service_provider::remote_service_install_plan(remote_path, args);
+    let plan = peer_lifecycle::service_provider::remote_service_install_plan(remote_path, intent);
     let spec = peer_lifecycle::spec::PeerLifecycleSpec::remote_peer(
         args.target.clone(),
         remote_path,

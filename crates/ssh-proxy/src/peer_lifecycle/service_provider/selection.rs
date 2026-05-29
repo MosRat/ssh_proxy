@@ -1,14 +1,6 @@
-use crate::cli;
 use ssh_proxy_core::model::{PersistenceMode, RemotePlatform};
 
 use super::kind::ServiceProviderKind;
-
-pub(crate) fn provider_for_remote_os(
-    remote_os: cli::RemoteOs,
-    persist: cli::PersistMode,
-) -> ServiceProviderKind {
-    provider_for_platform(remote_os.into(), persist.into())
-}
 
 pub(crate) fn provider_for_platform(
     remote_platform: RemotePlatform,
@@ -27,11 +19,11 @@ pub(super) fn provider_dependency_state(kind: ServiceProviderKind) -> &'static s
 
 pub(crate) fn provider_for_remote_report(
     service_manager: &str,
-    remote_os: cli::RemoteOs,
-    persist: cli::PersistMode,
+    remote_platform: RemotePlatform,
+    persistence: PersistenceMode,
 ) -> ServiceProviderKind {
     ServiceProviderKind::from_manager_name(service_manager)
-        .unwrap_or_else(|| provider_for_remote_os(remote_os, persist))
+        .unwrap_or_else(|| provider_for_platform(remote_platform, persistence))
 }
 
 #[cfg(test)]

@@ -187,8 +187,8 @@ pub(super) fn remote_peer_lifecycle_report_record(
     let mut report = if let Some(args) = install_args {
         let provider = peer_lifecycle::service_provider::provider_for_remote_report(
             service_manager,
-            args.remote_os,
-            args.persist,
+            args.remote_os.into(),
+            args.persist.into(),
         );
         let remote_path = remote_path
             .or(args.remote_path.as_deref())

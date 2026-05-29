@@ -4,7 +4,7 @@ use crate::cli;
 use ssh_proxy_core::{intent::RemoteInstallIntent, model::RemotePlatform};
 use ssh_proxy_lifecycle::service_provider::RemotePeerServiceSpec;
 
-use super::{artifacts::PeerArtifact, provider};
+use super::artifacts::PeerArtifact;
 
 pub(crate) fn remote_write_peer_artifact_command(
     artifact: PeerArtifact,
@@ -78,18 +78,6 @@ pub(crate) fn remote_nohup_stop_snippet(remote_tcp: SocketAddr) -> String {
 
 pub(crate) fn remote_nohup_files(remote_tcp: SocketAddr) -> (String, String, String, String) {
     ssh_proxy_lifecycle::service_provider::remote_nohup_files(remote_tcp)
-}
-
-pub(crate) fn token_arg(token: Option<&str>) -> String {
-    provider::token_arg(token)
-}
-
-pub(crate) fn node_daemon_extra_args(args: &cli::InstallRemoteArgs) -> String {
-    provider::node_daemon_extra_args(args)
-}
-
-pub(crate) fn sh_quote(value: &str) -> String {
-    provider::sh_quote(value)
 }
 
 fn service_spec(remote_path: &str, args: &cli::InstallRemoteArgs) -> RemotePeerServiceSpec {
