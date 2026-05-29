@@ -30,6 +30,7 @@ ssh-proxy-core.workspace = true
 ssh-proxy-daemon = { version = "0.1.1", path = "../ssh-proxy-daemon" }
 ssh-proxy-deploy = { version = "0.1.1", path = "../ssh-proxy-deploy" }
 ssh-proxy-lifecycle.workspace = true
+ssh-proxy-platform = { version = "0.1.1", path = "../ssh-proxy-platform" }
 ssh-proxy-protocol.workspace = true
 ssh-proxy-route = { version = "0.1.1", path = "../ssh-proxy-route" }
 ssh-proxy-service = { version = "0.1.1", path = "../ssh-proxy-service" }
