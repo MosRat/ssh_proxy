@@ -165,6 +165,38 @@ fn fast_check_scripts_keep_acceleration_contract() {
     }
 }
 
+#[test]
+fn workspace_crate_boundaries_remain_layered() {
+    let root = read_repo_file("Cargo.toml");
+    assert_contains(
+        &root,
+        "members = [\"crates/*\"]",
+        "root manifest should keep workspace members under crates",
+    );
+    assert_contains(
+        &root,
+        "default-members = [\"crates/ssh-proxy\"]",
+        "workspace should default to the ssh_proxy binary package",
+    );
+
+    assert_manifest_avoids(
+        "crates/ssh-proxy-core/Cargo.toml",
+        &["tokio", "russh", "clap", "windows-service"],
+    );
+    assert_manifest_avoids(
+        "crates/ssh-proxy-protocol/Cargo.toml",
+        &["clap", "russh", "ssh-proxy-lifecycle", "ssh-proxy-config"],
+    );
+    assert_manifest_avoids(
+        "crates/ssh-proxy-lifecycle/Cargo.toml",
+        &["clap", "russh", "windows-service", "ssh-proxy"],
+    );
+    assert_manifest_avoids(
+        "crates/ssh-proxy-config/Cargo.toml",
+        &["clap", "russh", "tokio", "windows-service", "ssh-proxy"],
+    );
+}
+
 fn read_repo_file(relative: &str) -> String {
     let path = workspace_root().join(relative);
     fs::read_to_string(&path)
@@ -196,6 +228,16 @@ fn manifest_has_direct_crate(manifest: &str, name: &str) -> bool {
         let trimmed = line.trim_start();
         trimmed.starts_with(&simple) || trimmed.starts_with(&quoted)
     })
+}
+
+fn assert_manifest_avoids(relative: &str, forbidden: &[&str]) {
+    let manifest = read_repo_file(relative);
+    for name in forbidden {
+        assert!(
+            !manifest_has_direct_crate(&manifest, name),
+            "{relative} should not depend on `{name}`"
+        );
+    }
 }
 
 fn collect_workspace_source_ffi_violations(violations: &mut Vec<String>) {
