@@ -4,10 +4,6 @@ use ssh_proxy_lifecycle::service_provider::RemotePeerServiceSpec;
 
 use super::artifacts::PeerArtifact;
 
-pub(crate) use ssh_proxy_lifecycle::service_provider::{
-    remote_nohup_files, remote_nohup_status_snippet, remote_nohup_stop_snippet,
-};
-
 pub(crate) fn remote_write_peer_artifact_command(
     artifact: PeerArtifact,
     remote_os: cli::RemoteOs,
