@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use ssh_proxy_deploy::{RemoteArtifactIntent, RemoteArtifactKind};
 
 use crate::{
     peer_lifecycle::{
@@ -8,15 +9,10 @@ use crate::{
     ssh_client,
 };
 
-use super::shell::shell_quote;
-
 #[derive(Debug, Clone)]
 pub(super) struct RemoteArtifactPlan {
-    server_dir: String,
-    relative_path: String,
+    intent: RemoteArtifactIntent,
     artifact: PeerArtifact,
-    backup_existing: bool,
-    label: String,
 }
 
 impl RemoteArtifactPlan {
@@ -28,24 +24,23 @@ impl RemoteArtifactPlan {
         label: &str,
     ) -> Self {
         Self {
-            server_dir: server_dir.to_string(),
-            relative_path: relative_path.to_string(),
+            intent: RemoteArtifactIntent::new(
+                server_dir,
+                relative_path,
+                remote_artifact_kind(artifact),
+                backup_existing,
+                label,
+            ),
             artifact,
-            backup_existing,
-            label: label.to_string(),
         }
     }
 
     pub(super) fn read_command(&self) -> String {
-        build_remote_setup_read_command(&self.server_dir, &self.relative_path)
+        self.intent.read_command()
     }
 
     pub(super) fn write_command(&self) -> String {
-        build_remote_setup_write_command(
-            &self.server_dir,
-            &self.relative_path,
-            self.backup_existing,
-        )
+        self.intent.write_command()
     }
 
     pub(super) async fn read(&self, client: &ssh_client::Client) -> Result<String> {
@@ -53,9 +48,9 @@ impl RemoteArtifactPlan {
         let bytes = executor
             .read_artifact(self.read_command())
             .await
-            .with_context(|| format!("{} failed", self.label))?;
+            .with_context(|| format!("{} failed", self.intent.label))?;
         String::from_utf8(bytes)
-            .with_context(|| format!("{} returned non-UTF-8 content", self.label))
+            .with_context(|| format!("{} returned non-UTF-8 content", self.intent.label))
     }
 
     pub(super) async fn write(&self, client: &ssh_client::Client, bytes: Vec<u8>) -> Result<()> {
@@ -63,7 +58,7 @@ impl RemoteArtifactPlan {
         executor
             .write_artifact(self.write_command(), self.artifact, bytes)
             .await
-            .with_context(|| format!("{} failed", self.label))
+            .with_context(|| format!("{} failed", self.intent.label))
     }
 }
 
@@ -76,7 +71,7 @@ pub(super) async fn read_remote_setup_artifact(
     RemoteArtifactPlan::new(
         server_dir,
         relative_path,
-        PeerArtifact::VscodeRemoteStatus,
+        peer_artifact_for_remote_path(relative_path),
         false,
         label,
     )
@@ -98,27 +93,20 @@ pub(super) async fn write_remote_setup_artifact(
         .await
 }
 
-pub(super) fn build_remote_setup_read_command(server_dir: &str, relative_path: &str) -> String {
-    format!(
-        "set -eu; server_dir={server_dir}; relative_path={relative_path}; target=\"$HOME/$server_dir/$relative_path\"; if [ -f \"$target\" ]; then cat \"$target\"; fi",
-        server_dir = shell_quote(server_dir),
-        relative_path = shell_quote(relative_path),
-    )
+fn remote_artifact_kind(artifact: PeerArtifact) -> RemoteArtifactKind {
+    match artifact {
+        PeerArtifact::VscodeMachineSettings => RemoteArtifactKind::VscodeMachineSettings,
+        PeerArtifact::VscodeServerEnv => RemoteArtifactKind::VscodeServerEnv,
+        PeerArtifact::VscodeRemoteStatus => RemoteArtifactKind::VscodeRemoteStatus,
+        _ => unreachable!("remote setup only writes VS Code setup artifacts"),
+    }
 }
 
-pub(super) fn build_remote_setup_write_command(
-    server_dir: &str,
-    relative_path: &str,
-    backup_existing: bool,
-) -> String {
-    let backup = if backup_existing {
-        "if [ -f \"$target\" ]; then cp \"$target\" \"$target.vscode-remote-proxy.bak\" 2>/dev/null || true; fi; "
-    } else {
-        ""
-    };
-    format!(
-        "set -eu; server_dir={server_dir}; relative_path={relative_path}; target=\"$HOME/$server_dir/$relative_path\"; mkdir -p \"$(dirname \"$target\")\"; tmp=\"$target.tmp.$$\"; umask 077; cat > \"$tmp\"; {backup}mv \"$tmp\" \"$target\"; chmod 600 \"$target\" 2>/dev/null || true",
-        server_dir = shell_quote(server_dir),
-        relative_path = shell_quote(relative_path),
-    )
+fn peer_artifact_for_remote_path(relative_path: &str) -> PeerArtifact {
+    match relative_path {
+        "data/Machine/settings.json" => PeerArtifact::VscodeMachineSettings,
+        "server-env-setup" => PeerArtifact::VscodeServerEnv,
+        "remote-proxy-status.json" => PeerArtifact::VscodeRemoteStatus,
+        _ => PeerArtifact::VscodeRemoteStatus,
+    }
 }

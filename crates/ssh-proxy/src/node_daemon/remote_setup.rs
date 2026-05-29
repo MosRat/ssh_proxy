@@ -565,8 +565,8 @@ mod tests {
 
     use crate::cli;
 
-    use super::artifacts::{build_remote_setup_read_command, build_remote_setup_write_command};
     use super::*;
+    use ssh_proxy_deploy::{RemoteArtifactIntent, RemoteArtifactKind};
 
     fn spec() -> ProxySessionSpec {
         ProxySessionSpec {
@@ -635,9 +635,22 @@ mod tests {
 
     #[test]
     fn remote_setup_artifact_commands_use_stdin_without_content_embedding() {
-        let write =
-            build_remote_setup_write_command(".vscode-server", "data/Machine/settings.json", true);
-        let read = build_remote_setup_read_command(".vscode-server", "remote-proxy-status.json");
+        let write = RemoteArtifactIntent::new(
+            ".vscode-server",
+            "data/Machine/settings.json",
+            RemoteArtifactKind::VscodeMachineSettings,
+            true,
+            "write settings",
+        )
+        .write_command();
+        let read = RemoteArtifactIntent::new(
+            ".vscode-server",
+            "remote-proxy-status.json",
+            RemoteArtifactKind::VscodeRemoteStatus,
+            false,
+            "read status",
+        )
+        .read_command();
 
         assert!(write.contains("cat > \"$tmp\""));
         assert!(write.contains(".vscode-remote-proxy.bak"));
