@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use ssh_proxy_transport::proxy::{
-    http::{HttpRequest, HttpRequestKind, write_http_error},
+    http::write_http_error,
     socks5::{
         Command, Reply, Request, SOCKS_VERSION, build_udp_packet, negotiate_no_auth,
         parse_udp_packet, reply,
@@ -22,6 +22,9 @@ use tracing::warn;
 use crate::{cli, controller, data_plane, protocol::UdpDatagram, quic_native, ssh_native};
 
 mod relay;
+mod tunnel;
+
+use tunnel::{TunnelBackend, TunnelResponse};
 
 pub async fn handle_client(
     mut stream: TcpStream,
@@ -32,12 +35,12 @@ pub async fn handle_client(
     let mut first = [0_u8; 1];
     stream.peek(&mut first).await?;
     if first[0] != SOCKS_VERSION {
-        return handle_http_proxy(stream, peer, state).await;
+        return tunnel::handle_http_proxy(stream, peer, TunnelBackend::spx(state)).await;
     }
     negotiate_no_auth(&mut stream).await?;
     let request = Request::read_from(&mut stream).await?;
     match request.command {
-        Command::Connect => handle_connect(stream, peer, request, state).await,
+        Command::Connect => handle_connect(stream, peer, request, TunnelBackend::spx(state)).await,
         Command::UdpAssociate => handle_udp_associate(stream, peer, state).await,
         Command::Bind => {
             reply(
@@ -58,12 +61,12 @@ pub async fn handle_fixed_target(
     state: Arc<controller::SharedState>,
 ) -> Result<()> {
     let _ = stream.set_nodelay(true);
-    open_tunnel(
+    tunnel::open_tunnel(
         stream,
         peer,
         target.host,
         target.port,
-        state,
+        TunnelBackend::spx(state),
         TunnelResponse::None,
         Vec::new(),
     )
@@ -79,18 +82,18 @@ pub async fn handle_client_ssh_native(
     let mut first = [0_u8; 1];
     stream.peek(&mut first).await?;
     if first[0] != SOCKS_VERSION {
-        return handle_http_proxy_ssh_native(stream, peer, state).await;
+        return tunnel::handle_http_proxy(stream, peer, TunnelBackend::ssh_native(state)).await;
     }
     negotiate_no_auth(&mut stream).await?;
     let request = Request::read_from(&mut stream).await?;
     match request.command {
         Command::Connect => {
-            open_tunnel_ssh_native(
+            tunnel::open_tunnel(
                 stream,
                 peer,
                 request.host,
                 request.port,
-                state,
+                TunnelBackend::ssh_native(state),
                 TunnelResponse::SocksSuccess,
                 Vec::new(),
             )
@@ -115,12 +118,12 @@ pub async fn handle_fixed_target_ssh_native(
     state: Arc<ssh_native::State>,
 ) -> Result<()> {
     let _ = stream.set_nodelay(true);
-    open_tunnel_ssh_native(
+    tunnel::open_tunnel(
         stream,
         peer,
         target.host,
         target.port,
-        state,
+        TunnelBackend::ssh_native(state),
         TunnelResponse::None,
         Vec::new(),
     )
@@ -136,19 +139,23 @@ pub async fn handle_client_quic_native(
     let mut first = [0_u8; 1];
     stream.peek(&mut first).await?;
     if first[0] != SOCKS_VERSION {
-        return handle_http_proxy_quic_native(stream, peer, state).await;
+        return tunnel::handle_http_proxy(
+            stream,
+            peer,
+            TunnelBackend::quic_native(state, quic_native::TargetKind::TcpConnect),
+        )
+        .await;
     }
     negotiate_no_auth(&mut stream).await?;
     let request = Request::read_from(&mut stream).await?;
     match request.command {
         Command::Connect => {
-            open_tunnel_quic_native(
+            tunnel::open_tunnel(
                 stream,
                 peer,
                 request.host,
                 request.port,
-                quic_native::TargetKind::TcpConnect,
-                state,
+                TunnelBackend::quic_native(state, quic_native::TargetKind::TcpConnect),
                 TunnelResponse::SocksSuccess,
                 Vec::new(),
             )
@@ -173,13 +180,12 @@ pub async fn handle_fixed_target_quic_native(
     state: Arc<quic_native::State>,
 ) -> Result<()> {
     let _ = stream.set_nodelay(true);
-    open_tunnel_quic_native(
+    tunnel::open_tunnel(
         stream,
         peer,
         target.host,
         target.port,
-        quic_native::TargetKind::FixedTcp,
-        state,
+        TunnelBackend::quic_native(state, quic_native::TargetKind::FixedTcp),
         TunnelResponse::None,
         Vec::new(),
     )
@@ -190,154 +196,20 @@ async fn handle_connect(
     stream: TcpStream,
     peer: SocketAddr,
     request: Request,
-    state: Arc<controller::SharedState>,
+    backend: TunnelBackend,
 ) -> Result<()> {
     let host = request.host;
     let port = request.port;
-    open_tunnel(
+    tunnel::open_tunnel(
         stream,
         peer,
         host,
         port,
-        state,
+        backend,
         TunnelResponse::SocksSuccess,
         Vec::new(),
     )
     .await
-}
-
-async fn handle_http_proxy(
-    mut stream: TcpStream,
-    peer: SocketAddr,
-    state: Arc<controller::SharedState>,
-) -> Result<()> {
-    let request = match HttpRequest::read_from(&mut stream).await {
-        Ok(request) => request,
-        Err(err) => {
-            let _ = write_http_error(&mut stream, 400, "Bad Request").await;
-            return Err(err);
-        }
-    };
-    match request.kind {
-        HttpRequestKind::Connect { host, port } => {
-            open_tunnel(
-                stream,
-                peer,
-                host,
-                port,
-                state,
-                TunnelResponse::HttpConnect,
-                Vec::new(),
-            )
-            .await
-        }
-        HttpRequestKind::Forward {
-            host,
-            port,
-            request,
-        } => {
-            open_tunnel(
-                stream,
-                peer,
-                host,
-                port,
-                state,
-                TunnelResponse::None,
-                request,
-            )
-            .await
-        }
-    }
-}
-
-async fn handle_http_proxy_ssh_native(
-    mut stream: TcpStream,
-    peer: SocketAddr,
-    state: Arc<ssh_native::State>,
-) -> Result<()> {
-    let request = match HttpRequest::read_from(&mut stream).await {
-        Ok(request) => request,
-        Err(err) => {
-            let _ = write_http_error(&mut stream, 400, "Bad Request").await;
-            return Err(err);
-        }
-    };
-    match request.kind {
-        HttpRequestKind::Connect { host, port } => {
-            open_tunnel_ssh_native(
-                stream,
-                peer,
-                host,
-                port,
-                state,
-                TunnelResponse::HttpConnect,
-                Vec::new(),
-            )
-            .await
-        }
-        HttpRequestKind::Forward {
-            host,
-            port,
-            request,
-        } => {
-            open_tunnel_ssh_native(
-                stream,
-                peer,
-                host,
-                port,
-                state,
-                TunnelResponse::None,
-                request,
-            )
-            .await
-        }
-    }
-}
-
-async fn handle_http_proxy_quic_native(
-    mut stream: TcpStream,
-    peer: SocketAddr,
-    state: Arc<quic_native::State>,
-) -> Result<()> {
-    let request = match HttpRequest::read_from(&mut stream).await {
-        Ok(request) => request,
-        Err(err) => {
-            let _ = write_http_error(&mut stream, 400, "Bad Request").await;
-            return Err(err);
-        }
-    };
-    match request.kind {
-        HttpRequestKind::Connect { host, port } => {
-            open_tunnel_quic_native(
-                stream,
-                peer,
-                host,
-                port,
-                quic_native::TargetKind::TcpConnect,
-                state,
-                TunnelResponse::HttpConnect,
-                Vec::new(),
-            )
-            .await
-        }
-        HttpRequestKind::Forward {
-            host,
-            port,
-            request,
-        } => {
-            open_tunnel_quic_native(
-                stream,
-                peer,
-                host,
-                port,
-                quic_native::TargetKind::TcpConnect,
-                state,
-                TunnelResponse::None,
-                request,
-            )
-            .await
-        }
-    }
 }
 
 async fn open_tunnel(
@@ -533,12 +405,6 @@ async fn open_tunnel_quic_native(
     }
 
     relay::relay_quic_native_tcp(stream, remote, initial_remote, state).await
-}
-
-enum TunnelResponse {
-    None,
-    SocksSuccess,
-    HttpConnect,
 }
 
 async fn write_tunnel_open_error(stream: &mut TcpStream, response: &TunnelResponse) -> Result<()> {
