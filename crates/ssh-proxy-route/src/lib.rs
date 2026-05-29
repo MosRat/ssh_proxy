@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ssh_proxy_core::report::RuntimeDecisionReport;
 
+mod status;
+
+pub use status::{RouteReadinessReport, RouteStats, RouteStatusReport, RouteTaskRecord};
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoutePreflightReport {
     #[serde(skip_serializing_if = "Option::is_none")]

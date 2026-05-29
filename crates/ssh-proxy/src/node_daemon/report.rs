@@ -5,8 +5,6 @@ use serde_json::Value;
 
 use crate::{config, peer_transport};
 
-use super::routes;
-
 #[derive(Debug, Clone)]
 pub(super) struct NodeDescriptorReport {
     pub(super) name: String,
@@ -119,85 +117,6 @@ impl Serialize for NodeDescriptorReport {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct RouteStatusReport<'a> {
-    pub(super) id: &'a str,
-    pub(super) direction: &'a str,
-    pub(super) detail: &'a str,
-    pub(super) listen: Option<String>,
-    pub(super) peer: &'a Option<String>,
-    pub(super) persist: bool,
-    pub(super) created_at_unix: u64,
-    pub(super) fallback_reason: &'a Option<String>,
-    pub(super) task_finished: bool,
-    pub(super) runtime: Value,
-    pub(super) state: &'a str,
-    pub(super) last_error: &'a Option<String>,
-    pub(super) started_at: u64,
-    pub(super) updated_at: u64,
-    pub(super) readiness: RouteReadinessReport<'a>,
-    pub(super) managed_by: &'static str,
-    pub(super) job_id: String,
-    pub(super) stats: &'a routes::RouteStats,
-    pub(super) link: Value,
-}
-
-impl RouteStatusReport<'_> {
-    pub(super) fn to_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct RouteReadinessReport<'a> {
-    pub(super) state: &'a str,
-    pub(super) phase: &'static str,
-    pub(super) retry_count: u64,
-    pub(super) attempts: u64,
-    pub(super) blocker: &'a Option<String>,
-    pub(super) next_action: &'static str,
-    pub(super) managed_by: &'static str,
-    pub(super) job_id: String,
-    pub(super) route_id: &'a str,
-    pub(super) peer: &'a Option<String>,
-    pub(super) updated_at: u64,
-}
-
-impl<'a> RouteReadinessReport<'a> {
-    pub(super) fn from_stats(
-        id: &'a str,
-        peer: &'a Option<String>,
-        stats: &'a routes::RouteStats,
-    ) -> Self {
-        let phase = match stats.state.as_str() {
-            "running" => "ready",
-            "failed" | "error" => "failed",
-            "restarting" => "starting",
-            "stopping" | "stopped" => "stopped",
-            _ => "starting",
-        };
-        let next_action = match phase {
-            "ready" => "none",
-            "failed" => "restart-route",
-            "stopped" => "remove-or-restart-route",
-            _ => "wait",
-        };
-        Self {
-            state: &stats.state,
-            phase,
-            retry_count: stats.restart_count,
-            attempts: stats.attempts,
-            blocker: &stats.last_error,
-            next_action,
-            managed_by: "current-daemon",
-            job_id: format!("route:{id}"),
-            route_id: id,
-            peer,
-            updated_at: stats.updated_at_unix,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,49 +170,5 @@ mod tests {
         assert_eq!(value["endpoints"]["control"], "tcp://127.0.0.1:19081");
         assert_eq!(value["transport_protocols"][0], "plain-tcp");
         assert_eq!(value["auth"]["control_token"], true);
-    }
-
-    #[test]
-    fn route_status_report_preserves_public_shape() {
-        let stats = routes::RouteStats {
-            state: "failed".to_string(),
-            attempts: 2,
-            restart_count: 1,
-            last_error: Some("boom".to_string()),
-            last_event: Some("failed".to_string()),
-            started_at_unix: 10,
-            updated_at_unix: 20,
-        };
-        let peer = Some("remote".to_string());
-        let readiness = RouteReadinessReport::from_stats("route-1", &peer, &stats);
-        let report = RouteStatusReport {
-            id: "route-1",
-            direction: "forward",
-            detail: "127.0.0.1:8080 -> remote",
-            listen: Some("127.0.0.1:8080".to_string()),
-            peer: &peer,
-            persist: true,
-            created_at_unix: 1,
-            fallback_reason: &None,
-            task_finished: false,
-            runtime: serde_json::json!({"selected_transport": "ssh-native"}),
-            state: &stats.state,
-            last_error: &stats.last_error,
-            started_at: stats.started_at_unix,
-            updated_at: stats.updated_at_unix,
-            readiness,
-            managed_by: "current-daemon",
-            job_id: "route:route-1".to_string(),
-            stats: &stats,
-            link: Value::Null,
-        };
-
-        let value = report.to_value();
-
-        assert_eq!(value["id"], "route-1");
-        assert_eq!(value["readiness"]["phase"], "failed");
-        assert_eq!(value["readiness"]["next_action"], "restart-route");
-        assert_eq!(value["runtime"]["selected_transport"], "ssh-native");
-        assert_eq!(value["stats"]["restart_count"], 1);
     }
 }

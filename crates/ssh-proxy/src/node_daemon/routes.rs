@@ -3,6 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+pub(super) use ssh_proxy_route::RouteStats;
 use tokio::{sync::Mutex, task::JoinHandle};
 use tracing::info;
 
@@ -87,32 +88,6 @@ impl RouteLinkState {
 pub(super) enum RouteSpec {
     Forward { proxy: cli::ProxyArgs },
     Reverse { reverse: cli::ReverseTaskArgs },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RouteStats {
-    pub(super) state: String,
-    pub(super) attempts: u64,
-    pub(super) restart_count: u64,
-    pub(super) last_error: Option<String>,
-    pub(super) last_event: Option<String>,
-    pub(super) started_at_unix: u64,
-    pub(super) updated_at_unix: u64,
-}
-
-impl Default for RouteStats {
-    fn default() -> Self {
-        let now = now_unix();
-        Self {
-            state: "starting".to_string(),
-            attempts: 0,
-            restart_count: 0,
-            last_error: None,
-            last_event: Some("route task created".to_string()),
-            started_at_unix: now,
-            updated_at_unix: now,
-        }
-    }
 }
 
 impl NodeManager {

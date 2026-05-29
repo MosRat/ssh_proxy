@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
+use ssh_proxy_route::RouteTaskRecord;
 use tokio::{
     sync::{Mutex, Notify, oneshot},
     task::JoinHandle,
@@ -321,27 +322,19 @@ impl NodeManager {
                 Some(state) => state.status_value().await,
                 None => Value::Null,
             };
-            let readiness = report::RouteReadinessReport::from_stats(id, &task.peer, &stats);
             running_routes.push(
-                report::RouteStatusReport {
-                    id,
-                    direction: &task.direction,
-                    detail: &task.detail,
+                RouteTaskRecord {
+                    id: id.clone(),
+                    direction: task.direction.clone(),
+                    detail: task.detail.clone(),
                     listen: task.listen.map(|addr| addr.to_string()),
-                    peer: &task.peer,
+                    peer: task.peer.clone(),
                     persist: task.persist,
                     created_at_unix: task.created_at_unix,
-                    fallback_reason: &task.fallback_reason,
+                    fallback_reason: task.fallback_reason.clone(),
                     task_finished: task.handle.is_finished(),
                     runtime: task.spec.runtime_metadata(),
-                    state: &stats.state,
-                    last_error: &stats.last_error,
-                    started_at: stats.started_at_unix,
-                    updated_at: stats.updated_at_unix,
-                    readiness,
-                    managed_by: "current-daemon",
-                    job_id: format!("route:{id}"),
-                    stats: &stats,
+                    stats,
                     link,
                 }
                 .to_value(),
