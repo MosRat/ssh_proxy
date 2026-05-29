@@ -4,6 +4,7 @@ mod preflight;
 mod request;
 mod response;
 mod runner;
+mod runtime_decision;
 mod selection;
 mod transport;
 pub(crate) use builders::{
@@ -20,15 +21,12 @@ pub(crate) use response::{
 };
 pub(crate) use runner::explain_plan;
 pub use runner::run;
+pub(crate) use runtime_decision::RouteRuntimeDecision;
 #[cfg(test)]
 pub(crate) use selection::local_peer_addr;
 pub(crate) use selection::{RemoteUsePlan, remote_use_decision};
 #[cfg(test)]
 pub(crate) use transport::parse_remote_transport;
-pub(crate) use transport::{
-    direct_transport_policy, direct_transport_policy_reason, remote_transport_name,
-    ssh_data_plane_reason, ssh_mode_name, ssh_mode_reason, tls_peer_auth_mode,
-};
 
 #[cfg(test)]
 mod tests;
