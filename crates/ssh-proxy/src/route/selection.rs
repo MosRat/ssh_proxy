@@ -1,22 +1,12 @@
 use std::net::SocketAddr;
 
-use anyhow::{Result, bail};
+use anyhow::{Error, Result, bail};
+use ssh_proxy_route::{RemoteUseConnectMode, RemoteUseInput};
 
 use crate::{cli, config, peer_lifecycle};
 
 pub(crate) use peer_lifecycle::connection::TransportSelection;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RemoteUsePlan {
-    Direct(SocketAddr),
-    ReverseLink,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RemoteUseDecision {
-    pub(crate) plan: RemoteUsePlan,
-    pub(crate) fallback_reason: Option<String>,
-}
+pub(crate) use ssh_proxy_route::{RemoteUseDecision, RemoteUsePlan};
 
 pub(crate) fn transport_selection_policy(
     args: &cli::RouteArgs,
@@ -60,58 +50,43 @@ pub(crate) fn remote_use_decision(
     args: &cli::RouteArgs,
     config: &config::AppConfig,
 ) -> Result<RemoteUseDecision> {
-    match args.connect_mode {
-        cli::RouteConnectMode::ReverseLink => {
-            return Ok(RemoteUseDecision {
-                plan: RemoteUsePlan::ReverseLink,
-                fallback_reason: Some("--connect-mode reverse-link requested".to_string()),
-            });
-        }
-        cli::RouteConnectMode::Direct => {
-            return local_peer_addr(args, config).map(|addr| RemoteUseDecision {
-                plan: RemoteUsePlan::Direct(addr),
-                fallback_reason: None,
-            });
-        }
-        cli::RouteConnectMode::Auto => {}
-    }
-
-    match local_peer_addr(args, config) {
-        Ok(addr) => Ok(RemoteUseDecision {
-            plan: RemoteUsePlan::Direct(addr),
-            fallback_reason: None,
-        }),
-        Err(err) => {
+    let input = remote_use_input(args, config);
+    let decision = ssh_proxy_route::decide_remote_use(&input).map_err(Error::msg)?;
+    if matches!(args.connect_mode, cli::RouteConnectMode::Auto)
+        && matches!(decision.plan, RemoteUsePlan::ReverseLink)
+    {
+        if let Some(err) = decision.fallback_reason.as_deref() {
             tracing::info!(
                 error = %err,
                 "direct remote-uses-local peer transport is unavailable; using local-initiated reverse link"
             );
-            Ok(RemoteUseDecision {
-                plan: RemoteUsePlan::ReverseLink,
-                fallback_reason: Some(err.to_string()),
-            })
         }
     }
+    Ok(decision)
 }
 
 pub(crate) fn local_peer_addr(
     args: &cli::RouteArgs,
     config: &config::AppConfig,
 ) -> Result<SocketAddr> {
-    if let Some(addr) = args.local_peer {
-        return Ok(addr);
+    let input = remote_use_input(args, config);
+    ssh_proxy_route::resolve_remote_use_local_peer(&input).map_err(Error::msg)
+}
+
+fn remote_use_input(args: &cli::RouteArgs, config: &config::AppConfig) -> RemoteUseInput {
+    RemoteUseInput {
+        connect_mode: remote_use_connect_mode(args.connect_mode),
+        local_peer: args.local_peer,
+        daemon_transport_listen: config.daemon.transport_listen,
     }
-    let Some(addr) = config.daemon.transport_listen else {
-        bail!(
-            "--direction remote-uses-local needs --local-peer or [daemon].transport_listen; run `ssh_proxy daemon install --scope system --elevate` first"
-        );
-    };
-    if addr.ip().is_loopback() {
-        bail!(
-            "local daemon transport {addr} is loopback-only; pass --local-peer <reachable-ip:port>, or use a public/TLS/QUIC relay route when this machine is behind NAT"
-        );
+}
+
+fn remote_use_connect_mode(mode: cli::RouteConnectMode) -> RemoteUseConnectMode {
+    match mode {
+        cli::RouteConnectMode::Auto => RemoteUseConnectMode::Auto,
+        cli::RouteConnectMode::Direct => RemoteUseConnectMode::Direct,
+        cli::RouteConnectMode::ReverseLink => RemoteUseConnectMode::ReverseLink,
     }
-    Ok(addr)
 }
 
 fn parse_deploy(value: &str) -> Result<cli::DeployMode> {

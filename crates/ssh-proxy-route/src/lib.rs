@@ -7,6 +7,7 @@ mod decision;
 mod plan;
 mod policy;
 mod preflight;
+mod remote_use;
 mod status;
 
 pub use conflict::{
@@ -28,6 +29,10 @@ pub use preflight::{
     RouteFallbackDecision, RouteFallbackInput, RoutePreflightDecision, RoutePreflightInput,
     RouteProbeResult, candidate_failures, decide_route_fallback, decide_route_preflight,
     is_direct_probe_protocol,
+};
+pub use remote_use::{
+    RemoteUseConnectMode, RemoteUseDecision, RemoteUseInput, RemoteUsePlan, decide_remote_use,
+    resolve_remote_use_local_peer,
 };
 pub use status::{RouteReadinessReport, RouteStats, RouteStatusReport, RouteTaskRecord};
 
