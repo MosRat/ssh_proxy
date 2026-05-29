@@ -110,6 +110,10 @@ impl RemoteSetupScriptIntent {
             class,
         }
     }
+
+    pub fn fallback_shell(label: impl Into<String>) -> Self {
+        Self::new("sh -s", label, ExternalActionClass::FallbackProvider)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

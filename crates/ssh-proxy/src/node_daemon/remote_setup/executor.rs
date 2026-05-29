@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use serde_json::Value;
-use ssh_proxy_deploy::{RemoteAdminIntent, RemoteSetupExecutionPlan};
+use ssh_proxy_deploy::{
+    RemoteAdminIntent, RemoteSetupExecutionPlan, RemoteSetupScriptIntent,
+    build_cleanup_script_with_git, build_git_config_script,
+};
 use tracing::info;
 
 use crate::{
@@ -11,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    build_cleanup_script_with_git, build_git_config_script, cleanup_remote_machine_settings,
+    cleanup_remote_machine_settings,
     payload::{build_proxy_env, setup_hash, setup_payload},
     write_remote_server_env_setup, write_remote_status_file,
 };
@@ -64,6 +67,7 @@ pub(in crate::node_daemon) async fn apply_remote_settings(
     {
         run_script(
             &client,
+            &RemoteSetupScriptIntent::fallback_shell("apply remote Git proxy config"),
             &build_git_config_script(
                 remote_url,
                 &spec.workspace_paths,
@@ -71,7 +75,6 @@ pub(in crate::node_daemon) async fn apply_remote_settings(
                 spec.apply_policy.git_workspace,
                 spec.apply_policy.git_force_override,
             ),
-            "apply remote Git proxy config",
         )
         .await?;
     }
@@ -126,12 +129,12 @@ pub(in crate::node_daemon) async fn cleanup_remote_settings(
     };
     run_script(
         &client,
+        &RemoteSetupScriptIntent::fallback_shell("cleanup remote proxy settings"),
         &build_cleanup_script_with_git(
             &spec.apply_policy.server_dir,
             &spec.workspace_paths,
             !git_cleanup_done,
         ),
-        "cleanup remote proxy settings",
     )
     .await?;
     let _ = remote_url;
@@ -241,11 +244,15 @@ async fn run_remote_admin_intents(
     Ok(true)
 }
 
-async fn run_script(client: &ssh_client::Client, script: &str, label: &str) -> Result<()> {
+async fn run_script(
+    client: &ssh_client::Client,
+    intent: &RemoteSetupScriptIntent,
+    script: &str,
+) -> Result<()> {
     let output = client
-        .exec_capture("sh -s".to_string(), Some(script.as_bytes().to_vec()))
+        .exec_capture(intent.command.clone(), Some(script.as_bytes().to_vec()))
         .await
-        .with_context(|| format!("{label} failed to start"))?;
+        .with_context(|| format!("{} failed to start", intent.label))?;
     if output.exit_status != 0 {
         let stderr = output.stderr.trim();
         let stdout = output.stdout.trim();
@@ -256,8 +263,10 @@ async fn run_script(client: &ssh_client::Client, script: &str, label: &str) -> R
             (true, true) => "no output".to_string(),
         };
         return Err(anyhow!(
-            "{label} failed with status {}: {}",
+            "{} failed with status {} as {}: {}",
+            intent.label,
             output.exit_status,
+            intent.class.as_str(),
             detail
         ));
     }

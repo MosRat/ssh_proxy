@@ -7,6 +7,7 @@ mod commands;
 mod install;
 mod remote_admin;
 mod remote_setup;
+mod remote_setup_scripts;
 
 pub use commands::{
     default_persistent_remote_path_command, remote_clean_command, remote_doctor_command,
@@ -23,6 +24,9 @@ pub use remote_admin::{
 pub use remote_setup::{
     RemoteArtifactIntent, RemoteArtifactKind, RemoteSetupExecutionPlan, RemoteSetupPayloadInput,
     RemoteSetupPlan, RemoteSetupScriptIntent, build_proxy_env, build_remote_setup_payload,
+};
+pub use remote_setup_scripts::{
+    build_cleanup_script_with_git, build_git_config_script, build_server_env_setup_content,
 };
 
 #[derive(Debug, Clone)]
