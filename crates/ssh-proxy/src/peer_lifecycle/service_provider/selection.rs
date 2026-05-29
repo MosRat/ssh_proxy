@@ -1,4 +1,5 @@
 use crate::cli;
+use ssh_proxy_core::model::{PersistenceMode, RemotePlatform};
 
 use super::kind::ServiceProviderKind;
 
@@ -6,15 +7,22 @@ pub(crate) fn provider_for_remote_os(
     remote_os: cli::RemoteOs,
     persist: cli::PersistMode,
 ) -> ServiceProviderKind {
-    match persist {
-        cli::PersistMode::Systemd => ServiceProviderKind::SystemdUser,
-        cli::PersistMode::Nohup => ServiceProviderKind::NohupSupervisor,
-        cli::PersistMode::Launchd => ServiceProviderKind::LaunchdUser,
-        cli::PersistMode::Schtasks => ServiceProviderKind::WindowsScheduledTaskUser,
-        cli::PersistMode::None => ServiceProviderKind::NohupSupervisor,
-        cli::PersistMode::Auto => match remote_os {
-            cli::RemoteOs::Windows => ServiceProviderKind::WindowsScheduledTaskUser,
-            cli::RemoteOs::Unix | cli::RemoteOs::Auto => ServiceProviderKind::SystemdUser,
+    provider_for_platform(remote_os.into(), persist.into())
+}
+
+pub(crate) fn provider_for_platform(
+    remote_platform: RemotePlatform,
+    persistence: PersistenceMode,
+) -> ServiceProviderKind {
+    match persistence {
+        PersistenceMode::Systemd => ServiceProviderKind::SystemdUser,
+        PersistenceMode::Nohup => ServiceProviderKind::NohupSupervisor,
+        PersistenceMode::Launchd => ServiceProviderKind::LaunchdUser,
+        PersistenceMode::Schtasks => ServiceProviderKind::WindowsScheduledTaskUser,
+        PersistenceMode::None => ServiceProviderKind::NohupSupervisor,
+        PersistenceMode::Auto => match remote_platform {
+            RemotePlatform::Windows => ServiceProviderKind::WindowsScheduledTaskUser,
+            RemotePlatform::Unix | RemotePlatform::Auto => ServiceProviderKind::SystemdUser,
         },
     }
 }
@@ -54,11 +62,11 @@ mod tests {
     #[test]
     fn remote_provider_defaults_match_production_order() {
         assert_eq!(
-            provider_for_remote_os(cli::RemoteOs::Windows, cli::PersistMode::Auto),
+            provider_for_platform(RemotePlatform::Windows, PersistenceMode::Auto),
             ServiceProviderKind::WindowsScheduledTaskUser
         );
         assert_eq!(
-            provider_for_remote_os(cli::RemoteOs::Auto, cli::PersistMode::Auto),
+            provider_for_platform(RemotePlatform::Auto, PersistenceMode::Auto),
             ServiceProviderKind::SystemdUser
         );
     }
