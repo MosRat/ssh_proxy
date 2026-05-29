@@ -33,6 +33,7 @@ mod quic_transport;
 mod remote_peer;
 mod remote_setup;
 mod remote_ssh;
+mod report;
 mod routes;
 mod state;
 mod transport;
@@ -59,10 +60,6 @@ pub(crate) fn peer_protocol_version() -> u16 {
 
 pub(crate) fn peer_protocol_features() -> Vec<String> {
     peer_transport::default_features()
-}
-
-fn feature_bits() -> Value {
-    Value::Object(peer_transport::default_feature_bits())
 }
 
 fn service_instance_id(node_id: Option<&str>, os_user: &str, control_endpoint: &str) -> String {
@@ -507,46 +504,42 @@ impl NodeManager {
             .as_ref()
             .and_then(|path| config::file_sha256_fingerprint(path));
         let has_token = self.token_value().is_some();
-        Ok(json!({
-            "ok": true,
-            "kind": "peer_descriptor",
-            "name": self.name,
-            "node_id": node_id,
-            "node_name": node_name,
-            "service_instance_id": service_instance_id,
-            "version": env!("CARGO_PKG_VERSION"),
-            "os": std::env::consts::OS,
-            "arch": std::env::consts::ARCH,
-            "os_user": os_user,
-            "data_dir": data_dir,
-            "control_api_version": control_protocol::NODE_CONTROL_VERSION,
-            "peer_protocol_version": peer_transport::PEER_VERSION,
-            "features": peer_transport::default_features(),
-            "feature_bits": feature_bits(),
-            "control_endpoint": self.control_endpoint.to_string(),
-            "endpoints": {
-                "control": self.control_endpoint.to_string(),
-                "transport": self.transport.map(|addr| addr.to_string()),
-                "tls_transport": self.tls_transport.map(|addr| addr.to_string()),
-                "quic_transport": self.quic_transport.map(|addr| addr.to_string()),
+        Ok(report::NodeDescriptorReport {
+            name: self.name.clone(),
+            node_id,
+            node_name,
+            service_instance_id,
+            os_user,
+            data_dir,
+            control_api_version: control_protocol::NODE_CONTROL_VERSION,
+            peer_protocol_version: peer_transport::PEER_VERSION,
+            features: peer_transport::default_features(),
+            feature_bits: peer_transport::default_feature_bits(),
+            control_endpoint: self.control_endpoint.to_string(),
+            endpoints: report::NodeDescriptorEndpoints {
+                control: self.control_endpoint.to_string(),
+                transport: self.transport,
+                tls_transport: self.tls_transport,
+                quic_transport: self.quic_transport,
             },
-            "transport_protocols": self.transport_protocols(),
-            "quic_transport_options": self.quic_options,
-            "quic_runtime": peer_transport::quic_runtime_diagnostics(self.quic_options),
-            "auth": {
-                "control_token": has_token,
-                "transport_token": has_token,
-                "token_metadata": token_metadata,
-                "token_generation": token_generation,
-                "tls_server_cert": self.tls_cert.is_some() && self.tls_key.is_some(),
-                "tls_client_ca": self.tls_client_ca.is_some(),
-                "tls_server_cert_fingerprint": tls_server_cert_fingerprint,
-                "tls_client_ca_fingerprint": tls_client_ca_fingerprint,
+            transport_protocols: self.transport_protocols(),
+            quic_transport_options: self.quic_options,
+            quic_runtime: peer_transport::quic_runtime_diagnostics(self.quic_options),
+            auth: report::NodeDescriptorAuth {
+                control_token: has_token,
+                transport_token: has_token,
+                token_metadata,
+                token_generation,
+                tls_server_cert: self.tls_cert.is_some() && self.tls_key.is_some(),
+                tls_client_ca: self.tls_client_ca.is_some(),
+                tls_server_cert_fingerprint,
+                tls_client_ca_fingerprint,
             },
-            "routes_path": self.route_store_path,
-            "route_autostart": self.route_autostart,
-            "linux_musl_sidecar": sidecar::build_summary(),
-        }))
+            routes_path: self.route_store_path.clone(),
+            route_autostart: self.route_autostart,
+            linux_musl_sidecar: Value::String(sidecar::build_summary().to_string()),
+        }
+        .to_value())
     }
 
     async fn descriptor_json(&self) -> Result<String> {
