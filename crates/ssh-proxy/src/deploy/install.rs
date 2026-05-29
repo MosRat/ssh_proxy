@@ -18,9 +18,11 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
     if args.persist != cli::PersistMode::None {
         apply_remote_auto_defaults(&client, &mut args).await?;
     }
+    let install_intent: ssh_proxy_core::intent::RemoteInstallIntent = (&args).into();
+    let install_plan = ssh_proxy_deploy::RemoteInstallPlan::from_intent(&install_intent);
     let remote_path = match args.remote_path.clone() {
         Some(path) => Some(path),
-        None if args.persist != cli::PersistMode::None => {
+        None if install_plan.requires_persistent_service() => {
             Some(default_persistent_remote_path(&client, args.remote_os).await?)
         }
         None => None,
@@ -35,7 +37,7 @@ pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteIn
 
     let (service_manager, install_report) =
         install_remote_service(&client, &remote_path, &args).await?;
-    let descriptor = if args.persist == cli::PersistMode::None {
+    let descriptor = if !install_plan.requires_persistent_service() {
         None
     } else {
         Some(wait_remote_peer_descriptor(&client, &remote_path, &mut args).await?)

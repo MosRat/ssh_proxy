@@ -3,8 +3,10 @@ use std::net::SocketAddr;
 use serde_json::Value;
 use ssh_proxy_config::TokenMetadata;
 
+mod install;
 mod remote_setup;
 
+pub use install::RemoteInstallPlan;
 pub use remote_setup::{RemoteArtifactIntent, RemoteArtifactKind, RemoteSetupPlan};
 
 #[derive(Debug, Clone)]
