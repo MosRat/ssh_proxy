@@ -15,8 +15,7 @@ use super::Stream;
 impl Drop for Stream {
     fn drop(&mut self) {
         if !self.closed.swap(true, Ordering::Relaxed) {
-            self.inner
-                .reset(quinn::VarInt::from_u32(super::super::FLOW_RESET_ERROR_CODE));
+            self.inner.reset_u32(super::super::FLOW_RESET_ERROR_CODE);
             self.state.record_quic_flow_drop();
             self.worker.record_flow_closed(true);
         }
@@ -48,8 +47,7 @@ impl Stream {
 
     pub async fn reset(&mut self, reason: impl Into<String>) {
         if !self.closed.swap(true, Ordering::Relaxed) {
-            self.inner
-                .reset(quinn::VarInt::from_u32(super::super::FLOW_RESET_ERROR_CODE));
+            self.inner.reset_u32(super::super::FLOW_RESET_ERROR_CODE);
             self.worker.record_flow_closed(true);
             self.state.record_quic_flow_close(reason, true).await;
         }

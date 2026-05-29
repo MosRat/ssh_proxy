@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use ssh_proxy_transport::quic::ClientQuicConnection;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
@@ -96,7 +97,7 @@ pub struct State {
 
 struct ConnectionWorker {
     id: usize,
-    connection: quinn::Connection,
+    connection: ClientQuicConnection,
     started: Instant,
     active_quic_flows: AtomicU64,
     opened_quic_flows: AtomicU64,
@@ -169,7 +170,7 @@ impl StateSlot {
 }
 
 impl ConnectionWorker {
-    fn new(id: usize, connection: quinn::Connection) -> Self {
+    fn new(id: usize, connection: ClientQuicConnection) -> Self {
         Self {
             id,
             connection,
@@ -297,22 +298,17 @@ impl State {
     ) -> Result<Stream> {
         let worker = self.select_worker().await?;
         let started = Instant::now();
-        let opened = match time::timeout(
-            Duration::from_secs(self.args.connect_timeout_secs.max(1)),
-            worker.connection.open_bi(),
-        )
-        .await
-        {
-            Ok(Ok(streams)) => Ok(streams),
-            Ok(Err(err)) => Err(anyhow!(err)),
-            Err(_) => Err(anyhow!(
-                "quic-native stream open timed out after {}s",
-                self.args.connect_timeout_secs.max(1)
-            )),
-        };
+        let opened = worker
+            .connection
+            .open_bi(
+                Duration::from_secs(self.args.connect_timeout_secs.max(1)),
+                "open QUIC-native bidi stream",
+            )
+            .await
+            .map_err(|err| anyhow!(err));
 
-        let (send, recv) = match opened {
-            Ok(streams) => {
+        let mut inner = match opened {
+            Ok(stream) => {
                 let open_latency = started.elapsed();
                 worker.record_open_success(open_latency);
                 self.record_quic_stream_open_latency(open_latency);
@@ -321,7 +317,7 @@ impl State {
                     stream_open_latency_ms = duration_millis(open_latency),
                     "opened QUIC-native bidi stream"
                 );
-                streams
+                stream
             }
             Err(err) => {
                 worker.record_open_failure();
@@ -339,8 +335,6 @@ impl State {
 
         worker.record_flow_opened();
         self.active_quic_flows.fetch_add(1, Ordering::Relaxed);
-        let mut inner =
-            quic_stream::QuicBiStream::with_connection(send, recv, worker.connection.clone());
         let header = StreamHeader {
             route_id: self.route_id.clone(),
             stream_id: self.next_stream_id.fetch_add(1, Ordering::Relaxed),

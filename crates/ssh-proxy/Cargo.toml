@@ -18,7 +18,6 @@ directories.workspace = true
 dirs.workspace = true
 getrandom.workspace = true
 mimalloc.workspace = true
-quinn.workspace = true
 rustls-pemfile.workspace = true
 serde.workspace = true
 serde_json.workspace = true

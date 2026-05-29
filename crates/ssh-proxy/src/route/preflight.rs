@@ -1,9 +1,10 @@
 use std::{net::SocketAddr, time::Duration};
 
 use serde_json::{Value, json};
+use ssh_proxy_transport::quic::connect_client;
 use tokio::{net::TcpStream, time};
 
-use crate::{cli, peer_transport, quic_stream};
+use crate::{cli, peer_transport};
 
 use super::response::{candidate_failures, is_direct_probe_protocol, refresh_decision_chain};
 use super::transport::{ssh_data_plane_reason, ssh_mode_reason};
@@ -223,18 +224,6 @@ async fn probe_quic_endpoint(
             });
         }
     };
-    let mut endpoint = match quinn::Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 0))) {
-        Ok(endpoint) => endpoint,
-        Err(err) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "probe-config-error",
-                "message": format!("failed to create QUIC probe endpoint: {err:#}"),
-            });
-        }
-    };
     let quic_options = match peer_transport::QuicTransportOptions::new(
         forward.quic_max_bidi_streams,
         forward.quic_stream_receive_window,
@@ -253,74 +242,42 @@ async fn probe_quic_endpoint(
             });
         }
     };
-    match peer_transport::quic_client_config(roots, quic_options) {
-        Ok(config) => endpoint.set_default_client_config(config),
+    let connection = match connect_client(
+        addr,
+        &forward.remote_name,
+        roots,
+        quic_options,
+        timeout,
+        format!("connect QUIC preflight endpoint {addr}"),
+    )
+    .await
+    {
+        Ok(connection) => connection,
         Err(err) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "probe-config-error",
-                "message": format!("failed to build QUIC probe client config: {err:#}"),
-            });
-        }
-    }
-
-    let connecting = match endpoint.connect(addr, &forward.remote_name) {
-        Ok(connecting) => connecting,
-        Err(err) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "connect-request-failed",
-                "message": err.to_string(),
-            });
-        }
-    };
-    let connection = match time::timeout(timeout, connecting).await {
-        Ok(Ok(connection)) => connection,
-        Ok(Err(err)) => {
             return json!({
                 "protocol": "quic",
                 "endpoint": addr.to_string(),
                 "reachable": false,
                 "status": "handshake-failed",
-                "message": err.to_string(),
-            });
-        }
-        Err(_) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "timeout",
-                "message": format!("QUIC handshake timed out after {} ms", timeout.as_millis()),
+                "message": format!("{err:#}"),
             });
         }
     };
-    let (send, recv) = match time::timeout(timeout, connection.open_bi()).await {
-        Ok(Ok(streams)) => streams,
-        Ok(Err(err)) => {
+    let mut stream = match connection
+        .open_bi(timeout, "open QUIC preflight stream")
+        .await
+    {
+        Ok(stream) => stream,
+        Err(err) => {
             return json!({
                 "protocol": "quic",
                 "endpoint": addr.to_string(),
                 "reachable": false,
                 "status": "stream-open-failed",
-                "message": err.to_string(),
-            });
-        }
-        Err(_) => {
-            return json!({
-                "protocol": "quic",
-                "endpoint": addr.to_string(),
-                "reachable": false,
-                "status": "timeout",
-                "message": format!("QUIC bidirectional stream open timed out after {} ms", timeout.as_millis()),
+                "message": format!("{err:#}"),
             });
         }
     };
-    let mut stream = quic_stream::QuicBiStream::with_lifetime(send, recv, connection, endpoint);
     match time::timeout(
         timeout,
         peer_transport::client_handshake(
