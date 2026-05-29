@@ -138,9 +138,14 @@ execution to shared modules.
   reports, and redaction. It should not know VS Code command text or daemon RPC
   framing.
 - `service` owns local CLI option parsing and platform permission boundaries.
-  It builds `PeerLifecycleSpec(local_daemon)` and calls the lifecycle runner;
-  Windows SCM FFI and UAC worker behavior stay behind the local provider
-  adapter.
+  `service.rs` is the thin command entrypoint; `service::report`,
+  `service::status`, `service::health`, and `service::labels` own install
+  reports, daemon status JSON, local health probes, and user-visible labels.
+  It builds `PeerLifecycleSpec(local_daemon)` and calls the lifecycle runner.
+  Platform behavior is split behind provider adapters for systemd, launchd,
+  Windows SCM, and Windows user scheduled tasks; Windows SCM FFI, UAC worker
+  behavior, versioned ProgramData binaries, and rollback stay in the Windows
+  SCM adapter.
 - `deploy` owns remote bootstrap inputs, descriptor refresh, token/config
   materialization, and compatibility helpers. Remote peer installation runs as
   `PeerLifecycleSpec(remote_peer)` through `SshExecutor`.
@@ -151,14 +156,22 @@ execution to shared modules.
   remote peer ensure, route creation, Rust-native handoff, remote setup, and
   health monitoring. `ProxySessionSpec`, SSH target details, apply policy, and
   URL/key helpers live in the `spec` submodule so the runner consumes a stable
-  intent model. Status rendering helpers live in the `status` submodule; the
-  async runner should call those helpers instead of assembling proxy-session
-  response JSON inline.
+  intent model. Status rendering helpers live in the `status` submodule;
+  `apply_settings` owns the direct VS Code apply-settings command path, and
+  `route_ready` owns route readiness, handoff probing, remote setup, and final
+  health transition. The async runner should sequence these modules instead of
+  assembling proxy-session response JSON inline.
 - `node_daemon::remote_setup` owns VS Code and shell environment artifacts. Rust
   renders payloads and uses `SshExecutor.write_artifact`; shell remains limited
   to stdin file writes, optional Git config, cleanup, and platform commands.
   `RemoteArtifactPlan` is the single place that names the server directory,
   relative path, artifact kind, backup policy, and read/write command shape.
+- `quic_native::runtime` owns listener orchestration and data-flow accounting.
+  Connection establishment lives in `runtime::connection`; status rendering
+  lives in `runtime::status`; worker metric extraction lives in
+  `runtime::metrics_snapshot`; control keepalive and stream I/O stay in their
+  existing focused modules. `QNC1` control framing and stream behavior remain
+  compatibility-owned by the protocol modules, not by status rendering.
 - `route` owns user-visible route plans and preflight probes. Transport names,
   direct-policy labels, SSH-mode labels, and data-plane reasons come from
   `peer_lifecycle::connection` so status, doctor, daemon, and route output use
