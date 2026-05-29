@@ -1,3 +1,4 @@
+#[cfg(any(windows, target_os = "macos"))]
 use std::process::Command;
 
 #[cfg(windows)]
@@ -19,10 +20,7 @@ use windows_service::{
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -45,82 +43,13 @@ use crate::install_report;
 #[cfg(target_os = "macos")]
 const LAUNCHD_LABEL: &str = "local.ssh-proxy.daemon";
 
-fn run_command(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program)
-        .args(args)
-        .status()
-        .with_context(|| format!("failed to run {program}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("{program} exited with status {status}")
-    }
-}
+mod command;
+mod probe;
 
-#[allow(dead_code)]
-fn run_command_output(program: &str, args: &[&str]) -> Result<()> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run {program}"))?;
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    if output.status.success() {
-        Ok(())
-    } else {
-        bail!("{program} exited with status {}", output.status)
-    }
-}
-
-fn capture_command_output(program: &str, args: &[&str]) -> Value {
-    match Command::new(program).args(args).output() {
-        Ok(output) => json!({
-            "ok": output.status.success(),
-            "program": program,
-            "args": args,
-            "status": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr),
-        }),
-        Err(err) => json!({
-            "ok": false,
-            "program": program,
-            "args": args,
-            "error": err.to_string(),
-        }),
-    }
-}
-
-fn service_probe_summary(
-    scope: ServiceScope,
-    service_name: String,
-    state: ServiceProbeState,
-    exists: bool,
-    healthy: bool,
-    accessible: bool,
-    permission_denied: bool,
-    details: Value,
-) -> ServiceProbeSummary {
-    ServiceProbeSummary {
-        scope,
-        service_name,
-        state,
-        exists,
-        healthy,
-        accessible,
-        permission_denied,
-        details,
-    }
-}
-
-fn contains_permission_denied(text: &str) -> bool {
-    text.to_ascii_lowercase().contains("access is denied")
-        || text.to_ascii_lowercase().contains("permission denied")
-        || text.to_ascii_lowercase().contains("not permitted")
-        || text
-            .to_ascii_lowercase()
-            .contains("operation not permitted")
-}
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use command::write_text;
+use command::{capture_command_output, run_command, run_command_output};
+use probe::{contains_permission_denied, service_probe_summary};
 
 #[cfg(not(windows))]
 pub(super) fn platform_install_requires_elevation(_plan: &ServicePlan) -> bool {
@@ -1231,13 +1160,4 @@ fn windows_sc_create(plan: &ServicePlan, service_name: &str) -> String {
         "sc.exe create {service_name} start= auto DisplayName= \"ssh_proxy daemon\" binPath= {}",
         command_quote(&plan.daemon_command())
     )
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn write_text(path: &Path, text: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    fs::write(path, text).with_context(|| format!("failed to write {}", path.display()))
 }
