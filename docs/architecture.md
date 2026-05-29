@@ -101,11 +101,13 @@ so existing module paths can migrate gradually. New shared DTOs, codecs,
 lifecycle models, control socket helpers, SSH primitives, transport adapters,
 and CLI command contracts should live in the appropriate workspace crate rather
 than expanding the binary crate. `ssh-proxy-route` owns route decision, route
-conflict policy, route plan, route status, and `decision_chain` rendering DTOs.
+conflict policy, preflight classification/fallback policy, remote-use policy,
+route plan, route status, and `decision_chain` rendering DTOs.
 `ssh-proxy-deploy` owns remote install, remote admin intents, remote setup
 artifact intents, and remote setup script rendering. `ssh-proxy-service` owns
-service-management contracts. `ssh-proxy-daemon` owns command-neutral
-daemon/job/session/peer/state DTOs, proxy session specs, and
+service-management contracts, status summaries, selected-control summaries,
+candidate summaries, and fallback recommendations. `ssh-proxy-daemon` owns
+command-neutral daemon/job/session/peer/state DTOs, proxy session specs, and
 daemon-unavailable fallback response builders. `ssh-proxy-cli` is a
 command-contract crate; command dispatch still lives in the app crate until the
 remaining runtime orchestration is promoted.
@@ -125,11 +127,13 @@ Command-neutral intent models sit below CLI parsing and above runtime adapters:
 - `ssh-proxy-config` plans profile/default values into core enums, endpoint
   defaults, path-expanded artifacts, and runtime tuning before the app shim
   applies them to legacy CLI-shaped structs.
-- `ssh-proxy-route` owns pool sizing, route conflict, and runtime decision
-  policy in terms of core route inputs. It also renders route plan reports from
-  typed route context instead of forcing app modules to re-read their own JSON.
-  The app route modules adapt CLI/config data and run async probes, but pure
-  policy should not grow in the app crate.
+- `ssh-proxy-route` owns pool sizing, route conflict, preflight result
+  classification, fallback selection, remote-use decisions, and runtime
+  decision policy in terms of core route inputs. It also renders route plan
+  reports from typed route context instead of forcing app modules to re-read
+  their own JSON. The app route modules adapt CLI/config data, run async
+  TCP/TLS/QUIC probes, and send daemon requests, but pure policy should not grow
+  in the app crate.
 - `ssh-proxy-deploy` owns command-neutral remote install plans, remote admin
   intents, remote setup artifact intents, and remote setup shell fallback
   scripts. The app crate keeps SSH execution and lifecycle adapters.
@@ -247,13 +251,16 @@ execution to shared modules.
   framing.
 - `service` owns local CLI option parsing and platform permission boundaries.
   `service.rs` is the thin command entrypoint; `service::report`,
-  `service::status`, `service::health`, and `service::labels` own install
+  `service::status`, `service::health`, and `service::labels` adapt install
   reports, daemon status JSON, local health probes, and user-visible labels.
-  It builds `PeerLifecycleSpec(local_daemon)` and calls the lifecycle runner.
-  Platform behavior is split behind provider adapters for systemd, launchd,
-  Windows SCM, and Windows user scheduled tasks; Windows SCM FFI, UAC worker
-  behavior, versioned ProgramData binaries, and rollback stay in the Windows
-  SCM adapter.
+  Pure manager summaries, candidate summaries, selected-control summaries,
+  service state names, and fallback recommendations live in
+  `ssh-proxy-service`. The app service modules build
+  `PeerLifecycleSpec(local_daemon)`, call the lifecycle runner, query runtime
+  daemon state, and execute platform adapters. Platform behavior is split behind
+  provider adapters for systemd, launchd, Windows SCM, and Windows user
+  scheduled tasks; Windows SCM FFI, UAC worker behavior, versioned ProgramData
+  binaries, and rollback stay in the Windows SCM adapter.
 - `deploy` owns remote bootstrap inputs, descriptor refresh, token/config
   materialization, and compatibility helpers. Remote peer installation runs as
   `PeerLifecycleSpec(remote_peer)` through `SshExecutor`.
@@ -313,14 +320,17 @@ execution to shared modules.
   session, peer, remote setup, and daemon records live in `ssh-proxy-daemon`;
   app-side store modules keep file I/O, async locking, schema compatibility, and
   corrupt-file quarantine behavior.
-- `route` owns user-visible route plans and preflight probes. Transport names,
-  direct-policy labels, SSH-mode labels, and data-plane reasons come from
-  `ssh-proxy-route::decision` so status, doctor, daemon, and route output use
-  one vocabulary. Route plan JSON is rendered from `RoutePlanReport`; daemon
-  route status consumes `RouteRuntimeDecision` instead of rebuilding selected
-  transport, preflight, and SSH-mode metadata. New consumers should prefer
-  `connection_decision` for typed transport selection and read the older route
-  metadata only for compatibility or detailed diagnostics.
+- `route` owns user-visible route plans and runtime probe execution. Transport
+  names, direct-policy labels, SSH-mode labels, data-plane reasons, preflight
+  classification, fallback decisions, and remote-use decisions come from
+  `ssh-proxy-route` so status, doctor, daemon, and route output use one
+  vocabulary. Route plan JSON is rendered from `RoutePlanReport`; daemon route
+  status consumes `RouteRuntimeDecision` instead of rebuilding selected
+  transport, preflight, and SSH-mode metadata. The app route modules should only
+  adapt CLI/config inputs, run real TCP/TLS/QUIC probes, and send daemon
+  requests before feeding typed DTOs back into `ssh-proxy-route`. New consumers
+  should prefer `connection_decision` for typed transport selection and read the
+  older route metadata only for compatibility or detailed diagnostics.
 
 ## Public CLI Surface
 

@@ -50,13 +50,15 @@ Current horizontal crates:
   remote helper stream/error models, SPX worker status DTOs, and SOCKS5/HTTP
   proxy parser primitives.
 - `crates/ssh-proxy-route/`: route runtime decision reports, route conflict
-  policy, route plan rendering, pool sizing policy, preflight metadata, route
-  task status records, and route status JSON contracts.
+  policy, route plan rendering, pool sizing policy, preflight probe
+  classification, fallback decisions, remote-use decisions, route task status
+  records, and route status JSON contracts.
 - `crates/ssh-proxy-deploy/`: remote install result DTOs, command-neutral
   remote install plans, remote admin intents, remote setup artifact intents,
   and remote setup script rendering.
-- `crates/ssh-proxy-service/`: local service-management contracts and provider
-  report DTOs.
+- `crates/ssh-proxy-service/`: local service-management contracts, provider
+  report DTOs, service status summaries, candidate summaries,
+  selected-control summaries, and fallback recommendations.
 - `crates/ssh-proxy-platform/`: local platform command plans, command outcomes,
   script plans, subprocess capture/spawn helpers, and external execution
   classification for service adapters and self-update.
@@ -86,7 +88,7 @@ large vertical subsystems are still split by semantic module:
 - `node_daemon/management/update.rs`: app-side self-update orchestration using
   daemon update DTOs and platform command/script plans.
 - `quic_native/`: QUIC-native control and per-flow stream runtime.
-- `service/`: local service planning and platform execution.
+- `service/`: local service planning, status adapters, and platform execution.
 - `socks/`: app-side SOCKS5H/HTTP listener dispatch, relay helpers, and
   outbound adapters. Protocol parsing lives in `ssh-proxy-transport`.
 
