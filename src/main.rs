@@ -17,6 +17,7 @@ mod node_daemon;
 mod paths;
 mod peer_lifecycle;
 mod peer_transport;
+mod protocol_core;
 mod repair;
 mod reverse;
 mod service;
