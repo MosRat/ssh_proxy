@@ -4,15 +4,15 @@ use serde_json::{Value, json};
 use super::version::ControlApiVersion;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ControlEnvelope<T> {
-    pub(crate) api_version: u16,
+pub struct ControlEnvelope<T> {
+    pub api_version: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) kind: Option<String>,
-    pub(crate) payload: T,
+    pub kind: Option<String>,
+    pub payload: T,
 }
 
 impl<T> ControlEnvelope<T> {
-    pub(crate) fn new(payload: T) -> Self {
+    pub fn new(payload: T) -> Self {
         Self {
             api_version: ControlApiVersion::current().value(),
             kind: None,
@@ -20,24 +20,24 @@ impl<T> ControlEnvelope<T> {
         }
     }
 
-    pub(crate) fn with_kind(mut self, kind: impl Into<String>) -> Self {
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
         self.kind = Some(kind.into());
         self
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ControlError {
-    pub(crate) code: String,
-    pub(crate) message: String,
+pub struct ControlError {
+    pub code: String,
+    pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) blocker: Option<String>,
+    pub blocker: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) repair_action: Option<Value>,
+    pub repair_action: Option<Value>,
 }
 
 impl ControlError {
-    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -46,12 +46,12 @@ impl ControlError {
         }
     }
 
-    pub(crate) fn with_blocker(mut self, blocker: impl Into<String>) -> Self {
+    pub fn with_blocker(mut self, blocker: impl Into<String>) -> Self {
         self.blocker = Some(blocker.into());
         self
     }
 
-    pub(crate) fn with_repair_action(mut self, repair_action: Value) -> Self {
+    pub fn with_repair_action(mut self, repair_action: Value) -> Self {
         if !repair_action.is_null() {
             self.repair_action = Some(repair_action);
         }
@@ -60,27 +60,27 @@ impl ControlError {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ControlResponse<T> {
-    pub(crate) api_version: u16,
-    pub(crate) ok: bool,
+pub struct ControlResponse<T> {
+    pub api_version: u16,
+    pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) kind: Option<String>,
+    pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) code: Option<String>,
+    pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) message: Option<String>,
+    pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) error: Option<String>,
+    pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) data: Option<T>,
+    pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) blocker: Option<String>,
+    pub blocker: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) repair_action: Option<Value>,
+    pub repair_action: Option<Value>,
 }
 
 impl<T> ControlResponse<T> {
-    pub(crate) fn ok(data: T) -> Self {
+    pub fn ok(data: T) -> Self {
         Self {
             api_version: ControlApiVersion::current().value(),
             ok: true,
@@ -94,7 +94,7 @@ impl<T> ControlResponse<T> {
         }
     }
 
-    pub(crate) fn ok_message(message: impl Into<String>) -> Self {
+    pub fn ok_message(message: impl Into<String>) -> Self {
         Self {
             api_version: ControlApiVersion::current().value(),
             ok: true,
@@ -108,7 +108,7 @@ impl<T> ControlResponse<T> {
         }
     }
 
-    pub(crate) fn error(error: ControlError) -> Self {
+    pub fn error(error: ControlError) -> Self {
         Self {
             api_version: ControlApiVersion::current().value(),
             ok: false,
@@ -122,14 +122,14 @@ impl<T> ControlResponse<T> {
         }
     }
 
-    pub(crate) fn with_kind(mut self, kind: impl Into<String>) -> Self {
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
         self.kind = Some(kind.into());
         self
     }
 }
 
 impl ControlResponse<Value> {
-    pub(crate) fn public_ok_value(value: Value) -> Value {
+    pub fn public_ok_value(value: Value) -> Value {
         match value {
             Value::Object(mut object) => {
                 object
@@ -148,7 +148,7 @@ impl ControlResponse<Value> {
         }
     }
 
-    pub(crate) fn error_value(code: impl Into<String>, error: impl Into<String>) -> Value {
+    pub fn error_value(code: impl Into<String>, error: impl Into<String>) -> Value {
         serde_json::to_value(Self::error(ControlError::new(code, error))).unwrap_or_else(|_| {
             json!({
                 "api_version": ControlApiVersion::current().value(),

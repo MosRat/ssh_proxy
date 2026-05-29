@@ -9,7 +9,7 @@ use tokio::{
 use crate::protocol::{Frame, FrameReader, FrameWriteBatchStats, MAX_FRAME, write_frame_batch};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DataFrame {
+pub enum DataFrame {
     OpenTcp {
         id: u32,
         host: String,
@@ -107,18 +107,18 @@ impl From<DataFrame> for Frame {
 }
 
 #[derive(Default)]
-pub(crate) struct SpxFrameCodec {
+pub struct SpxFrameCodec {
     reader: FrameReader,
 }
 
 impl SpxFrameCodec {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             reader: FrameReader::new(),
         }
     }
 
-    pub(crate) async fn read_from<R>(&mut self, reader: &mut R) -> Result<Option<DataFrame>>
+    pub async fn read_from<R>(&mut self, reader: &mut R) -> Result<Option<DataFrame>>
     where
         R: AsyncRead + Unpin,
     {
@@ -128,10 +128,7 @@ impl SpxFrameCodec {
             .map(|frame| frame.map(DataFrame::from))
     }
 
-    pub(crate) async fn write_to<W>(
-        writer: &mut W,
-        frame: DataFrame,
-    ) -> Result<FrameWriteBatchStats>
+    pub async fn write_to<W>(writer: &mut W, frame: DataFrame) -> Result<FrameWriteBatchStats>
     where
         W: AsyncWrite + Unpin,
     {
@@ -141,11 +138,11 @@ impl SpxFrameCodec {
     }
 }
 
-pub(crate) fn max_data_frame_len() -> usize {
+pub fn max_data_frame_len() -> usize {
     MAX_FRAME
 }
 
-pub(crate) async fn write_json_control_frame<W, T>(
+pub async fn write_json_control_frame<W, T>(
     writer: &mut W,
     magic: &[u8; 4],
     version: u16,
@@ -171,7 +168,7 @@ where
     Ok(())
 }
 
-pub(crate) async fn read_json_control_frame<R, T>(
+pub async fn read_json_control_frame<R, T>(
     reader: &mut R,
     magic: &[u8; 4],
     expected_version: u16,

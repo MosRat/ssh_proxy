@@ -3,62 +3,62 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-pub(crate) const CONTROL_API_VERSION: u16 = 1;
-pub(crate) const PEER_PROTOCOL_VERSION: u16 = 1;
+pub const CONTROL_API_VERSION: u16 = 1;
+pub const PEER_PROTOCOL_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub(crate) struct ControlApiVersion(u16);
+pub struct ControlApiVersion(u16);
 
 impl ControlApiVersion {
-    pub(crate) const fn current() -> Self {
+    pub const fn current() -> Self {
         Self(CONTROL_API_VERSION)
     }
 
-    pub(crate) const fn new(version: u16) -> Self {
+    pub const fn new(version: u16) -> Self {
         Self(version)
     }
 
-    pub(crate) const fn value(self) -> u16 {
+    pub const fn value(self) -> u16 {
         self.0
     }
 
-    pub(crate) const fn is_supported_by(self, supported: Self) -> bool {
+    pub const fn is_supported_by(self, supported: Self) -> bool {
         self.0 <= supported.0
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub(crate) struct PeerProtocolVersion(u16);
+pub struct PeerProtocolVersion(u16);
 
 impl PeerProtocolVersion {
-    pub(crate) const fn current() -> Self {
+    pub const fn current() -> Self {
         Self(PEER_PROTOCOL_VERSION)
     }
 
-    pub(crate) const fn new(version: u16) -> Self {
+    pub const fn new(version: u16) -> Self {
         Self(version)
     }
 
-    pub(crate) const fn value(self) -> u16 {
+    pub const fn value(self) -> u16 {
         self.0
     }
 
-    pub(crate) const fn matches_required(self, required: Self) -> bool {
+    pub const fn matches_required(self, required: Self) -> bool {
         self.0 == required.0
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FeatureSet {
-    pub(crate) features: Vec<String>,
+pub struct FeatureSet {
+    pub features: Vec<String>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub(crate) feature_bits: Map<String, Value>,
+    pub feature_bits: Map<String, Value>,
 }
 
 impl FeatureSet {
-    pub(crate) fn new(features: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn new(features: impl IntoIterator<Item = impl Into<String>>) -> Self {
         let features = features.into_iter().map(Into::into).collect::<Vec<_>>();
         let feature_bits = features
             .iter()
@@ -71,14 +71,14 @@ impl FeatureSet {
         }
     }
 
-    pub(crate) fn from_parts(features: Vec<String>, feature_bits: Map<String, Value>) -> Self {
+    pub fn from_parts(features: Vec<String>, feature_bits: Map<String, Value>) -> Self {
         Self {
             features,
             feature_bits,
         }
     }
 
-    pub(crate) fn missing_from(&self, remote: &Self) -> Vec<String> {
+    pub fn missing_from(&self, remote: &Self) -> Vec<String> {
         let remote = remote.features.iter().collect::<BTreeSet<_>>();
         self.features
             .iter()
@@ -87,7 +87,7 @@ impl FeatureSet {
             .collect()
     }
 
-    pub(crate) fn common_with(&self, remote: &Self) -> Vec<String> {
+    pub fn common_with(&self, remote: &Self) -> Vec<String> {
         let remote = remote.features.iter().collect::<BTreeSet<_>>();
         self.features
             .iter()
@@ -96,13 +96,13 @@ impl FeatureSet {
             .collect()
     }
 
-    pub(crate) fn supports_all(&self, required: &Self) -> bool {
+    pub fn supports_all(&self, required: &Self) -> bool {
         required.missing_from(self).is_empty()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum VersionCompatibility {
+pub enum VersionCompatibility {
     Compatible,
     UpgradeLocal,
     UpgradeRemote,
@@ -110,14 +110,14 @@ pub(crate) enum VersionCompatibility {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ProtocolCompatibilityReport {
-    pub(crate) checks: Vec<Value>,
-    pub(crate) compatible: bool,
-    pub(crate) missing_features: Vec<String>,
-    pub(crate) common_features: Vec<String>,
+pub struct ProtocolCompatibilityReport {
+    pub checks: Vec<Value>,
+    pub compatible: bool,
+    pub missing_features: Vec<String>,
+    pub common_features: Vec<String>,
 }
 
-pub(crate) fn protocol_compatibility_report(
+pub fn protocol_compatibility_report(
     local_control: u16,
     remote_control: Option<u16>,
     local_peer: u16,
@@ -234,7 +234,7 @@ fn feature_check(local: &[String], remote: &[String], missing: &[String]) -> Val
     }
 }
 
-pub(crate) fn classify_protocol_compatibility(
+pub fn classify_protocol_compatibility(
     local_control: ControlApiVersion,
     remote_control: Option<ControlApiVersion>,
     local_peer: PeerProtocolVersion,
@@ -264,7 +264,7 @@ pub(crate) fn classify_protocol_compatibility(
     VersionCompatibility::Compatible
 }
 
-pub(crate) fn compare_dotted_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+pub fn compare_dotted_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
     let left = parse_dotted_version(left)?;
     let right = parse_dotted_version(right)?;
     Some(left.cmp(&right))

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DaemonControlCommand {
+pub enum DaemonControlCommand {
     Status,
     Descriptor,
     Links,
@@ -49,7 +49,7 @@ pub(crate) enum DaemonControlCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DaemonControlPayloadShape {
+pub enum DaemonControlPayloadShape {
     Empty,
     Profile,
     Id,
@@ -65,7 +65,7 @@ pub(crate) enum DaemonControlPayloadShape {
 }
 
 impl DaemonControlCommand {
-    pub(crate) fn parse(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         let lower = value.trim().to_ascii_lowercase();
         let normalized = normalize_command(&lower);
         match normalized.as_str() {
@@ -114,7 +114,7 @@ impl DaemonControlCommand {
         }
     }
 
-    pub(crate) fn canonical_name(&self) -> &str {
+    pub fn canonical_name(&self) -> &str {
         match self {
             Self::Status => "status",
             Self::Descriptor => "descriptor",
@@ -161,11 +161,11 @@ impl DaemonControlCommand {
         }
     }
 
-    pub(crate) fn is_unknown(&self) -> bool {
+    pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown(_))
     }
 
-    pub(crate) fn payload_shape(&self) -> DaemonControlPayloadShape {
+    pub fn payload_shape(&self) -> DaemonControlPayloadShape {
         match self {
             Self::Status
             | Self::Descriptor
@@ -211,7 +211,7 @@ impl DaemonControlCommand {
     }
 }
 
-pub(crate) fn normalize_command(value: &str) -> String {
+pub fn normalize_command(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace('-', "_")
 }
 

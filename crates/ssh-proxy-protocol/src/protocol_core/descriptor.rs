@@ -8,79 +8,79 @@ use super::version::{ControlApiVersion, FeatureSet, PeerProtocolVersion};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct PeerDescriptor {
-    pub(crate) ok: Option<bool>,
-    pub(crate) kind: Option<String>,
-    pub(crate) source: Option<String>,
-    pub(crate) schema_version: Option<u32>,
-    pub(crate) node_id: Option<String>,
-    pub(crate) node_name: Option<String>,
-    pub(crate) service_instance_id: Option<String>,
-    pub(crate) version: Option<String>,
-    pub(crate) os: Option<String>,
-    pub(crate) arch: Option<String>,
-    pub(crate) os_user: Option<String>,
-    pub(crate) data_dir: Option<String>,
-    pub(crate) target: Option<String>,
-    pub(crate) control_endpoint: Option<String>,
-    pub(crate) control_api_version: Option<u16>,
-    pub(crate) peer_protocol_version: Option<u16>,
-    pub(crate) features: Vec<String>,
-    pub(crate) feature_bits: serde_json::Map<String, Value>,
-    pub(crate) endpoints: PeerDescriptorEndpoints,
-    pub(crate) transport_protocols: Vec<String>,
-    pub(crate) auth: PeerDescriptorAuth,
-    pub(crate) routes_path: Option<Value>,
-    pub(crate) route_autostart: Option<bool>,
+pub struct PeerDescriptor {
+    pub ok: Option<bool>,
+    pub kind: Option<String>,
+    pub source: Option<String>,
+    pub schema_version: Option<u32>,
+    pub node_id: Option<String>,
+    pub node_name: Option<String>,
+    pub service_instance_id: Option<String>,
+    pub version: Option<String>,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub os_user: Option<String>,
+    pub data_dir: Option<String>,
+    pub target: Option<String>,
+    pub control_endpoint: Option<String>,
+    pub control_api_version: Option<u16>,
+    pub peer_protocol_version: Option<u16>,
+    pub features: Vec<String>,
+    pub feature_bits: serde_json::Map<String, Value>,
+    pub endpoints: PeerDescriptorEndpoints,
+    pub transport_protocols: Vec<String>,
+    pub auth: PeerDescriptorAuth,
+    pub routes_path: Option<Value>,
+    pub route_autostart: Option<bool>,
 }
 
 impl PeerDescriptor {
-    pub(crate) fn from_value(value: Value) -> Result<Self> {
+    pub fn from_value(value: Value) -> Result<Self> {
         if value.get("ok").and_then(Value::as_bool) == Some(false) {
             bail!("descriptor reports ok=false");
         }
         serde_json::from_value(value).context("failed to parse peer descriptor")
     }
 
-    pub(crate) fn to_value(&self) -> Value {
+    pub fn to_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
-    pub(crate) fn control_endpoint(&self) -> Option<String> {
+    pub fn control_endpoint(&self) -> Option<String> {
         self.endpoints
             .control
             .clone()
             .or_else(|| self.control_endpoint.clone())
     }
 
-    pub(crate) fn transport_addr(&self) -> Option<SocketAddr> {
+    pub fn transport_addr(&self) -> Option<SocketAddr> {
         self.endpoints
             .transport
             .as_deref()
             .and_then(parse_socket_or_tcp_endpoint)
     }
 
-    pub(crate) fn tls_transport_addr(&self) -> Option<SocketAddr> {
+    pub fn tls_transport_addr(&self) -> Option<SocketAddr> {
         self.endpoints
             .tls_transport
             .as_deref()
             .and_then(parse_socket_or_tcp_endpoint)
     }
 
-    pub(crate) fn quic_transport_addr(&self) -> Option<SocketAddr> {
+    pub fn quic_transport_addr(&self) -> Option<SocketAddr> {
         self.endpoints
             .quic_transport
             .as_deref()
             .and_then(parse_socket_or_tcp_endpoint)
     }
 
-    pub(crate) fn control_addr(&self) -> Option<SocketAddr> {
+    pub fn control_addr(&self) -> Option<SocketAddr> {
         self.control_endpoint()
             .as_deref()
             .and_then(parse_socket_or_tcp_endpoint)
     }
 
-    pub(crate) fn transport_protocols_or_infer(&self) -> Vec<String> {
+    pub fn transport_protocols_or_infer(&self) -> Vec<String> {
         if !self.transport_protocols.is_empty() {
             return self.transport_protocols.clone();
         }
@@ -97,42 +97,42 @@ impl PeerDescriptor {
         protocols
     }
 
-    pub(crate) fn feature_set(&self) -> FeatureSet {
+    pub fn feature_set(&self) -> FeatureSet {
         FeatureSet::from_parts(self.features.clone(), self.feature_bits.clone())
     }
 
-    pub(crate) fn control_version(&self) -> Option<ControlApiVersion> {
+    pub fn control_version(&self) -> Option<ControlApiVersion> {
         self.control_api_version.map(ControlApiVersion::new)
     }
 
-    pub(crate) fn peer_version(&self) -> Option<PeerProtocolVersion> {
+    pub fn peer_version(&self) -> Option<PeerProtocolVersion> {
         self.peer_protocol_version.map(PeerProtocolVersion::new)
     }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct PeerDescriptorEndpoints {
-    pub(crate) control: Option<String>,
-    pub(crate) transport: Option<String>,
-    pub(crate) tls_transport: Option<String>,
-    pub(crate) quic_transport: Option<String>,
+pub struct PeerDescriptorEndpoints {
+    pub control: Option<String>,
+    pub transport: Option<String>,
+    pub tls_transport: Option<String>,
+    pub quic_transport: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct PeerDescriptorAuth {
-    pub(crate) control_token: Option<bool>,
-    pub(crate) transport_token: Option<bool>,
-    pub(crate) token_metadata: Option<Value>,
-    pub(crate) token_generation: Option<u64>,
-    pub(crate) tls_server_cert: Option<bool>,
-    pub(crate) tls_client_ca: Option<bool>,
-    pub(crate) tls_server_cert_fingerprint: Option<String>,
-    pub(crate) tls_client_ca_fingerprint: Option<String>,
+pub struct PeerDescriptorAuth {
+    pub control_token: Option<bool>,
+    pub transport_token: Option<bool>,
+    pub token_metadata: Option<Value>,
+    pub token_generation: Option<u64>,
+    pub tls_server_cert: Option<bool>,
+    pub tls_client_ca: Option<bool>,
+    pub tls_server_cert_fingerprint: Option<String>,
+    pub tls_client_ca_fingerprint: Option<String>,
 }
 
-pub(crate) fn parse_socket_or_tcp_endpoint(value: &str) -> Option<SocketAddr> {
+pub fn parse_socket_or_tcp_endpoint(value: &str) -> Option<SocketAddr> {
     value.strip_prefix("tcp://").unwrap_or(value).parse().ok()
 }
 

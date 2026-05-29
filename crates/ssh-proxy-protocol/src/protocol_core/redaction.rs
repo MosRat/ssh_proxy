@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-pub(crate) fn redact_value(value: &Value) -> Value {
+pub fn redact_value(value: &Value) -> Value {
     ssh_proxy_core::redaction::redact_value(value)
 }
 

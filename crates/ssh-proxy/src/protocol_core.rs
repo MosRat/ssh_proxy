@@ -1,10 +1,5 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
-pub(crate) mod codec;
-pub(crate) mod control;
-pub(crate) mod descriptor;
-pub(crate) mod envelope;
-pub(crate) mod peer;
-pub(crate) mod redaction;
-pub(crate) mod report;
-pub(crate) mod version;
+pub(crate) use ssh_proxy_protocol::protocol_core::{
+    codec, control, descriptor, envelope, peer, redaction, report, version,
+};
