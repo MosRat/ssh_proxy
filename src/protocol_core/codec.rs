@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use bytes::Bytes;
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::mpsc,
 };
 
@@ -144,6 +145,77 @@ pub(crate) fn max_data_frame_len() -> usize {
     MAX_FRAME
 }
 
+pub(crate) async fn write_json_control_frame<W, T>(
+    writer: &mut W,
+    magic: &[u8; 4],
+    version: u16,
+    max_len: usize,
+    value: &T,
+    label: &'static str,
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize,
+{
+    let payload = serde_json::to_vec(value).with_context(|| format!("failed to encode {label}"))?;
+    if payload.len() > max_len {
+        bail!("{label} too large: {}", payload.len());
+    }
+    writer.write_all(magic).await?;
+    writer.write_all(&version.to_be_bytes()).await?;
+    writer
+        .write_all(&(payload.len() as u32).to_be_bytes())
+        .await?;
+    writer.write_all(&payload).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+pub(crate) async fn read_json_control_frame<R, T>(
+    reader: &mut R,
+    magic: &[u8; 4],
+    expected_version: u16,
+    max_len: usize,
+    label: &'static str,
+) -> Result<T>
+where
+    R: AsyncRead + Unpin,
+    T: DeserializeOwned,
+{
+    let mut actual_magic = [0_u8; 4];
+    reader
+        .read_exact(&mut actual_magic)
+        .await
+        .with_context(|| format!("failed to read {label} magic"))?;
+    if &actual_magic != magic {
+        bail!("invalid {label} magic");
+    }
+    let mut version = [0_u8; 2];
+    reader
+        .read_exact(&mut version)
+        .await
+        .with_context(|| format!("failed to read {label} version"))?;
+    let version = u16::from_be_bytes(version);
+    if version != expected_version {
+        bail!("unsupported {label} version {version}; expected {expected_version}");
+    }
+    let mut len = [0_u8; 4];
+    reader
+        .read_exact(&mut len)
+        .await
+        .with_context(|| format!("failed to read {label} length"))?;
+    let len = u32::from_be_bytes(len) as usize;
+    if len > max_len {
+        bail!("{label} too large: {len}");
+    }
+    let mut payload = vec![0_u8; len];
+    reader
+        .read_exact(&mut payload)
+        .await
+        .with_context(|| format!("failed to read {label} payload"))?;
+    serde_json::from_slice(&payload).with_context(|| format!("failed to decode {label}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +264,30 @@ mod tests {
         .to_string();
 
         assert!(err.contains("frame too large"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn json_control_frame_keeps_magic_version_length_outer_frame() {
+        let mut out = Vec::new();
+        let value = serde_json::json!({
+            "kind": "ping",
+            "seq": 7
+        });
+
+        write_json_control_frame(&mut out, b"TST1", 2, 1024, &value, "test control frame")
+            .await
+            .unwrap();
+
+        assert_eq!(&out[..4], b"TST1");
+        assert_eq!(&out[4..6], &2_u16.to_be_bytes());
+        assert_eq!(u32::from_be_bytes(out[6..10].try_into().unwrap()), 23);
+
+        let mut cursor = std::io::Cursor::new(out);
+        let decoded: serde_json::Value =
+            read_json_control_frame(&mut cursor, b"TST1", 2, 1024, "test control frame")
+                .await
+                .unwrap();
+        assert_eq!(decoded["kind"], "ping");
+        assert_eq!(decoded["seq"], 7);
     }
 }

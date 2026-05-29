@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
+
+use crate::protocol_core::codec::{read_json_control_frame, write_json_control_frame};
 
 pub const CONTROL_FRAME_MAGIC: &[u8; 4] = b"QNC1";
 pub const CONTROL_FRAME_VERSION: u16 = 1;
@@ -42,61 +44,29 @@ impl RouteControlFrame {
     where
         W: AsyncWrite + Unpin,
     {
-        let payload =
-            serde_json::to_vec(self).context("failed to encode QUIC-native control frame")?;
-        if payload.len() > MAX_CONTROL_FRAME {
-            bail!("QUIC-native control frame too large: {}", payload.len());
-        }
-        writer.write_all(CONTROL_FRAME_MAGIC).await?;
-        writer
-            .write_all(&CONTROL_FRAME_VERSION.to_be_bytes())
-            .await?;
-        writer
-            .write_all(&(payload.len() as u32).to_be_bytes())
-            .await?;
-        writer.write_all(&payload).await?;
-        writer.flush().await?;
-        Ok(())
+        write_json_control_frame(
+            writer,
+            CONTROL_FRAME_MAGIC,
+            CONTROL_FRAME_VERSION,
+            MAX_CONTROL_FRAME,
+            self,
+            "QUIC-native control frame",
+        )
+        .await
     }
 
     pub async fn read_from<R>(reader: &mut R) -> Result<Self>
     where
         R: AsyncRead + Unpin,
     {
-        let mut magic = [0_u8; 4];
-        reader
-            .read_exact(&mut magic)
-            .await
-            .context("failed to read QUIC-native control frame magic")?;
-        if &magic != CONTROL_FRAME_MAGIC {
-            bail!("invalid QUIC-native control frame magic");
-        }
-        let mut version = [0_u8; 2];
-        reader
-            .read_exact(&mut version)
-            .await
-            .context("failed to read QUIC-native control frame version")?;
-        let version = u16::from_be_bytes(version);
-        if version != CONTROL_FRAME_VERSION {
-            bail!(
-                "unsupported QUIC-native control frame version {version}; expected {CONTROL_FRAME_VERSION}"
-            );
-        }
-        let mut len = [0_u8; 4];
-        reader
-            .read_exact(&mut len)
-            .await
-            .context("failed to read QUIC-native control frame length")?;
-        let len = u32::from_be_bytes(len) as usize;
-        if len > MAX_CONTROL_FRAME {
-            bail!("QUIC-native control frame too large: {len}");
-        }
-        let mut payload = vec![0_u8; len];
-        reader
-            .read_exact(&mut payload)
-            .await
-            .context("failed to read QUIC-native control frame payload")?;
-        serde_json::from_slice(&payload).context("failed to decode QUIC-native control frame")
+        read_json_control_frame(
+            reader,
+            CONTROL_FRAME_MAGIC,
+            CONTROL_FRAME_VERSION,
+            MAX_CONTROL_FRAME,
+            "QUIC-native control frame",
+        )
+        .await
     }
 }
 
