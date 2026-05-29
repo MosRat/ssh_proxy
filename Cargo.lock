@@ -2284,6 +2284,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh-proxy-daemon"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ssh-proxy-core",
+]
+
+[[package]]
 name = "ssh-proxy-deploy"
 version = "0.1.1"
 dependencies = [
