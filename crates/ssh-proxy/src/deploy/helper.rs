@@ -2,6 +2,8 @@ use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+use ssh_proxy_core::model::RemotePlatform;
+use ssh_proxy_deploy::{RemoteAdminChecksumReport, RemoteAdminIntent, remote_admin_stdin_command};
 use tracing::{info, warn};
 
 use crate::{cli, sidecar, ssh_client};
@@ -160,6 +162,21 @@ async fn remote_helper_matches(
     local_sha256: &str,
     local_len: usize,
 ) -> Result<bool> {
+    match remote_helper_checksum_via_admin(client, remote_path, remote_os).await {
+        Ok(report) => {
+            return Ok(
+                report.sha256.eq_ignore_ascii_case(local_sha256) && report.len == local_len as u64
+            );
+        }
+        Err(err) => {
+            info!(
+                %remote_path,
+                error = %err,
+                "remote helper admin checksum probe failed; falling back to shell checksum probe"
+            );
+        }
+    }
+
     let command = match remote_os {
         cli::RemoteOs::Windows => {
             let escaped = remote_path.replace('\'', "''");
@@ -188,6 +205,37 @@ async fn remote_helper_matches(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or_default();
     Ok(remote_sha256.eq_ignore_ascii_case(local_sha256) && remote_len == local_len)
+}
+
+async fn remote_helper_checksum_via_admin(
+    client: &ssh_client::Client,
+    remote_path: &str,
+    remote_os: cli::RemoteOs,
+) -> Result<RemoteAdminChecksumReport> {
+    let remote_platform: RemotePlatform = remote_os.into();
+    let command = remote_admin_stdin_command(remote_path, remote_platform);
+    let intent = RemoteAdminIntent::Checksum {
+        path: remote_path.to_string(),
+    };
+    let stdin = serde_json::to_vec(&intent).context("failed to encode remote admin checksum")?;
+    let output = client.exec_capture(command, Some(stdin)).await?;
+    if output.exit_status != 0 {
+        anyhow::bail!(
+            "remote admin checksum exited with status {}: {}",
+            output.exit_status,
+            output.stderr.trim()
+        );
+    }
+    let response: serde_json::Value = serde_json::from_str(&output.stdout)
+        .context("remote admin checksum did not return JSON")?;
+    if !response["ok"].as_bool().unwrap_or(false) {
+        anyhow::bail!(
+            "remote admin checksum failed: {}",
+            response["error"].as_str().unwrap_or("unknown error")
+        );
+    }
+    serde_json::from_value(response["data"].clone())
+        .context("remote admin checksum JSON has invalid data")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
