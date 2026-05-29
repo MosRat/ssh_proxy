@@ -42,19 +42,21 @@ Current horizontal crates:
 - `crates/ssh-proxy-control/`: daemon control socket endpoints, JSON-line
   request/response I/O limits, Unix sockets, and Windows named-pipe ACL setup.
 - `crates/ssh-proxy-ssh/`: Rust-native SSH target resolution, OpenSSH config
-  parsing, agent/private-key authentication, jump chains, exec/upload, and
-  direct-tcpip streams.
+  parsing, agent/private-key authentication, jump chains, exec/upload,
+  direct-tcpip streams, and the opaque `SshStream` wrapper that hides `russh`
+  from app runtimes.
 - `crates/ssh-proxy-transport/`: peer transport contracts, TLS/QUIC helpers,
-  and QUIC stream adapters.
-- `crates/ssh-proxy-route/`: route runtime decision reports, pool sizing
-  policy, preflight metadata, route task status records, and route status JSON
-  contracts.
+  QUIC stream adapters, remote helper stream/error models, and SOCKS5/HTTP
+  proxy parser primitives.
+- `crates/ssh-proxy-route/`: route runtime decision reports, route plan
+  rendering, pool sizing policy, preflight metadata, route task status records,
+  and route status JSON contracts.
 - `crates/ssh-proxy-deploy/`: remote install result DTOs, command-neutral
   remote install plans, and remote setup artifact intents.
 - `crates/ssh-proxy-service/`: local service-management contracts and provider
   report DTOs.
 - `crates/ssh-proxy-daemon/`: command-neutral daemon job, session, peer,
-  update, state, and request-view DTOs.
+  update, state, request-view DTOs, and daemon client fallback reports.
 - `crates/ssh-proxy-cli/`: Clap command and argument contracts plus adapters
   into core command-neutral intents. The binary crate converts those intents
   into daemon, lifecycle, deploy, or route calls.
@@ -74,7 +76,8 @@ large vertical subsystems are still split by semantic module:
   deploy-owned VS Code settings, server-env setup, and status-file intents.
 - `quic_native/`: QUIC-native control and per-flow stream runtime.
 - `service/`: local service planning and platform execution.
-- `socks/`: SOCKS5H, HTTP proxy parsing, and relay helpers.
+- `socks/`: app-side SOCKS5H/HTTP listener dispatch, relay helpers, and
+  outbound adapters. Protocol parsing lives in `ssh-proxy-transport`.
 
 Intent/runtime layering rules:
 
@@ -85,8 +88,8 @@ Intent/runtime layering rules:
 - Runtime adapters own external mechanisms: SSH exec/upload/direct-tcpip,
   Tokio listeners, local service FFI, and platform command execution.
 - Boundary tests enforce production dependency direction for core/config/route/
-  deploy/lifecycle crates and prevent `service-manager` from entering
-  production dependencies.
+  deploy/lifecycle/transport/daemon crates, prevent runtime imports from
+  crossing layers, and keep `service-manager` out of production dependencies.
 
 See `docs/architecture.md` for the deeper runtime model.
 

@@ -94,16 +94,18 @@ core
 
 The first extraction pass keeps compatibility shims in `crates/ssh-proxy/src`
 so existing module paths can migrate gradually. New shared DTOs, codecs,
-lifecycle models, control socket helpers, SSH primitives, and CLI command
-contracts should live in the appropriate workspace crate rather than expanding
-the binary crate. `ssh-proxy-route` owns route decision and route status DTOs;
-`ssh-proxy-deploy` owns remote install and remote setup artifact intents;
-`ssh-proxy-service` owns service-management contracts; `ssh-proxy-daemon` owns
-command-neutral daemon/job/session/peer/state DTOs. `ssh-proxy-cli` is a
-command-contract crate; command dispatch still lives in the app crate until the
-remaining runtime orchestration is promoted. Lower crates must not depend on
-app, CLI dispatch, SSH executors, or platform service runtimes unless the
-dependency direction is explicitly promoted in a separate architecture change.
+lifecycle models, control socket helpers, SSH primitives, transport adapters,
+and CLI command contracts should live in the appropriate workspace crate rather
+than expanding the binary crate. `ssh-proxy-route` owns route decision, route
+plan, route status, and `decision_chain` rendering DTOs. `ssh-proxy-deploy`
+owns remote install and remote setup artifact intents. `ssh-proxy-service` owns
+service-management contracts. `ssh-proxy-daemon` owns command-neutral
+daemon/job/session/peer/state DTOs and daemon-unavailable fallback response
+builders. `ssh-proxy-cli` is a command-contract crate; command dispatch still
+lives in the app crate until the remaining runtime orchestration is promoted.
+Lower crates must not depend on app, CLI dispatch, SSH executors, or platform
+service runtimes unless the dependency direction is explicitly promoted in a
+separate architecture change.
 
 Command-neutral intent models sit below CLI parsing and above runtime adapters:
 
@@ -118,12 +120,22 @@ Command-neutral intent models sit below CLI parsing and above runtime adapters:
   defaults, path-expanded artifacts, and runtime tuning before the app shim
   applies them to legacy CLI-shaped structs.
 - `ssh-proxy-route` owns pool sizing and runtime decision policy in terms of
-  core route inputs. The app route modules adapt CLI/config data and run async
-  probes, but pure policy should not grow in the app crate.
+  core route inputs. It also renders route plan reports from typed route
+  context instead of forcing app modules to re-read their own JSON. The app
+  route modules adapt CLI/config data and run async probes, but pure policy
+  should not grow in the app crate.
 - `ssh-proxy-deploy` owns command-neutral remote install plans and remote setup
   artifact intents. The app crate keeps SSH execution and lifecycle adapters.
 - Lifecycle provider selection uses core `RemotePlatform` and
   `PersistenceMode`; CLI enums are compatibility wrappers at the edge.
+- `ssh-proxy-ssh` is the only crate that exposes Rust SSH behavior. It hides
+  `russh` behind `SshStream`, `connect_intent`, and `resolve_intent_target` so
+  app runtimes can use `AsyncRead + AsyncWrite` streams without depending on
+  `russh` types.
+- `ssh-proxy-transport` owns transport-facing protocol adapters: peer
+  transport TLS/QUIC helpers, QUIC stream wrappers, remote helper stream/error
+  models, and SOCKS5/HTTP parser primitives. The app crate keeps listener,
+  relay, and outbound runtime orchestration.
 
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening and session
@@ -245,11 +257,12 @@ execution to shared modules.
   corrupt-file quarantine behavior.
 - `route` owns user-visible route plans and preflight probes. Transport names,
   direct-policy labels, SSH-mode labels, and data-plane reasons come from
-  `peer_lifecycle::connection` so status, doctor, daemon, and route output use
-  one vocabulary. Daemon route status consumes `RouteRuntimeDecision` instead of
-  rebuilding selected transport, preflight, and SSH-mode metadata. New consumers
-  should prefer `connection_decision` for typed transport selection and read the
-  older route metadata only for compatibility or detailed diagnostics.
+  `ssh-proxy-route::decision` so status, doctor, daemon, and route output use
+  one vocabulary. Route plan JSON is rendered from `RoutePlanReport`; daemon
+  route status consumes `RouteRuntimeDecision` instead of rebuilding selected
+  transport, preflight, and SSH-mode metadata. New consumers should prefer
+  `connection_decision` for typed transport selection and read the older route
+  metadata only for compatibility or detailed diagnostics.
 
 ## Public CLI Surface
 
