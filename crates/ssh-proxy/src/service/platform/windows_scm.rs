@@ -48,12 +48,12 @@ pub(super) fn print(plan: &ServicePlan, service_name: &str) {
 }
 
 pub(super) fn probe_summary(scope: ServiceScope, service_name: String) -> ServiceProbeSummary {
-    let capture = capture_command_output("sc.exe", &["query", &service_name]);
-    let stdout = capture["stdout"].as_str().unwrap_or_default();
+    let capture = native_status_summary(&service_name);
     let stderr = capture["stderr"].as_str().unwrap_or_default();
-    let running = stdout.to_ascii_uppercase().contains("RUNNING");
-    let exists = capture["ok"].as_bool().unwrap_or(false);
-    let permission_denied = contains_permission_denied(stderr);
+    let running = capture["running"].as_bool().unwrap_or(false);
+    let exists = capture["exists"].as_bool().unwrap_or(false);
+    let permission_denied =
+        capture["permission_denied"].as_bool().unwrap_or(false) || contains_permission_denied(stderr);
     let state = if running {
         ServiceProbeState::Healthy
     } else if exists {
@@ -75,6 +75,9 @@ pub(super) fn probe_summary(scope: ServiceScope, service_name: String) -> Servic
         permission_denied,
         json!({
             "program": "sc.exe",
+            "execution_backend": capture["execution_backend"].clone(),
+            "native_api_available": capture["native_api_available"].clone(),
+            "fallback_used": capture["fallback_used"].clone(),
             "capture": capture,
             "running": running,
         }),
@@ -220,7 +223,7 @@ pub(super) fn status(service_name: &str) -> Result<()> {
 }
 
 pub(super) fn status_summary(service_name: &str) -> Value {
-    capture_command_output("sc.exe", &["query", service_name])
+    native_status_summary(service_name)
 }
 
 fn service_exists(service_name: &str) -> bool {
@@ -234,6 +237,76 @@ fn service_running(service_name: &str) -> bool {
         .ok()
         .flatten()
         .is_some_and(|service| service_status_is(&service, ServiceState::Running))
+}
+
+fn native_status_summary(service_name: &str) -> Value {
+    match open_system_service(service_name, ServiceAccess::QUERY_STATUS) {
+        Ok(Some(service)) => match service.query_status() {
+            Ok(status) => {
+                let running = status.current_state == ServiceState::Running;
+                json!({
+                    "ok": true,
+                    "program": Value::Null,
+                    "args": [],
+                    "class": ExternalActionClass::RequiredProvider.as_str(),
+                    "execution_backend": "native_api",
+                    "native_api_available": true,
+                    "fallback_used": false,
+                    "reason": "query Windows SCM status through windows-service API",
+                    "service_name": service_name,
+                    "exists": true,
+                    "running": running,
+                    "state": format!("{:?}", status.current_state),
+                    "status_code": Value::Null,
+                    "stdout": "",
+                    "stderr": "",
+                    "permission_denied": false,
+                })
+            }
+            Err(err) => native_status_fallback(service_name, Some(err.to_string())),
+        },
+        Ok(None) => json!({
+            "ok": true,
+            "program": Value::Null,
+            "args": [],
+            "class": ExternalActionClass::RequiredProvider.as_str(),
+            "execution_backend": "native_api",
+            "native_api_available": true,
+            "fallback_used": false,
+            "reason": "query Windows SCM status through windows-service API",
+            "service_name": service_name,
+            "exists": false,
+            "running": false,
+            "state": "NotInstalled",
+            "status_code": Value::Null,
+            "stdout": "",
+            "stderr": "",
+            "permission_denied": false,
+        }),
+        Err(err) => native_status_fallback(service_name, Some(err.to_string())),
+    }
+}
+
+fn native_status_fallback(service_name: &str, native_error: Option<String>) -> Value {
+    let mut fallback = capture_command_output("sc.exe", &["query", service_name]);
+    let stdout = fallback["stdout"].as_str().unwrap_or_default().to_string();
+    let stderr = fallback["stderr"].as_str().unwrap_or_default().to_string();
+    let running = stdout.to_ascii_uppercase().contains("RUNNING");
+    let exists = fallback["ok"].as_bool().unwrap_or(false);
+    if let Some(object) = fallback.as_object_mut() {
+        object.insert("execution_backend".to_string(), json!("provider_command"));
+        object.insert("native_api_available".to_string(), json!(false));
+        object.insert("fallback_used".to_string(), json!(true));
+        object.insert("native_error".to_string(), json!(native_error));
+        object.insert("service_name".to_string(), json!(service_name));
+        object.insert("exists".to_string(), json!(exists));
+        object.insert("running".to_string(), json!(running));
+        object.insert(
+            "permission_denied".to_string(),
+            json!(contains_permission_denied(&stderr)),
+        );
+    }
+    fallback
 }
 
 fn stop_service_for_replace(service_name: &str) -> Result<()> {
