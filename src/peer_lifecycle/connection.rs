@@ -312,6 +312,60 @@ fn plain_tcp_selection_reason(source: &str) -> String {
 mod tests {
     use super::*;
 
+    fn route_args() -> cli::RouteArgs {
+        cli::RouteArgs {
+            target: "peer".to_string(),
+            direction: cli::RouteDirection::LocalUsesRemote,
+            connect_mode: cli::RouteConnectMode::Auto,
+            port: 18080,
+            bind: "127.0.0.1".parse().unwrap(),
+            tcp_target: None,
+            endpoint: "tcp://127.0.0.1:1".to_string(),
+            token: None,
+            ssh_args: Vec::new(),
+            user: None,
+            ssh_port: None,
+            identity: Vec::new(),
+            config: None,
+            known_hosts: None,
+            accept_new: false,
+            insecure_ignore_host_key: false,
+            jump: Vec::new(),
+            remote_path: None,
+            remote_bin: None,
+            deploy: cli::DeployMode::Auto,
+            remote_os: cli::RemoteOs::Auto,
+            remote_transport: cli::RemoteTransport::Auto,
+            remote_tcp: None,
+            remote_control: None,
+            remote_quic: None,
+            remote_tls: None,
+            remote_ca: None,
+            remote_name: "localhost".to_string(),
+            remote_token: None,
+            egress_proxy: None,
+            reconnect_delay_secs: None,
+            reconnect_max_delay_secs: None,
+            connect_timeout_secs: None,
+            quic_max_bidi_streams: None,
+            quic_stream_receive_window: None,
+            quic_receive_window: None,
+            quic_keep_alive_interval_secs: None,
+            quic_idle_timeout_secs: None,
+            transport_pool_size: None,
+            workload_hint: None,
+            ssh_session_pool_size: None,
+            no_reconnect: false,
+            local_peer: None,
+            allow_plain_tcp: false,
+            id: None,
+            volatile: false,
+            dry_run: true,
+            explain: false,
+            json: false,
+        }
+    }
+
     #[test]
     fn peer_ready_requires_descriptor_and_transport() {
         assert!(!persistent_peer_ready(None));
@@ -369,5 +423,97 @@ mod tests {
             ssh_data_plane_reason(cli::RemoteTransport::Exec, None),
             json!("ssh_exec_compatibility")
         );
+    }
+
+    #[test]
+    fn transport_selection_keeps_single_precedence_chain() {
+        let defaults = config::ProxyProfile::default();
+        let mut args = route_args();
+        args.remote_transport = cli::RemoteTransport::Exec;
+
+        let selected =
+            transport_selection_policy(&args, None, &defaults, None, None, false, false, true)
+                .expect("explicit transport");
+        assert_eq!(selected.transport, cli::RemoteTransport::Exec);
+        assert_eq!(selected.source, "cli");
+
+        let args = route_args();
+        let profile = config::ProxyProfile {
+            remote_transport: Some("tcp".to_string()),
+            ..Default::default()
+        };
+        let selected = transport_selection_policy(
+            &args,
+            Some(&profile),
+            &defaults,
+            Some("192.0.2.8:19083".parse().unwrap()),
+            Some("192.0.2.8:19082".parse().unwrap()),
+            false,
+            false,
+            true,
+        )
+        .expect("profile transport");
+        assert_eq!(selected.transport, cli::RemoteTransport::Tcp);
+        assert_eq!(selected.source, "profile");
+
+        let selected = transport_selection_policy(
+            &args,
+            None,
+            &defaults,
+            Some("192.0.2.8:19083".parse().unwrap()),
+            Some("192.0.2.8:19082".parse().unwrap()),
+            false,
+            false,
+            true,
+        )
+        .expect("tls transport");
+        assert_eq!(selected.transport, cli::RemoteTransport::TlsTcp);
+        assert_eq!(selected.source, "topology");
+
+        let selected = transport_selection_policy(
+            &args,
+            None,
+            &defaults,
+            Some("192.0.2.8:19083".parse().unwrap()),
+            None,
+            false,
+            false,
+            true,
+        )
+        .expect("quic transport");
+        assert_eq!(selected.transport, cli::RemoteTransport::Quic);
+
+        let selected =
+            transport_selection_policy(&args, None, &defaults, None, None, false, false, true)
+                .expect("persistent peer transport");
+        assert_eq!(selected.transport, cli::RemoteTransport::Tcp);
+        assert_eq!(selected.source, "peer-default");
+
+        let selected =
+            transport_selection_policy(&args, None, &defaults, None, None, false, false, false)
+                .expect("ssh-only transport");
+        assert_eq!(selected.transport, cli::RemoteTransport::SshNative);
+        assert_eq!(selected.source, "topology");
+    }
+
+    #[test]
+    fn plain_tcp_default_needs_explicit_trust_source() {
+        let args = route_args();
+        let mut defaults = config::ProxyProfile {
+            remote_transport: Some("plain-tcp".to_string()),
+            ..Default::default()
+        };
+
+        let selected =
+            transport_selection_policy(&args, None, &defaults, None, None, false, false, false)
+                .expect("plain tcp disabled");
+        assert_eq!(selected.transport, cli::RemoteTransport::SshNative);
+
+        defaults.allow_plain_tcp = Some(true);
+        let selected =
+            transport_selection_policy(&args, None, &defaults, None, None, true, false, false)
+                .expect("plain tcp enabled");
+        assert_eq!(selected.transport, cli::RemoteTransport::PlainTcp);
+        assert_eq!(selected.source, "benchmark-tuned default");
     }
 }
