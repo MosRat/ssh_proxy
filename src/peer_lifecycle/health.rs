@@ -2,15 +2,7 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum PeerHealthState {
-    Unknown,
-    Starting,
-    Healthy,
-    Degraded,
-    Failed,
-}
+pub(crate) type PeerHealthState = crate::protocol_core::report::HealthStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PeerHealth {
