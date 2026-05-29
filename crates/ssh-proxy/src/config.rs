@@ -12,9 +12,11 @@ pub use io::{
     routes_path, save_text_file_private, sessions_path,
 };
 mod profile;
+#[cfg(test)]
+pub use ssh_proxy_config::DaemonConfig;
 pub use ssh_proxy_config::{
-    AppConfig, CONFIG_SCHEMA_VERSION, DaemonConfig, NodeIdentity, PeerRecord, ProxyProfile,
-    TokenMetadata, expand_path, first_available_addr, generate_token,
+    AppConfig, CONFIG_SCHEMA_VERSION, NodeIdentity, PeerRecord, ProxyProfile, TokenMetadata,
+    expand_path, first_available_addr, generate_token,
 };
 
 pub fn proxy_from_profile(config: &AppConfig, name: &str) -> Result<cli::ProxyArgs> {
