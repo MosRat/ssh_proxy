@@ -1,11 +1,5 @@
 use super::*;
-use crate::{
-    cli,
-    peer_lifecycle::{
-        spec::PeerLifecycleSpec,
-        workflow::{LifecycleOperation, PeerLifecyclePhase},
-    },
-};
+use crate::cli;
 
 fn install_args(persist: cli::PersistMode) -> cli::InstallRemoteArgs {
     cli::InstallRemoteArgs {
@@ -39,46 +33,6 @@ fn install_args(persist: cli::PersistMode) -> cli::InstallRemoteArgs {
         remote_tls_client_ca: None,
         persist,
     }
-}
-
-#[test]
-fn provider_contract_builds_lifecycle_plan() {
-    let provider = ServiceProviderPlan::new(ServiceProviderKind::SystemdUser, "ssh_proxy");
-    let args = install_args(cli::PersistMode::Systemd);
-    let spec = PeerLifecycleSpec::remote_peer(
-        "edge",
-        "/home/me/bin/ssh_proxy",
-        &args,
-        ServiceProviderKind::SystemdUser,
-    );
-
-    let plan = provider.lifecycle_plan(
-        &spec,
-        LifecycleOperation::Install,
-        Some("systemctl --user restart ssh_proxy".to_string()),
-    );
-
-    assert_eq!(provider.kind(), ServiceProviderKind::SystemdUser);
-    assert_eq!(provider.service_name(), "ssh_proxy");
-    assert_eq!(provider.dependency_report()[0].state, "selected_provider");
-    assert_eq!(plan.operation, LifecycleOperation::Install);
-    assert_eq!(plan.steps.len(), 2);
-    assert_eq!(plan.steps[0].phase, PeerLifecyclePhase::DependencyCheck);
-    assert_eq!(plan.steps[1].phase, PeerLifecyclePhase::InstallService);
-}
-
-#[test]
-fn provider_status_classification_is_stable() {
-    let provider = ServiceProviderPlan::new(ServiceProviderKind::SystemdUser, "ssh_proxy");
-
-    let healthy = provider.classify_status(0, "ActiveState=active", "");
-    let missing = provider.classify_status(3, "LoadState=not-found", "");
-    let denied = provider.classify_status(1, "", "permission denied");
-
-    assert_eq!(healthy.state, ProviderStatusState::Healthy);
-    assert_eq!(missing.state, ProviderStatusState::Missing);
-    assert_eq!(denied.state, ProviderStatusState::PermissionDenied);
-    assert!(provider.repair_hint("service_missing").is_some());
 }
 
 #[test]

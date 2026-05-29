@@ -643,6 +643,64 @@ fn service_status_summaries_live_in_service_crate() {
 }
 
 #[test]
+fn lifecycle_provider_contracts_live_in_lifecycle_crate() {
+    let app_provider = read_repo_file("crates/ssh-proxy/src/peer_lifecycle/service_provider.rs");
+    assert_contains(
+        &app_provider,
+        "ssh_proxy_lifecycle::service_provider::{PeerServiceProvider, ServiceProviderPlan}",
+        "app peer lifecycle provider module should re-export lifecycle provider contracts",
+    );
+    assert_not_contains(
+        &app_provider,
+        "mod contract;",
+        "app peer lifecycle provider module should not keep duplicate provider contracts",
+    );
+
+    let app_contract_path =
+        workspace_root().join("crates/ssh-proxy/src/peer_lifecycle/service_provider/contract.rs");
+    assert!(
+        !app_contract_path.exists(),
+        "app peer lifecycle provider contract implementation should be removed"
+    );
+
+    let app_plans = read_repo_file("crates/ssh-proxy/src/peer_lifecycle/service_provider/plans.rs");
+    assert_contains(
+        &app_plans,
+        "remote_service_action_plan",
+        "app remote service install plan should adapt into lifecycle provider plans",
+    );
+    assert_contains(
+        &app_plans,
+        "reported_service_manager",
+        "app adapter may preserve legacy reported_service_manager compatibility",
+    );
+    assert_not_contains(
+        &app_plans,
+        "pub(crate) struct ServiceProviderPlan",
+        "app remote service plan adapter should not reimplement provider contracts",
+    );
+    assert_not_contains(
+        &app_plans,
+        "pub(crate) trait PeerServiceProvider",
+        "app remote service plan adapter should not reimplement provider traits",
+    );
+
+    let lifecycle_contract =
+        read_repo_file("crates/ssh-proxy-lifecycle/src/service_provider/contract.rs");
+    for symbol in [
+        "pub struct ServiceProviderPlan",
+        "pub trait PeerServiceProvider",
+        "impl PeerServiceProvider for ServiceProviderPlan",
+    ] {
+        assert_contains(
+            &lifecycle_contract,
+            symbol,
+            "lifecycle crate should own provider contract implementations",
+        );
+    }
+}
+
+#[test]
 fn self_update_execution_goes_through_platform_plans() {
     let update = read_repo_file("crates/ssh-proxy/src/node_daemon/management/update.rs");
     assert_contains(

@@ -2,11 +2,11 @@ use ssh_proxy_core::{
     intent::RemoteInstallIntent,
     model::{PersistenceMode, RemotePlatform},
 };
-use ssh_proxy_lifecycle::service_provider::{RemotePeerServiceSpec, remote_service_action_plan};
-
-use super::{
-    contract::ServiceProviderPlan, kind::ServiceProviderKind, selection::provider_for_platform,
+use ssh_proxy_lifecycle::service_provider::{
+    RemotePeerServiceSpec, ServiceProviderPlan, remote_service_action_plan,
 };
+
+use super::{kind::ServiceProviderKind, selection::provider_for_platform};
 use crate::peer_lifecycle::workflow::{LifecycleOperation, LifecyclePlan};
 
 #[derive(Debug, Clone)]

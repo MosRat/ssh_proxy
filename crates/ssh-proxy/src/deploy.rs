@@ -29,9 +29,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::peer_lifecycle::{
-        service_provider::PeerServiceProvider, workflow::LifecycleOperation,
-    };
     use descriptor::{apply_descriptor_to_install_args, descriptor_protocols};
     use host::host_exec_response;
     use profile_record::apply_remote_token_rotation_profile;
@@ -90,18 +87,24 @@ mod tests {
             peer_lifecycle::service_provider::ServiceProviderKind::SystemdUser,
             "ssh-proxy-helper",
         );
-        let report = install::run_remote_install_plan(
-            &executor,
-            &spec,
-            provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some("true".to_string())),
-        )
-        .await
-        .unwrap();
+        let intent: ssh_proxy_core::intent::RemoteInstallIntent = (&args).into();
+        let install_plan = peer_lifecycle::service_provider::remote_service_install_plan(
+            &spec.binary_path,
+            &intent,
+        );
+        let report = install::run_remote_install_plan(&executor, &spec, install_plan.action_plan)
+            .await
+            .unwrap();
 
+        assert_eq!(
+            provider.kind,
+            peer_lifecycle::service_provider::ServiceProviderKind::SystemdUser
+        );
+        assert!(install_plan.command.contains("systemctl --user"));
         assert_eq!(report["role"], "remote_peer");
         assert_eq!(report["operation"], "install");
         assert_eq!(report["provider"], "systemd_user");
-        assert_eq!(executor.commands(), vec!["true"]);
+        assert_eq!(executor.commands(), vec![install_plan.command]);
     }
 
     #[test]
