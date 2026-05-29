@@ -5,7 +5,14 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{config, ssh_client};
+use crate::{
+    config,
+    peer_lifecycle::{
+        artifacts::PeerArtifact,
+        executor::{PeerExecutor, SshExecutor},
+    },
+    ssh_client,
+};
 
 use super::{proxy_session::ProxySessionSpec, remote_ssh};
 
@@ -34,13 +41,10 @@ pub(super) async fn apply_remote_settings(
     }
 
     if spec.apply_policy.server_env {
-        run_script(
+        write_remote_server_env_setup(
             &client,
-            &build_server_env_setup_script(
-                &spec.apply_policy.server_dir,
-                &build_proxy_env(remote_url, &spec.apply_policy.no_proxy),
-            ),
-            "patch remote server-env-setup",
+            &spec.apply_policy.server_dir,
+            &build_proxy_env(remote_url, &spec.apply_policy.no_proxy),
         )
         .await?;
     }
@@ -63,12 +67,7 @@ pub(super) async fn apply_remote_settings(
     }
 
     if spec.apply_policy.remote_status_file {
-        run_script(
-            &client,
-            &build_remote_status_file_script(&spec.apply_policy.server_dir, &payload)?,
-            "write remote proxy status file",
-        )
-        .await?;
+        write_remote_status_file(&client, &spec.apply_policy.server_dir, &payload).await?;
     }
 
     Ok(RemoteSetupOutcome {
@@ -264,29 +263,13 @@ async fn read_remote_machine_settings(
     client: &ssh_client::Client,
     server_dir: &str,
 ) -> Result<String> {
-    let script = format!(
-        r#"
-set -eu
-server_dir={server_dir}
-settings="$HOME/$server_dir/data/Machine/settings.json"
-if [ -f "$settings" ]; then
-  cat "$settings"
-fi
-"#,
-        server_dir = shell_quote(server_dir),
-    );
-    let output = client
-        .exec_capture("sh -s".to_string(), Some(script.into_bytes()))
-        .await
-        .context("read remote VS Code machine settings failed to start")?;
-    if output.exit_status != 0 {
-        return Err(anyhow!(
-            "read remote VS Code machine settings failed with status {}: {}",
-            output.exit_status,
-            output.stderr.trim()
-        ));
-    }
-    Ok(output.stdout)
+    read_remote_setup_artifact(
+        client,
+        server_dir,
+        "data/Machine/settings.json",
+        "read remote VS Code machine settings",
+    )
+    .await
 }
 
 async fn write_remote_machine_settings(
@@ -295,27 +278,16 @@ async fn write_remote_machine_settings(
     settings: &Value,
 ) -> Result<()> {
     let text = serde_json::to_string_pretty(settings)? + "\n";
-    let script = format!(
-        r#"
-set -eu
-server_dir={server_dir}
-settings="$HOME/$server_dir/data/Machine/settings.json"
-mkdir -p "$(dirname "$settings")"
-if [ -f "$settings" ]; then
-  cp "$settings" "$settings.vscode-remote-proxy.bak" || true
-fi
-tmp="$settings.tmp.$$"
-cat > "$tmp" <<'JSON'
-{settings_json}
-JSON
-chmod 600 "$tmp"
-mv "$tmp" "$settings"
-echo "remote-proxy: patched $settings"
-"#,
-        server_dir = shell_quote(server_dir),
-        settings_json = text,
-    );
-    run_script(client, &script, "write remote VS Code machine settings").await
+    write_remote_setup_artifact(
+        client,
+        server_dir,
+        "data/Machine/settings.json",
+        PeerArtifact::VscodeMachineSettings,
+        text.into_bytes(),
+        true,
+        "write remote VS Code machine settings",
+    )
+    .await
 }
 
 fn parse_settings_object(raw: &str) -> serde_json::Map<String, Value> {
@@ -415,7 +387,89 @@ fn remove_trailing_json_commas(input: &str) -> String {
     output
 }
 
-fn build_server_env_setup_script(server_dir: &str, env: &BTreeMap<String, String>) -> String {
+async fn read_remote_setup_artifact(
+    client: &ssh_client::Client,
+    server_dir: &str,
+    relative_path: &str,
+    label: &str,
+) -> Result<String> {
+    let command = build_remote_setup_read_command(server_dir, relative_path);
+    let executor = SshExecutor::new(client);
+    let bytes = executor
+        .read_artifact(command)
+        .await
+        .with_context(|| format!("{label} failed"))?;
+    String::from_utf8(bytes).with_context(|| format!("{label} returned non-UTF-8 content"))
+}
+
+async fn write_remote_setup_artifact(
+    client: &ssh_client::Client,
+    server_dir: &str,
+    relative_path: &str,
+    artifact: PeerArtifact,
+    bytes: Vec<u8>,
+    backup_existing: bool,
+    label: &str,
+) -> Result<()> {
+    let command = build_remote_setup_write_command(server_dir, relative_path, backup_existing);
+    let executor = SshExecutor::new(client);
+    executor
+        .write_artifact(command, artifact, bytes)
+        .await
+        .with_context(|| format!("{label} failed"))
+}
+
+fn build_remote_setup_read_command(server_dir: &str, relative_path: &str) -> String {
+    format!(
+        "set -eu; server_dir={server_dir}; relative_path={relative_path}; target=\"$HOME/$server_dir/$relative_path\"; if [ -f \"$target\" ]; then cat \"$target\"; fi",
+        server_dir = shell_quote(server_dir),
+        relative_path = shell_quote(relative_path),
+    )
+}
+
+fn build_remote_setup_write_command(
+    server_dir: &str,
+    relative_path: &str,
+    backup_existing: bool,
+) -> String {
+    let backup = if backup_existing {
+        "if [ -f \"$target\" ]; then cp \"$target\" \"$target.vscode-remote-proxy.bak\" 2>/dev/null || true; fi; "
+    } else {
+        ""
+    };
+    format!(
+        "set -eu; server_dir={server_dir}; relative_path={relative_path}; target=\"$HOME/$server_dir/$relative_path\"; mkdir -p \"$(dirname \"$target\")\"; tmp=\"$target.tmp.$$\"; umask 077; cat > \"$tmp\"; {backup}mv \"$tmp\" \"$target\"; chmod 600 \"$target\" 2>/dev/null || true",
+        server_dir = shell_quote(server_dir),
+        relative_path = shell_quote(relative_path),
+    )
+}
+
+async fn write_remote_server_env_setup(
+    client: &ssh_client::Client,
+    server_dir: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<()> {
+    let current = read_remote_setup_artifact(
+        client,
+        server_dir,
+        "server-env-setup",
+        "read server-env-setup",
+    )
+    .await?;
+    let content = build_server_env_setup_content(&current, env);
+    write_remote_setup_artifact(
+        client,
+        server_dir,
+        "server-env-setup",
+        PeerArtifact::VscodeServerEnv,
+        content.into_bytes(),
+        true,
+        "patch remote server-env-setup",
+    )
+    .await
+}
+
+fn build_server_env_setup_content(current: &str, env: &BTreeMap<String, String>) -> String {
     let lines = env
         .iter()
         .map(|(key, value)| format!("export {}={}", key, shell_quote(value)))
@@ -426,30 +480,33 @@ fn build_server_env_setup_script(server_dir: &str, env: &BTreeMap<String, String
         "# <<< vscode-remote-proxy <<<".to_string(),
     ]
     .join("\n");
-    format!(
-        r#"
-set -eu
-server_dir={server_dir}
-target="$HOME/$server_dir/server-env-setup"
-mkdir -p "$(dirname "$target")"
-tmp="$target.tmp.$$"
-if [ -f "$target" ]; then
-  awk '
-    /# >>> vscode-remote-proxy >>>/ {{ skip=1; next }}
-    /# <<< vscode-remote-proxy <<</ {{ skip=0; next }}
-    skip != 1 {{ print }}
-  ' "$target" > "$tmp"
-else
-  : > "$tmp"
-fi
-printf '%s\n' {block} >> "$tmp"
-chmod 600 "$tmp"
-mv "$tmp" "$target"
-echo "remote-proxy: patched $target"
-"#,
-        server_dir = shell_quote(server_dir),
-        block = shell_quote(&block),
-    )
+    let mut cleaned = strip_managed_server_env_block(current);
+    if !cleaned.is_empty() && !cleaned.ends_with('\n') {
+        cleaned.push('\n');
+    }
+    cleaned.push_str(&block);
+    cleaned.push('\n');
+    cleaned
+}
+
+fn strip_managed_server_env_block(current: &str) -> String {
+    let mut cleaned = Vec::new();
+    let mut skip = false;
+    for line in current.lines() {
+        match line.trim() {
+            "# >>> vscode-remote-proxy >>>" => {
+                skip = true;
+                continue;
+            }
+            "# <<< vscode-remote-proxy <<<" => {
+                skip = false;
+                continue;
+            }
+            _ if skip => continue,
+            _ => cleaned.push(line),
+        }
+    }
+    cleaned.join("\n").trim_end_matches('\n').to_string()
 }
 
 fn build_git_config_script(
@@ -537,23 +594,23 @@ fi
     )
 }
 
-fn build_remote_status_file_script(server_dir: &str, payload: &Value) -> Result<String> {
-    let encoded = serde_json::to_string(payload)?;
-    Ok(format!(
-        r#"
-set -eu
-server_dir={server_dir}
-target="$HOME/$server_dir/remote-proxy-status.json"
-mkdir -p "$(dirname "$target")"
-cat > "$target" <<'JSON'
-{encoded}
-JSON
-chmod 600 "$target"
-echo "remote-proxy: wrote $target"
-"#,
-        server_dir = shell_quote(server_dir),
-        encoded = encoded,
-    ))
+async fn write_remote_status_file(
+    client: &ssh_client::Client,
+    server_dir: &str,
+    payload: &Value,
+) -> Result<()> {
+    let mut bytes = serde_json::to_vec(payload)?;
+    bytes.push(b'\n');
+    write_remote_setup_artifact(
+        client,
+        server_dir,
+        "remote-proxy-status.json",
+        PeerArtifact::VscodeRemoteStatus,
+        bytes,
+        false,
+        "write remote proxy status file",
+    )
+    .await
 }
 
 fn build_cleanup_script(server_dir: &str, workspace_paths: &[String]) -> String {
@@ -682,6 +739,35 @@ mod tests {
         assert!(script.contains("remote-proxy-status.json"));
         assert!(script.contains("# >>> vscode-remote-proxy >>>"));
         assert!(script.contains("cleanup_workspace_git '/home/wen/project'"));
+    }
+
+    #[test]
+    fn server_env_setup_content_replaces_existing_managed_block() {
+        let mut env = BTreeMap::new();
+        env.insert(
+            "HTTPS_PROXY".to_string(),
+            "http://127.0.0.1:17890/".to_string(),
+        );
+        let current = "export KEEP=1\n# >>> vscode-remote-proxy >>>\nexport OLD=1\n# <<< vscode-remote-proxy <<<\nexport AFTER=1\n";
+
+        let content = build_server_env_setup_content(current, &env);
+
+        assert!(content.contains("export KEEP=1"));
+        assert!(content.contains("export AFTER=1"));
+        assert!(content.contains("export HTTPS_PROXY='http://127.0.0.1:17890/'"));
+        assert!(!content.contains("export OLD=1"));
+    }
+
+    #[test]
+    fn remote_setup_artifact_commands_use_stdin_without_content_embedding() {
+        let write =
+            build_remote_setup_write_command(".vscode-server", "data/Machine/settings.json", true);
+        let read = build_remote_setup_read_command(".vscode-server", "remote-proxy-status.json");
+
+        assert!(write.contains("cat > \"$tmp\""));
+        assert!(write.contains(".vscode-remote-proxy.bak"));
+        assert!(!write.contains("<<'JSON'"));
+        assert!(read.contains("cat \"$target\""));
     }
 
     #[test]

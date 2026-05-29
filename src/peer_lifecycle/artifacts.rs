@@ -7,6 +7,9 @@ pub(crate) enum PeerArtifact {
     InstallReport,
     Health,
     Routes,
+    VscodeMachineSettings,
+    VscodeServerEnv,
+    VscodeRemoteStatus,
 }
 
 impl PeerArtifact {
@@ -17,6 +20,9 @@ impl PeerArtifact {
             Self::InstallReport => "install_report.json",
             Self::Health => "health.json",
             Self::Routes => "routes.json",
+            Self::VscodeMachineSettings => "settings.json",
+            Self::VscodeServerEnv => "server-env-setup",
+            Self::VscodeRemoteStatus => "remote-proxy-status.json",
         }
     }
 
@@ -68,6 +74,10 @@ mod tests {
     fn artifact_names_match_remote_peer_files() {
         assert_eq!(PeerArtifact::Config.file_name(), "config.toml");
         assert_eq!(PeerArtifact::PeerState.file_name(), "peer_state.json");
+        assert_eq!(
+            PeerArtifact::VscodeRemoteStatus.file_name(),
+            "remote-proxy-status.json"
+        );
         assert!(PeerArtifact::Routes.preserve_existing());
         assert!(PeerArtifact::Config.backup_existing());
     }

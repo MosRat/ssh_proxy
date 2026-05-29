@@ -105,6 +105,24 @@ impl PeerExecutor for SshExecutor<'_> {
         Box::pin(async move { self.client.exec_upload(command, bytes).await })
     }
 
+    fn read_artifact<'a>(&'a self, command: String) -> BoxExecutorFuture<'a, Vec<u8>> {
+        Box::pin(async move {
+            let output = self
+                .client
+                .exec_capture(command.clone(), None)
+                .await
+                .with_context(|| format!("failed to read remote lifecycle artifact: {command}"))?;
+            if output.exit_status != 0 {
+                bail!(
+                    "remote lifecycle artifact read failed with status {}: {}",
+                    output.exit_status,
+                    output.stderr.trim()
+                );
+            }
+            Ok(output.stdout.into_bytes())
+        })
+    }
+
     fn probe_tcp<'a>(&'a self, addr: SocketAddr) -> BoxExecutorFuture<'a, ()> {
         Box::pin(async move {
             let _stream = self
