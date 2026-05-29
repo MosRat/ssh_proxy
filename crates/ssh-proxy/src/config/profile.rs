@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::net::SocketAddr;
 
 use anyhow::{Result, bail};
 
@@ -70,134 +70,131 @@ pub(super) fn apply_profile(
     profile: &ProxyProfile,
     source: &str,
 ) -> Result<()> {
+    let defaults = ssh_proxy_config::plan_profile_defaults(profile)?;
+
     if args.listen == SocketAddr::from(([127, 0, 0, 1], 1080))
-        && let Some(value) = profile.listen
+        && let Some(value) = defaults.listen
     {
         args.listen = value;
     }
     args.tcp_target = args
         .tcp_target
         .take()
-        .or_else(|| profile.tcp_target.clone().map(Into::into));
+        .or_else(|| defaults.tcp_target.clone().map(Into::into));
     if args.ssh_args.is_empty() {
-        args.ssh_args = profile.ssh_args.clone();
+        args.ssh_args = defaults.ssh_args.clone();
     }
-    args.user = args.user.take().or_else(|| profile.user.clone());
-    args.port = args.port.or(profile.port);
+    args.user = args.user.take().or_else(|| defaults.user.clone());
+    args.port = args.port.or(defaults.port);
     if args.identity.is_empty() {
-        args.identity = expand_paths(&profile.identity);
+        args.identity = defaults.identity.clone();
     }
-    args.config = args
-        .config
-        .take()
-        .or_else(|| profile.config.as_ref().map(expand_path));
+    args.config = args.config.take().or_else(|| defaults.config.clone());
     args.known_hosts = args
         .known_hosts
         .take()
-        .or_else(|| profile.known_hosts.as_ref().map(expand_path));
+        .or_else(|| defaults.known_hosts.clone());
     if !args.accept_new {
-        args.accept_new = profile.accept_new.unwrap_or(false);
+        args.accept_new = defaults.accept_new.unwrap_or(false);
     }
     if !args.insecure_ignore_host_key {
-        args.insecure_ignore_host_key = profile.insecure_ignore_host_key.unwrap_or(false);
+        args.insecure_ignore_host_key = defaults.insecure_ignore_host_key.unwrap_or(false);
     }
     if args.jump.is_empty() {
-        args.jump = profile.jump.clone();
+        args.jump = defaults.jump.clone();
     }
     args.remote_path = args
         .remote_path
         .take()
-        .or_else(|| profile.remote_path.clone());
-    args.remote_bin = args
-        .remote_bin
-        .take()
-        .or_else(|| profile.remote_bin.as_ref().map(expand_path));
-    if let Some(value) = &profile.deploy {
-        args.deploy = parse_deploy(value)?;
+        .or_else(|| defaults.remote_path.clone());
+    args.remote_bin = args.remote_bin.take().or(defaults.remote_bin.clone());
+    if let Some(value) = defaults.deployment {
+        args.deploy = value.into();
     }
-    if let Some(value) = &profile.remote_os {
-        args.remote_os = parse_remote_os(value)?;
+    if let Some(value) = defaults.remote_platform {
+        args.remote_os = value.into();
     }
     if args.remote_transport == cli::RemoteTransport::Auto
-        && let Some(value) = &profile.remote_transport
+        && let Some(transport) = defaults.transport
     {
-        let transport = parse_remote_transport(value)?;
-        args.remote_transport = transport;
-        if transport != cli::RemoteTransport::Auto && args.transport_selection_source.is_none() {
+        args.remote_transport = transport.into();
+        if transport != ssh_proxy_core::model::TransportMode::Auto
+            && args.transport_selection_source.is_none()
+        {
             args.transport_selection_source = Some(source.to_string());
             args.transport_selection_reason =
                 Some(format!("loaded from {source} remote_transport"));
         }
     }
-    if let Some(value) = profile.remote_tcp {
+    if let Some(value) = defaults.endpoint.remote_tcp {
         args.remote_tcp = value;
     }
-    if let Some(value) = profile.remote_control {
+    if let Some(value) = defaults.endpoint.remote_control {
         args.remote_control = value;
     }
     if args.remote_quic.is_none()
-        && let Some(value) = profile.remote_quic
+        && let Some(value) = defaults.endpoint.remote_quic
     {
         args.remote_quic = Some(value);
     }
     if !args.allow_plain_tcp {
-        args.allow_plain_tcp = profile.allow_plain_tcp.unwrap_or(false);
+        args.allow_plain_tcp = defaults.allow_plain_tcp.unwrap_or(false);
     }
     if args.remote_tls.is_none()
-        && let Some(value) = profile.remote_tls
+        && let Some(value) = defaults.endpoint.remote_tls
     {
         args.remote_tls = Some(value);
     }
     args.remote_ca = args
         .remote_ca
         .take()
-        .or_else(|| profile.remote_ca.as_ref().map(expand_path));
+        .or(defaults.endpoint.remote_ca.clone());
     if args.remote_name == "localhost"
-        && let Some(value) = &profile.remote_name
+        && let Some(value) = &defaults.endpoint.remote_name
     {
         args.remote_name = value.clone();
     }
     args.remote_client_cert = args
         .remote_client_cert
         .take()
-        .or_else(|| profile.remote_client_cert.as_ref().map(expand_path));
+        .or_else(|| defaults.endpoint.remote_client_cert.clone());
     args.remote_client_key = args
         .remote_client_key
         .take()
-        .or_else(|| profile.remote_client_key.as_ref().map(expand_path));
+        .or_else(|| defaults.endpoint.remote_client_key.clone());
     args.remote_token = args
         .remote_token
         .take()
-        .or_else(|| profile.remote_token.clone());
+        .or_else(|| defaults.remote_token.clone());
     args.egress_proxy = args
         .egress_proxy
         .take()
-        .or_else(|| profile.egress_proxy.clone());
-    if let Some(value) = profile.reconnect_delay_secs {
+        .or_else(|| defaults.endpoint.egress_proxy.clone());
+    if let Some(value) = defaults.runtime.reconnect_delay_secs {
         args.reconnect_delay_secs = value;
     }
-    if let Some(value) = profile.reconnect_max_delay_secs {
+    if let Some(value) = defaults.runtime.reconnect_max_delay_secs {
         args.reconnect_max_delay_secs = value;
     }
-    if let Some(value) = profile.connect_timeout_secs {
+    if let Some(value) = defaults.runtime.connect_timeout_secs {
         args.connect_timeout_secs = value;
     }
-    if let Some(value) = profile.quic_max_bidi_streams {
+    if let Some(value) = defaults.runtime.quic.max_bidi_streams {
         args.quic_max_bidi_streams = value;
     }
-    if let Some(value) = profile.quic_stream_receive_window {
+    if let Some(value) = defaults.runtime.quic.stream_receive_window {
         args.quic_stream_receive_window = value;
     }
-    if let Some(value) = profile.quic_receive_window {
+    if let Some(value) = defaults.runtime.quic.receive_window {
         args.quic_receive_window = value;
     }
-    if let Some(value) = profile.quic_keep_alive_interval_secs {
+    if let Some(value) = defaults.runtime.quic.keep_alive_interval_secs {
         args.quic_keep_alive_interval_secs = value;
     }
-    if let Some(value) = profile.quic_idle_timeout_secs {
+    if let Some(value) = defaults.runtime.quic.idle_timeout_secs {
         args.quic_idle_timeout_secs = value;
     }
-    if let Some(value) = profile.transport_pool_size {
+    if let Some(value) = defaults.transport_pool_size {
         let effective = value.max(1);
         args.transport_pool_size = effective;
         args.transport_pool_source = Some(source.to_string());
@@ -207,10 +204,10 @@ pub(super) fn apply_profile(
             format!("loaded from {source} transport_pool_size; clamped to minimum 1")
         });
     }
-    if let Some(value) = profile.workload_hint {
+    if let Some(value) = defaults.runtime.workload_hint {
         args.workload_hint = Some(value.into());
     }
-    if let Some(value) = profile.ssh_session_pool_size
+    if let Some(value) = defaults.ssh_session_pool_size
         && (args.ssh_session_pool_size.is_none()
             || (source == "profile" && args.ssh_session_pool_source.as_deref() == Some("defaults")))
     {
@@ -248,9 +245,9 @@ pub(super) fn apply_profile(
         args.ssh_session_pool_warning = ssh_session_pool_warning(size);
     }
     if !args.no_reconnect {
-        args.no_reconnect = profile.no_reconnect.unwrap_or(false);
+        args.no_reconnect = defaults.no_reconnect.unwrap_or(false);
     }
-    args.control_listen = args.control_listen.or(profile.control_listen);
+    args.control_listen = args.control_listen.or(defaults.endpoint.control_listen);
     Ok(())
 }
 
@@ -271,7 +268,7 @@ pub(super) fn apply_profile_set(
         bail!("--allow-plain-tcp and --no-allow-plain-tcp are mutually exclusive");
     }
     if let Some(value) = &args.remote_transport {
-        parse_remote_transport(value)?;
+        ssh_proxy_config::parse_transport_mode(value)?;
     }
     let profile = config.profiles.entry(args.name).or_default();
     set_opt(&mut profile.target, args.target);
@@ -354,61 +351,9 @@ pub(super) fn set_opt<T>(slot: &mut Option<T>, value: Option<T>) {
     }
 }
 
-fn expand_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
-    paths.iter().map(expand_path).collect()
-}
-
 fn ssh_session_pool_warning(size: usize) -> Option<String> {
     (size > 2).then(|| {
         "ssh-native session pools above 2 can lose to handshake and scheduling overhead; benchmark before relying on this explicit value"
             .to_string()
     })
-}
-
-pub fn expand_path(path: &PathBuf) -> PathBuf {
-    let value = path.to_string_lossy();
-    if let Some(rest) = value.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.join(rest);
-    }
-    path.clone()
-}
-
-fn parse_deploy(value: &str) -> Result<cli::DeployMode> {
-    match value.to_ascii_lowercase().as_str() {
-        "auto" => Ok(cli::DeployMode::Auto),
-        "always" => Ok(cli::DeployMode::Always),
-        "never" => Ok(cli::DeployMode::Never),
-        _ => bail!("invalid deploy value {value:?}"),
-    }
-}
-
-fn parse_remote_os(value: &str) -> Result<cli::RemoteOs> {
-    match value.to_ascii_lowercase().as_str() {
-        "auto" => Ok(cli::RemoteOs::Auto),
-        "unix" | "linux" | "macos" => Ok(cli::RemoteOs::Unix),
-        "windows" => Ok(cli::RemoteOs::Windows),
-        _ => bail!("invalid remote_os value {value:?}"),
-    }
-}
-
-pub(super) fn parse_remote_transport(value: &str) -> Result<cli::RemoteTransport> {
-    match value.to_ascii_lowercase().as_str() {
-        "auto" => Ok(cli::RemoteTransport::Auto),
-        "quic" => Ok(cli::RemoteTransport::Quic),
-        "quic-native" | "quic_native" | "native-quic" | "native_quic" => {
-            Ok(cli::RemoteTransport::QuicNative)
-        }
-        "ssh-native" | "ssh_native" | "native-ssh" | "native_ssh" => {
-            Ok(cli::RemoteTransport::SshNative)
-        }
-        "tls-tcp" | "tls_tcp" | "tls" => Ok(cli::RemoteTransport::TlsTcp),
-        "plain-tcp" | "plain_tcp" | "direct-tcp" | "direct_tcp" => {
-            Ok(cli::RemoteTransport::PlainTcp)
-        }
-        "exec" => Ok(cli::RemoteTransport::Exec),
-        "tcp" => Ok(cli::RemoteTransport::Tcp),
-        _ => bail!("invalid remote_transport value {value:?}"),
-    }
 }

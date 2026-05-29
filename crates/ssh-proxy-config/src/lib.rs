@@ -1,9 +1,14 @@
 pub mod io;
 pub mod paths;
 pub mod peer;
+pub mod profile_defaults;
 pub mod schema;
 pub mod store;
 
+pub use profile_defaults::{
+    ProfileIntentDefaults, parse_deployment_policy, parse_remote_platform, parse_transport_mode,
+    plan_profile_defaults,
+};
 pub use schema::{
     AppConfig, CONFIG_SCHEMA_VERSION, DaemonConfig, NodeIdentity, PeerRecord, ProxyProfile,
     TokenMetadata,
