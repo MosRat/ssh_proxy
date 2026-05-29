@@ -15,6 +15,8 @@ use super::{
     state::RemoteSetupStatus,
 };
 
+mod state_machine;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProxySessionSpec {
     pub(crate) target: String,
@@ -209,8 +211,10 @@ impl NodeManager {
             .ok_or_else(|| anyhow!("ensure_proxy_session requires proxy_session spec"))?;
         let job_id = spec.job_id();
         if let Some(existing) = self.jobs.get(&job_id).await {
-            if reusable_proxy_session_job(&existing, self.proxy_session_route_is_live(&spec).await)
-                && self.proxy_session_matches_existing(&job_id, &spec).await
+            if state_machine::reusable_proxy_session_job(
+                &existing,
+                self.proxy_session_route_is_live(&spec).await,
+            ) && self.proxy_session_matches_existing(&job_id, &spec).await
             {
                 let session = self
                     .state
@@ -315,7 +319,7 @@ impl NodeManager {
         } else {
             None
         })
-        .or_else(|| job.as_ref().map(|job| job_health(job)))
+        .or_else(|| job.as_ref().map(state_machine::job_health))
         .or_else(|| session.as_ref().map(|session| session.health.as_str()))
         .unwrap_or("unknown");
         let ok = job.is_some() || session.is_some();
@@ -648,14 +652,9 @@ impl NodeManager {
         job_id: String,
     ) -> Result<()> {
         let route_request = route_request_from_spec(&spec);
-        self.proxy_job_phase(
-            &spec,
-            &job_id,
-            JobPhase::ResolveTarget,
-            10,
-            "resolved proxy session target",
-        )
-        .await?;
+        let step = state_machine::resolve_target_step();
+        self.proxy_job_phase(&spec, &job_id, step.phase, step.progress, step.message)
+            .await?;
         if let Err(err) = validate_proxy_session_spec(&spec) {
             let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
                 .failed(err.to_string(), Some("invalid_local_proxy".to_string()))
@@ -669,52 +668,27 @@ impl NodeManager {
                 .await?;
             return Ok(());
         }
-        self.proxy_job_phase(
-            &spec,
-            &job_id,
-            JobPhase::ValidateLocalProxy,
-            18,
-            "validated local proxy URL",
-        )
-        .await?;
-        self.proxy_job_phase(
-            &spec,
-            &job_id,
-            JobPhase::SelectRemotePort,
-            24,
-            "selected preferred remote port",
-        )
-        .await?;
-        self.proxy_job_phase(
-            &spec,
-            &job_id,
-            JobPhase::EnsurePeer,
-            35,
-            "ensuring persistent remote peer",
-        )
-        .await?;
+        for step in [
+            state_machine::validate_local_proxy_step(),
+            state_machine::select_remote_port_step(),
+            state_machine::ensure_peer_step(),
+        ] {
+            self.proxy_job_phase(&spec, &job_id, step.phase, step.progress, step.message)
+                .await?;
+        }
         if !self
             .ensure_remote_peer_for_proxy_session(&spec, &job_id)
             .await?
         {
             return Ok(());
         }
-        self.proxy_job_phase(
-            &spec,
-            &job_id,
-            JobPhase::EnsureTransport,
-            45,
-            "selected Rust transport strategy",
-        )
-        .await?;
-        self.proxy_job_phase(
-            &spec,
-            &job_id,
-            JobPhase::PlanRoute,
-            50,
-            "planned daemon-owned route",
-        )
-        .await?;
+        for step in [
+            state_machine::ensure_transport_step(),
+            state_machine::plan_route_step(),
+        ] {
+            self.proxy_job_phase(&spec, &job_id, step.phase, step.progress, step.message)
+                .await?;
+        }
 
         let response = self.handle_route_intent(route_request.clone()).await;
         match response {
@@ -742,7 +716,7 @@ impl NodeManager {
             }
             Err(err) => {
                 let error = err.to_string();
-                if route_start_conflict_is_repairable(&error) {
+                if state_machine::route_start_conflict_is_repairable(&error) {
                     let job = self
                         .jobs
                         .upsert(
@@ -804,7 +778,7 @@ impl NodeManager {
                         }
                     }
                 } else {
-                    let blocker = route_start_blocker(&error);
+                    let blocker = state_machine::route_start_blocker(&error);
                     let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
                         .failed(error, Some(blocker));
                     let job = self.jobs.upsert(job, "route intent failed").await?;
@@ -1051,25 +1025,6 @@ impl NodeManager {
     }
 }
 
-fn route_start_conflict_is_repairable(error: &str) -> bool {
-    error.contains("is already running with a different spec")
-}
-
-fn route_start_blocker(error: &str) -> String {
-    if route_start_conflict_is_repairable(error) {
-        "route_already_running_different_spec".to_string()
-    } else if error.contains("SSH authentication failed") {
-        "ssh_auth_failed".to_string()
-    } else if error.contains("ProxyCommand")
-        || error.contains("unsupported --ssh-arg")
-        || error.contains("unsupported -o")
-    {
-        "ssh_config_unsupported".to_string()
-    } else {
-        "route_start_failed".to_string()
-    }
-}
-
 fn route_request_from_spec(spec: &ProxySessionSpec) -> NodeRequest {
     let ssh = spec.ssh.as_ref();
     NodeRequest::route_intent(cli::RouteArgs {
@@ -1139,14 +1094,6 @@ fn job_for_phase(
         .transition(JobState::Running, phase, progress)
 }
 
-fn reusable_proxy_session_job(job: &JobRecord, live_route: bool) -> bool {
-    match job.state {
-        JobState::Queued | JobState::Running | JobState::WaitingRetry => true,
-        JobState::Healthy => live_route,
-        JobState::Failed | JobState::Cancelled => false,
-    }
-}
-
 fn proxy_session_accepted_response(
     spec: &ProxySessionSpec,
     job: &JobRecord,
@@ -1212,7 +1159,7 @@ fn route_status_from_job(job: &JobRecord) -> Value {
     json!({
         "route_id": job.route_id,
         "remote_url": job.remote_url,
-        "health": job_health(job),
+            "health": state_machine::job_health(job),
     })
 }
 
@@ -1228,15 +1175,6 @@ fn missing_route_status(route_id: Option<String>, remote_url: Option<String>) ->
             "next_action": "rerun_ensure_proxy_session",
         },
     })
-}
-
-fn job_health(job: &JobRecord) -> &'static str {
-    match job.state {
-        JobState::Healthy => "healthy",
-        JobState::Failed => "failed",
-        JobState::Cancelled => "cancelled",
-        JobState::Queued | JobState::Running | JobState::WaitingRetry => "starting",
-    }
 }
 
 fn error_chain(err: &anyhow::Error) -> String {
@@ -1433,9 +1371,9 @@ mod tests {
             35,
         );
 
-        assert!(!reusable_proxy_session_job(&healthy, false));
-        assert!(reusable_proxy_session_job(&healthy, true));
-        assert!(reusable_proxy_session_job(&running, false));
+        assert!(!state_machine::reusable_proxy_session_job(&healthy, false));
+        assert!(state_machine::reusable_proxy_session_job(&healthy, true));
+        assert!(state_machine::reusable_proxy_session_job(&running, false));
     }
 
     #[test]
