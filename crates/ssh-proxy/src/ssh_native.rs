@@ -8,23 +8,26 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::TcpListener,
     sync::{Mutex, Notify},
     time,
 };
-use tracing::{debug, info, warn};
 
 use crate::{
-    cli, socks,
+    cli,
     ssh_client::{self, Client, SshStream},
 };
 
 mod control;
+mod listener;
+mod metrics_guard;
 mod scheduler;
 mod status;
+
+pub use listener::run_with_state;
+use metrics_guard::{RuntimeCounterGuard, update_atomic_max};
 
 #[cfg(test)]
 use scheduler::calculate_session_score;
@@ -89,37 +92,6 @@ struct Session {
     last_close_reason: StdMutex<Option<String>>,
     last_channel_queue_depth: AtomicU64,
     max_channel_queue_depth: AtomicU64,
-}
-
-struct RuntimeCounterGuard {
-    state: Arc<State>,
-    session: Arc<Session>,
-    active: bool,
-}
-
-impl RuntimeCounterGuard {
-    fn ssh_channel(state: Arc<State>, session: Arc<Session>) -> Self {
-        Self {
-            state,
-            session,
-            active: true,
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.active = false;
-    }
-}
-
-impl Drop for RuntimeCounterGuard {
-    fn drop(&mut self) {
-        if self.active {
-            self.session.active_channels.fetch_sub(1, Ordering::Relaxed);
-            self.state
-                .active_ssh_channels
-                .fetch_sub(1, Ordering::Relaxed);
-        }
-    }
 }
 
 pub struct Stream {
@@ -475,17 +447,6 @@ fn latency_percentile(
     Some(u64::MAX)
 }
 
-fn update_atomic_max(value: &AtomicU64, candidate: u64) {
-    let mut current = value.load(Ordering::Relaxed);
-    while candidate > current {
-        match value.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
-        {
-            Ok(_) => break,
-            Err(next) => current = next,
-        }
-    }
-}
-
 impl Session {
     fn failure_age_ms(&self, now_ms: u64) -> Option<u64> {
         let failed_at = self.last_failure_elapsed_ms.load(Ordering::Relaxed);
@@ -615,47 +576,6 @@ impl AsyncWrite for Stream {
     ) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
-}
-
-pub async fn run_with_state(args: cli::ProxyArgs, state: Arc<State>) -> Result<()> {
-    if let Some(addr) = args.control_listen {
-        let control_state = state.clone();
-        tokio::spawn(async move {
-            if let Err(err) = control::run_control_server(addr, control_state).await {
-                warn!(%addr, error = %err, "ssh-native control server stopped");
-            }
-        });
-    }
-
-    let listener = TcpListener::bind(args.listen)
-        .await
-        .with_context(|| format!("failed to bind ssh-native proxy listener {}", args.listen))?;
-    info!(listen = %args.listen, "ssh-native proxy listening");
-
-    loop {
-        tokio::select! {
-            accept = listener.accept() => {
-                let (stream, peer) = accept?;
-                let state = state.clone();
-                let tcp_target = args.tcp_target.clone();
-                tokio::spawn(async move {
-                    let result = if let Some(target) = tcp_target {
-                        socks::handle_fixed_target_ssh_native(stream, peer, target, state).await
-                    } else {
-                        socks::handle_client_ssh_native(stream, peer, state).await
-                    };
-                    if let Err(err) = result {
-                        debug!(%peer, error = %err, "ssh-native proxy client failed");
-                    }
-                });
-            }
-            _ = state.shutdown_notified() => {
-                info!("shutdown requested; stopping ssh-native proxy listener");
-                break;
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
