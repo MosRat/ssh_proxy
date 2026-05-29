@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ssh_proxy_daemon::control::{NodeRequestKind, NodeRequestView};
 
 use super::proxy_session::ProxySessionSpec;
 use crate::{
@@ -494,6 +495,18 @@ impl NodeRequest {
         }
     }
 
+    pub(crate) fn typed_view(&self) -> NodeRequestView {
+        let command = self.command_kind();
+        let canonical = command.canonical_name().to_string();
+        NodeRequestView {
+            kind: NodeRequestKind::from_command(&canonical),
+            command: canonical,
+            api_version: self.api_version,
+            id: self.id.clone(),
+            alias: self.alias.clone().or_else(|| self.node.clone()),
+        }
+    }
+
     pub(crate) fn with_auth_token(mut self, token: Option<&str>) -> Self {
         if let Some(token) = token {
             self.auth_token = Some(token.to_string());
@@ -622,6 +635,8 @@ mod tests {
                 connect_mode: None,
             }
         );
+        assert_eq!(request.typed_view().kind, NodeRequestKind::RouteStart);
+        assert_eq!(request.typed_view().command, "route_start");
     }
 
     #[test]
@@ -638,6 +653,16 @@ mod tests {
                 target: Some("target"),
                 workspace: Some("workspace"),
                 remote_url: Some("http://127.0.0.1:17890"),
+            }
+        );
+        assert_eq!(
+            request.typed_view(),
+            NodeRequestView {
+                kind: NodeRequestKind::ApplyRemoteSettings,
+                command: "apply_remote_settings".to_string(),
+                api_version: Some(NODE_CONTROL_VERSION),
+                id: Some("workspace".to_string()),
+                alias: Some("target".to_string()),
             }
         );
     }

@@ -119,6 +119,7 @@ fn token_matches(provided: &str, expected: &str) -> bool {
 
 async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Result<String> {
     let command = request.command_kind();
+    let _view = request.typed_view();
     let _payload = request.typed_payload();
     match command {
         DaemonControlCommand::Status => manager.status_json().await,
