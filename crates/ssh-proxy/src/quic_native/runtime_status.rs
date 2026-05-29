@@ -4,6 +4,10 @@ use crate::{peer_transport, protocol};
 
 use super::pool::{QUIC_CONNECTION_POOL_SELECTION_POLICY, insert_zero_quic_lifecycle_status};
 
+fn json_value<T: serde::Serialize>(value: T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
 pub(super) fn disconnected_status_value(
     last_error: Option<String>,
     control_keepalive_interval_secs: u64,
@@ -63,7 +67,7 @@ pub(super) fn disconnected_status_value(
     );
     status.insert(
         "last_control_error".to_string(),
-        serde_json::to_value(last_error.clone()).expect("control error serializable"),
+        json_value(last_error.clone()),
     );
     status.insert("read_buffer_size".to_string(), copy_buffer_size.into());
     status.insert("quic_copy_buffer_size".to_string(), copy_buffer_size.into());
@@ -106,10 +110,9 @@ pub(super) fn disconnected_status_value(
     );
     status.insert(
         "quic_runtime".to_string(),
-        serde_json::to_value(peer_transport::quic_runtime_diagnostics(
+        json_value(peer_transport::quic_runtime_diagnostics(
             peer_transport::QuicTransportOptions::default(),
-        ))
-        .expect("quic runtime diagnostics serializable"),
+        )),
     );
     status.insert(
         "quic_udp_runtime".to_string(),
@@ -189,10 +192,7 @@ pub(super) fn disconnected_status_value(
         }),
     );
     status.insert("last_quic_flow_close_reason".to_string(), Value::Null);
-    status.insert(
-        "last_error".to_string(),
-        serde_json::to_value(last_error.clone()).expect("last error serializable"),
-    );
+    status.insert("last_error".to_string(), json_value(last_error.clone()));
     status.insert(
         "link".to_string(),
         json!({
