@@ -249,6 +249,8 @@ async fn run_script(
     intent: &RemoteSetupScriptIntent,
     script: &str,
 ) -> Result<()> {
+    let external_action = intent.external_action_report();
+    let external_action_json = external_action.to_json();
     let output = client
         .exec_capture(intent.command.clone(), Some(script.as_bytes().to_vec()))
         .await
@@ -270,5 +272,13 @@ async fn run_script(
             detail
         ));
     }
+    info!(
+        label = %intent.label,
+        class = %intent.class.as_str(),
+        execution_backend = %external_action.execution_backend,
+        fallback_used = external_action.fallback_used,
+        external_action = %external_action_json,
+        "remote setup fallback script completed"
+    );
     Ok(())
 }

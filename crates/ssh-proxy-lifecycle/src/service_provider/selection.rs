@@ -1,4 +1,7 @@
-use ssh_proxy_core::model::{PersistenceMode, RemotePlatform};
+use ssh_proxy_core::{
+    external::ExternalActionReport,
+    model::{PersistenceMode, RemotePlatform},
+};
 
 use super::kind::ServiceProviderKind;
 
@@ -38,6 +41,17 @@ pub fn provider_dependency_state(kind: ServiceProviderKind) -> &'static str {
     }
 }
 
+pub fn provider_external_action_report(kind: ServiceProviderKind) -> ExternalActionReport {
+    match kind {
+        ServiceProviderKind::NohupSupervisor => {
+            ExternalActionReport::fallback_provider("remote_shell_bootstrap")
+                .with_reason("nohup supervisor is an emergency compatibility provider")
+        }
+        _ => ExternalActionReport::required_provider("provider_command")
+            .with_reason(format!("{} service provider command", kind.manager_name())),
+    }
+}
+
 pub fn provider_for_remote_report(
     service_manager: &str,
     remote_platform: RemotePlatform,
@@ -69,5 +83,14 @@ mod tests {
             ),
             ServiceProviderKind::NohupSupervisor
         );
+    }
+
+    #[test]
+    fn provider_external_action_classifies_nohup_as_fallback() {
+        let value = provider_external_action_report(ServiceProviderKind::NohupSupervisor).to_json();
+
+        assert_eq!(value["class"], "fallback_provider");
+        assert_eq!(value["execution_backend"], "remote_shell_bootstrap");
+        assert_eq!(value["fallback_used"], true);
     }
 }

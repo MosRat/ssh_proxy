@@ -1,6 +1,7 @@
 use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +61,68 @@ impl fmt::Display for ParseExternalActionClassError {
 
 impl std::error::Error for ParseExternalActionClassError {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalActionReport {
+    pub class: ExternalActionClass,
+    pub execution_backend: String,
+    pub fallback_used: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_action: Option<String>,
+}
+
+impl ExternalActionReport {
+    pub fn new(
+        class: ExternalActionClass,
+        execution_backend: impl Into<String>,
+        fallback_used: bool,
+    ) -> Self {
+        Self {
+            class,
+            execution_backend: execution_backend.into(),
+            fallback_used,
+            reason: None,
+            repair_action: None,
+        }
+    }
+
+    pub fn required_provider(execution_backend: impl Into<String>) -> Self {
+        Self::new(
+            ExternalActionClass::RequiredProvider,
+            execution_backend,
+            false,
+        )
+    }
+
+    pub fn fallback_provider(execution_backend: impl Into<String>) -> Self {
+        Self::new(
+            ExternalActionClass::FallbackProvider,
+            execution_backend,
+            true,
+        )
+    }
+
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    pub fn with_repair_action(mut self, repair_action: impl Into<String>) -> Self {
+        self.repair_action = Some(repair_action.into());
+        self
+    }
+
+    pub fn with_optional_repair_action(mut self, repair_action: Option<String>) -> Self {
+        self.repair_action = repair_action;
+        self
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +141,19 @@ mod tests {
                 class
             );
         }
+    }
+
+    #[test]
+    fn external_action_report_serializes_operability_fields() {
+        let report = ExternalActionReport::fallback_provider("provider_command")
+            .with_reason("systemctl fallback after dbus unavailable")
+            .with_repair_action("install systemd dbus support");
+        let value = report.to_json();
+
+        assert_eq!(value["class"], "fallback_provider");
+        assert_eq!(value["execution_backend"], "provider_command");
+        assert_eq!(value["fallback_used"], true);
+        assert_eq!(value["reason"], "systemctl fallback after dbus unavailable");
+        assert_eq!(value["repair_action"], "install systemd dbus support");
     }
 }

@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use ssh_proxy_core::external::ExternalActionClass;
+use ssh_proxy_core::external::{ExternalActionClass, ExternalActionReport};
 
 #[cfg(windows)]
 pub use windows_service;
@@ -116,6 +116,12 @@ impl PlatformCommandPlan {
             .collect::<Vec<_>>()
             .join(" ")
     }
+
+    pub fn external_action_report(&self, fallback_used: bool) -> ExternalActionReport {
+        ExternalActionReport::new(self.class, self.execution_backend.as_str(), fallback_used)
+            .with_reason(self.reason.clone())
+            .with_optional_repair_action(self.repair_action.clone())
+    }
 }
 
 impl NativeProviderOutcome {
@@ -139,6 +145,7 @@ impl NativeProviderOutcome {
                 class,
                 false,
                 &reason,
+                None,
             ),
             class,
             reason,
@@ -151,14 +158,26 @@ impl NativeProviderOutcome {
 
     pub fn fallback(mut self, fallback_used: bool) -> Self {
         self.fallback_used = fallback_used;
-        if let Value::Object(object) = &mut self.external_action {
-            object.insert("fallback_used".to_string(), json!(fallback_used));
-        }
+        self.external_action = native_provider_external_action(
+            self.execution_backend,
+            self.class,
+            fallback_used,
+            &self.reason,
+            self.repair_action.as_deref(),
+        );
         self
     }
 
     pub fn with_repair_action(mut self, repair_action: impl Into<String>) -> Self {
-        self.repair_action = Some(repair_action.into());
+        let repair_action = repair_action.into();
+        self.repair_action = Some(repair_action.clone());
+        self.external_action = native_provider_external_action(
+            self.execution_backend,
+            self.class,
+            self.fallback_used,
+            &self.reason,
+            Some(&repair_action),
+        );
         self
     }
 
@@ -248,11 +267,14 @@ impl PlatformScriptPlan {
 
 impl PlatformCommandOutcome {
     pub fn to_json(&self) -> Value {
+        let external_action = self.plan.external_action_report(false).to_json();
         json!({
             "program": self.plan.program,
             "args": self.plan.args,
             "class": self.plan.class.as_str(),
             "execution_backend": self.plan.execution_backend.as_str(),
+            "fallback_used": false,
+            "external_action": external_action,
             "reason": self.plan.reason,
             "repair_action": self.plan.repair_action,
             "ok": self.ok,
@@ -276,13 +298,14 @@ fn native_provider_external_action(
     class: ExternalActionClass,
     fallback_used: bool,
     reason: &str,
+    repair_action: Option<&str>,
 ) -> Value {
-    json!({
-        "class": class.as_str(),
-        "execution_backend": execution_backend.as_str(),
-        "fallback_used": fallback_used,
-        "reason": reason,
-    })
+    let report = ExternalActionReport::new(class, execution_backend.as_str(), fallback_used)
+        .with_reason(reason);
+    match repair_action {
+        Some(repair_action) => report.with_repair_action(repair_action).to_json(),
+        None => report.to_json(),
+    }
 }
 
 pub fn capture_command(plan: PlatformCommandPlan) -> Result<PlatformCommandOutcome> {

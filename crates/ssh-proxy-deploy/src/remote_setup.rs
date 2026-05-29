@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use ssh_proxy_core::external::ExternalActionClass;
+use ssh_proxy_core::external::{ExternalActionClass, ExternalActionReport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteArtifactKind {
@@ -113,6 +113,11 @@ impl RemoteSetupScriptIntent {
 
     pub fn fallback_shell(label: impl Into<String>) -> Self {
         Self::new("sh -s", label, ExternalActionClass::FallbackProvider)
+    }
+
+    pub fn external_action_report(&self) -> ExternalActionReport {
+        ExternalActionReport::new(self.class, "remote_shell_bootstrap", true)
+            .with_reason(format!("{} via fallback shell script", self.label))
     }
 }
 
@@ -295,5 +300,15 @@ mod tests {
             payload["values"]["terminal.integrated.env.linux"]["HTTP_PROXY"],
             "http://127.0.0.1:18080"
         );
+    }
+
+    #[test]
+    fn fallback_shell_script_reports_external_action() {
+        let intent = RemoteSetupScriptIntent::fallback_shell("write vscode settings");
+        let value = intent.external_action_report().to_json();
+
+        assert_eq!(value["class"], "fallback_provider");
+        assert_eq!(value["execution_backend"], "remote_shell_bootstrap");
+        assert_eq!(value["fallback_used"], true);
     }
 }

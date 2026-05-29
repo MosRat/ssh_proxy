@@ -698,6 +698,19 @@ fn lifecycle_provider_contracts_live_in_lifecycle_crate() {
             "lifecycle crate should own provider contract implementations",
         );
     }
+
+    let lifecycle_selection =
+        read_repo_file("crates/ssh-proxy-lifecycle/src/service_provider/selection.rs");
+    assert_contains(
+        &lifecycle_selection,
+        "pub fn provider_external_action_report",
+        "lifecycle crate should classify provider fallback external actions",
+    );
+    assert_contains(
+        &lifecycle_selection,
+        "ExternalActionReport::fallback_provider",
+        "lifecycle provider fallback should use shared external action reports",
+    );
 }
 
 #[test]
@@ -786,6 +799,11 @@ fn remote_setup_execution_plans_stay_in_deploy_crate() {
         &remote_setup_executor,
         "intent.class.as_str()",
         "fallback script failures should carry the fallback classification",
+    );
+    assert_contains(
+        &remote_setup_executor,
+        "intent.external_action_report()",
+        "fallback script execution should expose shared external action details",
     );
 }
 
@@ -884,6 +902,21 @@ fn production_command_execution_stays_in_execution_crates() {
 
 #[test]
 fn native_provider_success_paths_are_preferred() {
+    let core_external = read_repo_file("crates/ssh-proxy-core/src/external.rs");
+    for symbol in [
+        "pub struct ExternalActionReport",
+        "pub fn required_provider",
+        "pub fn fallback_provider",
+        "pub fn with_repair_action",
+        "pub fn to_json",
+    ] {
+        assert_contains(
+            &core_external,
+            symbol,
+            "core crate should own shared external action reports",
+        );
+    }
+
     let platform = read_repo_file("crates/ssh-proxy-platform/src/lib.rs");
     assert_contains(
         &platform,
@@ -907,8 +940,13 @@ fn native_provider_success_paths_are_preferred() {
     );
     assert_contains(
         &platform,
-        "native_provider_external_action",
-        "native provider outcomes should serialize backend and fallback semantics",
+        "ExternalActionReport",
+        "native provider outcomes should use the shared external action report",
+    );
+    assert_contains(
+        &platform,
+        "external_action_report",
+        "platform command plans should expose shared external action details",
     );
 
     let systemd = read_repo_file("crates/ssh-proxy/src/service/platform/systemd.rs");
@@ -995,7 +1033,7 @@ fn remote_admin_success_paths_use_own_binary_contract() {
         "\"execution_backend\": \"own_binary\"",
         "\"fallback_used\": false",
         "\"external_action\": remote_admin_external_action(kind)",
-        "ExternalActionClass::RequiredProvider",
+        "ExternalActionReport::required_provider",
     ] {
         assert_contains(
             &deploy_admin,

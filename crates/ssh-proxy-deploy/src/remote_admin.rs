@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::Path};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use ssh_proxy_core::{external::ExternalActionClass, model::RemotePlatform};
+use ssh_proxy_core::{external::ExternalActionReport, model::RemotePlatform};
 
 use crate::commands::sh_quote;
 
@@ -110,12 +110,9 @@ pub fn remote_admin_error(kind: &str, error: &str) -> Value {
 }
 
 fn remote_admin_external_action(kind: &str) -> Value {
-    json!({
-        "class": ExternalActionClass::RequiredProvider.as_str(),
-        "execution_backend": "own_binary",
-        "fallback_used": false,
-        "reason": format!("{kind} through ssh_proxy remote admin"),
-    })
+    ExternalActionReport::required_provider("own_binary")
+        .with_reason(format!("{kind} through ssh_proxy remote admin"))
+        .to_json()
 }
 
 pub fn apply_git_proxy_config(
