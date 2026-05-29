@@ -16,6 +16,7 @@ mod host;
 pub use host::{HostArgs, HostCommand, HostExecArgs};
 mod install;
 pub use install::InstallRemoteArgs;
+mod intents;
 mod node;
 pub use node::{
     NodeArgs, NodeCommand, NodeControlArgs, NodeControlCommand, NodeControlScope, NodeDaemonArgs,

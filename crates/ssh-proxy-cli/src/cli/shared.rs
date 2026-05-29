@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use ssh_proxy_core::model;
+use ssh_proxy_core::{intent, model};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TcpTarget {
@@ -76,6 +76,26 @@ pub enum DeployMode {
     Always,
     #[serde(alias = "Never")]
     Never,
+}
+
+impl From<DeployMode> for intent::DeploymentPolicy {
+    fn from(value: DeployMode) -> Self {
+        match value {
+            DeployMode::Auto => Self::Auto,
+            DeployMode::Always => Self::Always,
+            DeployMode::Never => Self::Never,
+        }
+    }
+}
+
+impl From<intent::DeploymentPolicy> for DeployMode {
+    fn from(value: intent::DeploymentPolicy) -> Self {
+        match value {
+            intent::DeploymentPolicy::Auto => Self::Auto,
+            intent::DeploymentPolicy::Always => Self::Always,
+            intent::DeploymentPolicy::Never => Self::Never,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum, Serialize, Deserialize, PartialEq, Eq)]

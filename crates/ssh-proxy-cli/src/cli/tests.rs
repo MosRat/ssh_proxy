@@ -1,6 +1,6 @@
 use super::*;
 use clap::CommandFactory;
-use ssh_proxy_core::model;
+use ssh_proxy_core::{intent, model};
 
 #[test]
 fn production_help_hides_legacy_entrypoints() {
@@ -283,4 +283,176 @@ fn cli_values_convert_to_command_neutral_models() {
         model::WorkloadHint::from(RouteWorkloadHint::Concurrent),
         model::WorkloadHint::Concurrent
     );
+    assert_eq!(
+        intent::DeploymentPolicy::from(DeployMode::Always),
+        intent::DeploymentPolicy::Always
+    );
+}
+
+#[test]
+fn proxy_args_convert_to_route_intent_without_cli_types() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "proxy",
+        "edge",
+        "--listen",
+        "127.0.0.1:1082",
+        "--tcp-target",
+        "db.internal:5432",
+        "--remote-transport",
+        "tls-tcp",
+        "--remote-tls",
+        "127.0.0.1:19443",
+        "--remote-ca",
+        "ca.pem",
+        "--control-listen",
+        "127.0.0.1:1083",
+        "--transport-pool-size",
+        "4",
+        "--no-reconnect",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Proxy(args) => {
+            let intent = intent::RouteIntent::from(&args);
+
+            assert_eq!(intent.ssh.target, "edge");
+            assert_eq!(intent.direction, model::RouteDirection::LocalUsesRemote);
+            assert_eq!(intent.transport, model::TransportMode::TlsTcp);
+            assert_eq!(
+                intent.endpoint.listen.unwrap().to_string(),
+                "127.0.0.1:1082"
+            );
+            assert_eq!(
+                intent.endpoint.control_listen.unwrap().to_string(),
+                "127.0.0.1:1083"
+            );
+            assert_eq!(
+                intent.endpoint.remote_tls.unwrap().to_string(),
+                "127.0.0.1:19443"
+            );
+            assert_eq!(intent.endpoint.tcp_target.unwrap().host, "db.internal");
+            assert_eq!(intent.runtime.transport_pool_size, Some(4));
+            assert!(intent.runtime.no_reconnect);
+            assert!(!intent.persist);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn route_args_convert_to_route_intent_with_runtime_policy() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "route",
+        "edge",
+        "--direction",
+        "remote-uses-local",
+        "--connect-mode",
+        "direct",
+        "--bind",
+        "0.0.0.0",
+        "--port",
+        "18080",
+        "--remote-transport",
+        "quic-native",
+        "--local-peer",
+        "192.0.2.10:19080",
+        "--volatile",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Route(args) => {
+            let intent = intent::RouteIntent::from(&args);
+
+            assert_eq!(intent.direction, model::RouteDirection::RemoteUsesLocal);
+            assert_eq!(intent.connect_mode, model::RouteConnectMode::Direct);
+            assert_eq!(intent.transport, model::TransportMode::QuicNative);
+            assert_eq!(intent.endpoint.listen.unwrap().to_string(), "0.0.0.0:18080");
+            assert_eq!(
+                intent.endpoint.local_peer.unwrap().to_string(),
+                "192.0.2.10:19080"
+            );
+            assert!(!intent.persist);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn install_args_convert_to_remote_install_intent() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "install-remote",
+        "edge",
+        "--remote-os",
+        "unix",
+        "--remote-tcp",
+        "127.0.0.1:29080",
+        "--remote-control",
+        "127.0.0.1:29081",
+        "--remote-tls-transport",
+        "127.0.0.1:29443",
+        "--persist",
+        "systemd",
+        "--local-node-id",
+        "local-node",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::InstallRemote(args) => {
+            let intent = intent::RemoteInstallIntent::from(&args);
+
+            assert_eq!(intent.ssh.target, "edge");
+            assert_eq!(intent.remote_platform, model::RemotePlatform::Unix);
+            assert_eq!(intent.persistence, model::PersistenceMode::Systemd);
+            assert_eq!(intent.remote_tcp.to_string(), "127.0.0.1:29080");
+            assert_eq!(intent.remote_control.to_string(), "127.0.0.1:29081");
+            assert_eq!(
+                intent.remote_tls_transport.unwrap().to_string(),
+                "127.0.0.1:29443"
+            );
+            assert_eq!(intent.local_node_id.as_deref(), Some("local-node"));
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+}
+
+#[test]
+fn peer_bootstrap_args_convert_to_bootstrap_intent() {
+    let cli = Cli::try_parse_from([
+        "ssh_proxy",
+        "node",
+        "control",
+        "peer-bootstrap",
+        "edge",
+        "--alias",
+        "prod",
+        "--force",
+        "--remote-token",
+        "secret",
+    ])
+    .unwrap();
+
+    match cli.command {
+        Commands::Node(args) => match args.command {
+            NodeCommand::Control(control) => match control.command {
+                NodeControlCommand::PeerBootstrap(args) => {
+                    let intent = intent::PeerBootstrapIntent::from(&args);
+
+                    assert_eq!(intent.install.ssh.target, "edge");
+                    assert_eq!(intent.alias.as_deref(), Some("prod"));
+                    assert!(intent.force);
+                    assert_eq!(intent.install.remote_token.as_deref(), Some("secret"));
+                    assert_eq!(intent.install.persistence, model::PersistenceMode::None);
+                }
+                other => panic!("unexpected control command: {other:?}"),
+            },
+            other => panic!("unexpected node command: {other:?}"),
+        },
+        other => panic!("unexpected command: {other:?}"),
+    }
 }
