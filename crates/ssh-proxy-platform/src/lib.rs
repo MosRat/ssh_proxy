@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ssh_proxy_core::external::ExternalActionClass;
 
+#[cfg(windows)]
+pub use windows_service;
+#[cfg(windows)]
+pub use windows_sys;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformCommandPlan {
     pub program: String,

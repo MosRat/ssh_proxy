@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use windows_service::{
+use ssh_proxy_platform::windows_service::{
     Error as WindowsServiceError,
     service::{
         Service, ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceState,
@@ -17,7 +17,7 @@ use windows_service::{
     },
     service_manager::{ServiceManager, ServiceManagerAccess},
 };
-use windows_sys::Win32::{
+use ssh_proxy_platform::windows_sys::Win32::{
     Foundation::{CloseHandle, GetLastError},
     System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
     UI::{

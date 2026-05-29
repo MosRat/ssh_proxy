@@ -5,8 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use tokio::sync::oneshot;
-use windows_service::{
+use ssh_proxy_platform::windows_service::{
     Error as WindowsServiceError, define_windows_service,
     service::{
         ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
@@ -15,6 +14,7 @@ use windows_service::{
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
 };
+use tokio::sync::oneshot;
 
 use crate::{cli, config};
 
