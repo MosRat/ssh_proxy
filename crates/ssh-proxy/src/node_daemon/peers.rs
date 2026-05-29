@@ -129,7 +129,7 @@ impl NodeManager {
                 self.control_endpoint.to_string(),
                 self.transport,
             );
-            config.apply_install_defaults(&mut install_args, Some(&alias))?;
+            crate::config::apply_install_defaults(&config, &mut install_args, Some(&alias))?;
             install_args.persist = cli::PersistMode::Auto;
             install_args
         };
@@ -149,7 +149,7 @@ impl NodeManager {
         let install_args = {
             let config = self.config.lock().await;
             let mut install_args = bootstrap::install_args_from_bootstrap(&args);
-            config.apply_install_defaults(&mut install_args, Some(&alias))?;
+            crate::config::apply_install_defaults(&config, &mut install_args, Some(&alias))?;
             install_args
         };
 
@@ -165,7 +165,7 @@ impl NodeManager {
         let (config_snapshot, install_args) = {
             let config = self.config.lock().await;
             let mut install_args = bootstrap::install_args_from_bootstrap(&args);
-            config.apply_install_defaults(&mut install_args, Some(&alias))?;
+            crate::config::apply_install_defaults(&config, &mut install_args, Some(&alias))?;
             (config.clone(), install_args)
         };
 
@@ -183,7 +183,7 @@ impl NodeManager {
         let (config_snapshot, install_args) = {
             let config = self.config.lock().await;
             let mut install_args = bootstrap::install_args_from_bootstrap(&args);
-            config.apply_install_defaults(&mut install_args, Some(&alias))?;
+            crate::config::apply_install_defaults(&config, &mut install_args, Some(&alias))?;
             (config.clone(), install_args)
         };
 
@@ -201,7 +201,7 @@ impl NodeManager {
         let install_args = {
             let config = self.config.lock().await;
             let mut install_args = bootstrap::install_args_from_bootstrap(&args);
-            config.apply_install_defaults(&mut install_args, Some(&alias))?;
+            crate::config::apply_install_defaults(&config, &mut install_args, Some(&alias))?;
             install_args
         };
 
@@ -215,7 +215,7 @@ impl NodeManager {
         let install_args = {
             let config = self.config.lock().await;
             let mut install_args = bootstrap::install_args_from_bootstrap(&args);
-            config.apply_install_defaults(&mut install_args, Some(&alias))?;
+            crate::config::apply_install_defaults(&config, &mut install_args, Some(&alias))?;
             install_args
         };
 

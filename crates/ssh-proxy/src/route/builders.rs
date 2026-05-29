@@ -141,7 +141,7 @@ pub(crate) fn install_args_from_route(
         remote_tls_client_ca: None,
         persist: cli::PersistMode::Auto,
     };
-    config.apply_install_defaults(&mut install, Some(&args.target))?;
+    crate::config::apply_install_defaults(config, &mut install, Some(&args.target))?;
     Ok(install)
 }
 

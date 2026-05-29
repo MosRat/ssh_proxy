@@ -130,7 +130,7 @@ impl NodeManager {
                     .ok_or_else(|| anyhow!("forward route requires proxy args"))?;
                 {
                     let config = self.config.lock().await;
-                    config.apply_proxy_defaults(&mut args, None)?;
+                    crate::config::apply_proxy_defaults(&config, &mut args, None)?;
                 }
                 RouteSpec::Forward { proxy: args }
             }

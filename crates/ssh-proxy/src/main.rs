@@ -40,7 +40,7 @@ async fn async_main(cli: cli::Cli) -> Result<()> {
 
     match cli.command {
         cli::Commands::Proxy(mut args) => {
-            app_config.apply_proxy_defaults(&mut args, None)?;
+            config::apply_proxy_defaults(&app_config, &mut args, None)?;
             controller::run(args).await
         }
         cli::Commands::Route(args) => route::run(args, app_config).await,
@@ -48,7 +48,7 @@ async fn async_main(cli: cli::Cli) -> Result<()> {
         cli::Commands::Remote(args) => remote::run(args).await,
         cli::Commands::Node(args) => node_daemon::run(args, app_config).await,
         cli::Commands::InstallRemote(mut args) => {
-            app_config.apply_install_defaults(&mut args, None)?;
+            config::apply_install_defaults(&app_config, &mut args, None)?;
             let mut app_config = app_config;
             let local_identity = app_config.ensure_node_identity()?;
             args.local_node_id = local_identity.node_id;

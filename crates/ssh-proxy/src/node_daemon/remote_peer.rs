@@ -166,7 +166,7 @@ impl NodeManager {
         args.local_control_endpoint = Some(self.control_endpoint.to_string());
         args.local_transport = self.transport;
         args.persist = cli::PersistMode::Auto;
-        config.apply_install_defaults(args, alias)?;
+        crate::config::apply_install_defaults(&config, args, alias)?;
         config.save_default()
     }
 

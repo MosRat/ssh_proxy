@@ -130,7 +130,7 @@ fn reverse_to_proxy_args(
         no_reconnect: args.no_reconnect,
         control_listen: None,
     };
-    config.apply_proxy_defaults(&mut proxy, None)?;
+    crate::config::apply_proxy_defaults(config, &mut proxy, None)?;
     proxy.remote_transport = cli::RemoteTransport::Exec;
     proxy.remote_tcp = SocketAddr::from(([127, 0, 0, 1], 19080));
     proxy.remote_control = SocketAddr::from(([127, 0, 0, 1], 19081));

@@ -99,8 +99,8 @@ pub(super) fn workload_hint_policy(
     defaults: &config::ProxyProfile,
 ) -> cli::RouteWorkloadHint {
     args.workload_hint
-        .or_else(|| profile.and_then(|profile| profile.workload_hint))
-        .or(defaults.workload_hint)
+        .or_else(|| profile.and_then(|profile| profile.workload_hint.map(Into::into)))
+        .or(defaults.workload_hint.map(Into::into))
         .unwrap_or_else(|| {
             if args.tcp_target.is_some() {
                 cli::RouteWorkloadHint::Large

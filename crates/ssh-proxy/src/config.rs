@@ -1,9 +1,6 @@
-use std::{
-    net::SocketAddr,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::net::SocketAddr;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 
 use crate::{cli, control_socket};
 
@@ -14,164 +11,86 @@ pub use io::{
     certs_dir, config_path, daemon_state_path, file_sha256_fingerprint, jobs_path, peers_path,
     routes_path, save_text_file_private, sessions_path,
 };
-mod peer;
 mod profile;
-pub use profile::expand_path;
-mod schema;
-#[cfg(test)]
-pub use schema::DaemonConfig;
-pub use schema::{
-    AppConfig, CONFIG_SCHEMA_VERSION, NodeIdentity, PeerRecord, ProxyProfile, TokenMetadata,
+pub use ssh_proxy_config::{
+    AppConfig, CONFIG_SCHEMA_VERSION, DaemonConfig, NodeIdentity, PeerRecord, ProxyProfile,
+    TokenMetadata, expand_path, first_available_addr, generate_token,
 };
 
-impl AppConfig {
-    pub fn load_default() -> Result<Self> {
-        let path = config_path()?;
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        let config: Self =
-            toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
-        config.validate_schema()?;
-        Ok(config)
-    }
+pub fn proxy_from_profile(config: &AppConfig, name: &str) -> Result<cli::ProxyArgs> {
+    let profile = config.profiles.get(name).ok_or_else(|| {
+        let path = config_path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "~/.ssh_proxy/config.toml".to_string());
+        anyhow!("profile {name:?} not found in {path}")
+    })?;
+    let target = profile.target.clone().unwrap_or_else(|| name.to_string());
+    let mut args = profile::default_proxy_args(target);
+    apply_proxy_defaults(config, &mut args, Some(name))?;
+    Ok(args)
+}
 
-    pub fn save_default(&self) -> Result<()> {
-        self.validate_schema()?;
-        let path = config_path()?;
-        let text = toml::to_string_pretty(self).context("failed to encode config TOML")?;
-        save_text_file_private(&path, &text)
-    }
-
-    pub fn validate_schema(&self) -> Result<()> {
-        if self.schema_version > CONFIG_SCHEMA_VERSION {
-            bail!(
-                "config schema_version {} is newer than this binary supports ({CONFIG_SCHEMA_VERSION}); upgrade ssh_proxy",
-                self.schema_version
-            );
-        }
-        Ok(())
-    }
-
-    pub fn ensure_daemon_token(&mut self) -> Result<String> {
-        if let Some(token) = &self.daemon.token {
-            if self.daemon.token_metadata.is_none() {
-                self.daemon.token_metadata = Some(TokenMetadata::new("daemon-control-transport"));
-            }
-            return Ok(token.clone());
-        }
-        let token = generate_token()?;
-        self.daemon.token = Some(token.clone());
-        self.daemon.token_metadata = Some(TokenMetadata::new("daemon-control-transport"));
-        Ok(token)
-    }
-
-    pub fn rotate_daemon_token(&mut self) -> Result<String> {
-        let token = generate_token()?;
-        let generation = self
-            .daemon
-            .token_metadata
-            .as_ref()
-            .map(|metadata| metadata.generation.saturating_add(1))
-            .unwrap_or(1);
-        self.daemon.token = Some(token.clone());
-        self.daemon.token_metadata = Some(TokenMetadata::rotated(
-            "daemon-control-transport",
-            generation,
-        ));
-        Ok(token)
-    }
-
-    pub fn ensure_node_identity(&mut self) -> Result<NodeIdentity> {
-        if self.identity.node_id.is_none() {
-            self.identity.node_id = Some(format!("spx-{}", generate_token()?));
-        }
-        if self.identity.node_name.is_none() {
-            self.identity.node_name = Some(default_node_name());
-        }
-        if self.identity.secret.is_none() {
-            self.identity.secret = Some(generate_token()?);
-        }
-        Ok(self.identity.clone())
-    }
-
-    pub fn proxy_from_profile(&self, name: &str) -> Result<cli::ProxyArgs> {
-        let profile = self.profiles.get(name).ok_or_else(|| {
-            let path = config_path()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|_| "~/.ssh_proxy/config.toml".to_string());
-            anyhow!("profile {name:?} not found in {path}")
-        })?;
-        let target = profile.target.clone().unwrap_or_else(|| name.to_string());
-        let mut args = profile::default_proxy_args(target);
-        self.apply_proxy_defaults(&mut args, Some(name))?;
-        Ok(args)
-    }
-
-    pub fn apply_proxy_defaults(
-        &self,
-        args: &mut cli::ProxyArgs,
-        profile_name: Option<&str>,
-    ) -> Result<()> {
-        profile::apply_profile(args, &self.defaults, "defaults")?;
-        if let Some(profile) = profile_name
-            .and_then(|name| self.profiles.get(name))
-            .or_else(|| self.profiles.get(&args.target))
+pub fn apply_proxy_defaults(
+    config: &AppConfig,
+    args: &mut cli::ProxyArgs,
+    profile_name: Option<&str>,
+) -> Result<()> {
+    profile::apply_profile(args, &config.defaults, "defaults")?;
+    if let Some(profile) = profile_name
+        .and_then(|name| config.profiles.get(name))
+        .or_else(|| config.profiles.get(&args.target))
+    {
+        if let Some(target) = &profile.target
+            && profile_name.is_some()
         {
-            if let Some(target) = &profile.target {
-                if profile_name.is_some() {
-                    args.target = target.clone();
-                }
-            }
-            profile::apply_profile(args, profile, "profile")?;
+            args.target = target.clone();
         }
-        if args.control_listen.is_none() {
-            args.control_listen = self.daemon.control_listen;
-        }
-        Ok(())
+        profile::apply_profile(args, profile, "profile")?;
     }
+    if args.control_listen.is_none() {
+        args.control_listen = config.daemon.control_listen;
+    }
+    Ok(())
+}
 
-    pub fn apply_install_defaults(
-        &self,
-        args: &mut cli::InstallRemoteArgs,
-        profile_name: Option<&str>,
-    ) -> Result<()> {
-        let mut proxy = profile::default_proxy_args(args.target.clone());
-        self.apply_proxy_defaults(&mut proxy, profile_name.or(Some(&args.target)))?;
-        if profile_name.is_some() || self.profiles.contains_key(&args.target) {
-            args.target = proxy.target;
-        }
-        if args.ssh_args.is_empty() {
-            args.ssh_args = proxy.ssh_args;
-        }
-        args.user = args.user.take().or(proxy.user);
-        args.port = args.port.or(proxy.port);
-        if args.identity.is_empty() {
-            args.identity = proxy.identity;
-        }
-        args.config = args.config.take().or(proxy.config);
-        args.known_hosts = args.known_hosts.take().or(proxy.known_hosts);
-        args.accept_new |= proxy.accept_new;
-        args.insecure_ignore_host_key |= proxy.insecure_ignore_host_key;
-        if args.jump.is_empty() {
-            args.jump = proxy.jump;
-        }
-        args.remote_path = args.remote_path.take().or(proxy.remote_path);
-        args.remote_bin = args.remote_bin.take().or(proxy.remote_bin);
-        if args.remote_os == cli::RemoteOs::Auto {
-            args.remote_os = proxy.remote_os;
-        }
-        args.remote_token = args.remote_token.take().or(proxy.remote_token);
-        if args.remote_tcp == SocketAddr::from(([127, 0, 0, 1], 19080)) {
-            args.remote_tcp = proxy.remote_tcp;
-        }
-        if args.remote_control == SocketAddr::from(([127, 0, 0, 1], 19081)) {
-            args.remote_control = proxy.remote_control;
-        }
-        Ok(())
+pub fn apply_install_defaults(
+    config: &AppConfig,
+    args: &mut cli::InstallRemoteArgs,
+    profile_name: Option<&str>,
+) -> Result<()> {
+    let mut proxy = profile::default_proxy_args(args.target.clone());
+    apply_proxy_defaults(config, &mut proxy, profile_name.or(Some(&args.target)))?;
+    if profile_name.is_some() || config.profiles.contains_key(&args.target) {
+        args.target = proxy.target;
     }
+    if args.ssh_args.is_empty() {
+        args.ssh_args = proxy.ssh_args;
+    }
+    args.user = args.user.take().or(proxy.user);
+    args.port = args.port.or(proxy.port);
+    if args.identity.is_empty() {
+        args.identity = proxy.identity;
+    }
+    args.config = args.config.take().or(proxy.config);
+    args.known_hosts = args.known_hosts.take().or(proxy.known_hosts);
+    args.accept_new |= proxy.accept_new;
+    args.insecure_ignore_host_key |= proxy.insecure_ignore_host_key;
+    if args.jump.is_empty() {
+        args.jump = proxy.jump;
+    }
+    args.remote_path = args.remote_path.take().or(proxy.remote_path);
+    args.remote_bin = args.remote_bin.take().or(proxy.remote_bin);
+    if args.remote_os == cli::RemoteOs::Auto {
+        args.remote_os = proxy.remote_os;
+    }
+    args.remote_token = args.remote_token.take().or(proxy.remote_token);
+    if args.remote_tcp == SocketAddr::from(([127, 0, 0, 1], 19080)) {
+        args.remote_tcp = proxy.remote_tcp;
+    }
+    if args.remote_control == SocketAddr::from(([127, 0, 0, 1], 19081)) {
+        args.remote_control = proxy.remote_control;
+    }
+    Ok(())
 }
 
 pub async fn run(args: cli::ConfigArgs) -> Result<()> {
@@ -245,7 +164,7 @@ pub async fn run(args: cli::ConfigArgs) -> Result<()> {
         }
         cli::ConfigCommand::Peers => {
             let config = AppConfig::load_default()?;
-            for (name, peer) in peer::sorted_peers(&config) {
+            for (name, peer) in ssh_proxy_config::peer::sorted_peers(&config) {
                 let node = peer
                     .node_name
                     .as_deref()
@@ -424,58 +343,6 @@ token_metadata = { created_at_unix = 1710000000, scope = "peer-control-transport
 "#
 }
 
-pub fn generate_token() -> Result<String> {
-    let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes).context("failed to generate secure transport token")?;
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut out, "{byte:02x}").expect("hex write to String cannot fail");
-    }
-    Ok(out)
-}
-
-pub fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-pub fn default_node_name() -> String {
-    let user = whoami::username().unwrap_or_else(|_| "unknown".to_string());
-    let host = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "unknown".to_string());
-    format!("{user}@{host}")
-}
-
-pub fn is_addr_available(addr: SocketAddr) -> bool {
-    std::net::TcpListener::bind(addr).is_ok()
-}
-
-pub fn first_available_addr(preferred: SocketAddr, span: u16) -> SocketAddr {
-    if preferred.port() != 0 && is_addr_available(preferred) {
-        return preferred;
-    }
-    let start = if preferred.port() == 0 {
-        19080
-    } else {
-        preferred.port()
-    };
-    let ip = preferred.ip();
-    for offset in 0..span {
-        let Some(port) = start.checked_add(offset) else {
-            break;
-        };
-        let candidate = SocketAddr::new(ip, port);
-        if is_addr_available(candidate) {
-            return candidate;
-        }
-    }
-    preferred
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,7 +430,10 @@ mod tests {
 
         let profile = config.profiles.get("office").unwrap();
         assert_eq!(profile.transport_pool_size, Some(4));
-        assert_eq!(profile.workload_hint, Some(cli::RouteWorkloadHint::Mixed));
+        assert_eq!(
+            profile.workload_hint,
+            Some(ssh_proxy_core::model::WorkloadHint::Mixed)
+        );
     }
 
     #[test]
@@ -572,9 +442,7 @@ mod tests {
         config.defaults.ssh_session_pool_size = Some(8);
 
         let mut args = super::profile::default_proxy_args("office".to_string());
-        config
-            .apply_proxy_defaults(&mut args, Some("office"))
-            .unwrap();
+        apply_proxy_defaults(&config, &mut args, Some("office")).unwrap();
 
         assert_eq!(args.ssh_session_pool_size, Some(2));
         assert_eq!(args.ssh_session_pool_source.as_deref(), Some("defaults"));
@@ -593,9 +461,7 @@ mod tests {
             },
         );
         let mut args = super::profile::default_proxy_args("office".to_string());
-        config
-            .apply_proxy_defaults(&mut args, Some("office"))
-            .unwrap();
+        apply_proxy_defaults(&config, &mut args, Some("office")).unwrap();
 
         assert_eq!(args.ssh_session_pool_size, Some(4));
         assert_eq!(args.ssh_session_pool_source.as_deref(), Some("profile"));

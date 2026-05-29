@@ -285,7 +285,7 @@ impl NodeManager {
         }
         let mut args = {
             let config = self.config.lock().await;
-            config.proxy_from_profile(profile)?
+            crate::config::proxy_from_profile(&config, profile)?
         };
         args.control_listen = None;
         let name = profile.to_string();

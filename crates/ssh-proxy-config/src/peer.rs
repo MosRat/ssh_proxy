@@ -1,4 +1,7 @@
-use super::{AppConfig, PeerRecord, now_unix};
+use crate::{
+    schema::{AppConfig, PeerRecord},
+    store::now_unix,
+};
 
 impl AppConfig {
     pub fn record_peer(&mut self, alias: &str, mut peer: PeerRecord) {
@@ -10,7 +13,7 @@ impl AppConfig {
     }
 }
 
-pub(super) fn sorted_peers(config: &AppConfig) -> Vec<(&String, &PeerRecord)> {
+pub fn sorted_peers(config: &AppConfig) -> Vec<(&String, &PeerRecord)> {
     let mut peers = config.peers.iter().collect::<Vec<_>>();
     peers.sort_by(|(left, _), (right, _)| left.cmp(right));
     peers

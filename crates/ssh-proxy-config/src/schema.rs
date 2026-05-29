@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cli;
+use ssh_proxy_core::model::{TcpTarget, WorkloadHint};
 
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 
@@ -85,7 +85,7 @@ pub struct TokenMetadata {
 impl TokenMetadata {
     pub fn new(scope: impl Into<String>) -> Self {
         Self {
-            created_at_unix: super::now_unix(),
+            created_at_unix: crate::store::now_unix(),
             rotated_at_unix: None,
             scope: scope.into(),
             expires_at_unix: None,
@@ -94,7 +94,7 @@ impl TokenMetadata {
     }
 
     pub fn rotated(scope: impl Into<String>, generation: u64) -> Self {
-        let now = super::now_unix();
+        let now = crate::store::now_unix();
         Self {
             created_at_unix: now,
             rotated_at_unix: Some(now),
@@ -113,7 +113,7 @@ fn default_token_generation() -> u64 {
 pub struct ProxyProfile {
     pub target: Option<String>,
     pub listen: Option<SocketAddr>,
-    pub tcp_target: Option<cli::TcpTarget>,
+    pub tcp_target: Option<TcpTarget>,
     #[serde(default)]
     pub ssh_args: Vec<String>,
     pub user: Option<String>,
@@ -151,7 +151,7 @@ pub struct ProxyProfile {
     pub reconnect_max_delay_secs: Option<u64>,
     pub connect_timeout_secs: Option<u64>,
     pub transport_pool_size: Option<usize>,
-    pub workload_hint: Option<cli::RouteWorkloadHint>,
+    pub workload_hint: Option<WorkloadHint>,
     pub ssh_session_pool_size: Option<usize>,
     pub no_reconnect: Option<bool>,
     pub control_listen: Option<SocketAddr>,

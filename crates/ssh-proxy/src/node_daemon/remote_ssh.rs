@@ -9,7 +9,7 @@ pub(super) fn install_args_from_spec(
     spec: &ProxySessionSpec,
 ) -> Result<cli::InstallRemoteArgs> {
     let mut args = peer_lifecycle::spec::install_args_from_proxy_session(Some(config), spec)?;
-    config.apply_install_defaults(&mut args, Some(&spec.target))?;
+    crate::config::apply_install_defaults(config, &mut args, Some(&spec.target))?;
     if let Some(profile) = config.profiles.get(&spec.target) {
         args.target = profile
             .target

@@ -78,7 +78,7 @@ pub(super) fn apply_profile(
     args.tcp_target = args
         .tcp_target
         .take()
-        .or_else(|| profile.tcp_target.clone());
+        .or_else(|| profile.tcp_target.clone().map(Into::into));
     if args.ssh_args.is_empty() {
         args.ssh_args = profile.ssh_args.clone();
     }
@@ -208,7 +208,7 @@ pub(super) fn apply_profile(
         });
     }
     if let Some(value) = profile.workload_hint {
-        args.workload_hint = Some(value);
+        args.workload_hint = Some(value.into());
     }
     if let Some(value) = profile.ssh_session_pool_size
         && (args.ssh_session_pool_size.is_none()
@@ -298,7 +298,7 @@ pub(super) fn apply_profile_set(
         profile.jump = args.jump;
     }
     set_opt(&mut profile.listen, args.listen);
-    set_opt(&mut profile.tcp_target, args.tcp_target);
+    set_opt(&mut profile.tcp_target, args.tcp_target.map(Into::into));
     set_opt(&mut profile.remote_transport, args.remote_transport);
     set_opt(&mut profile.remote_tcp, args.remote_tcp);
     set_opt(&mut profile.remote_control, args.remote_control);
@@ -337,7 +337,10 @@ pub(super) fn apply_profile_set(
         &mut profile.transport_pool_size,
         args.transport_pool_size.map(|value| value.max(1)),
     );
-    set_opt(&mut profile.workload_hint, args.workload_hint);
+    set_opt(
+        &mut profile.workload_hint,
+        args.workload_hint.map(Into::into),
+    );
     set_opt(
         &mut profile.ssh_session_pool_size,
         args.ssh_session_pool_size.map(|value| value.max(1)),

@@ -21,7 +21,7 @@ use super::{
 pub async fn host(mut args: cli::HostArgs, mut config: config::AppConfig) -> Result<()> {
     let profile_name = args.target.clone();
     let mut install_args = install_args_from_host(&args);
-    config.apply_install_defaults(&mut install_args, Some(&profile_name))?;
+    crate::config::apply_install_defaults(&config, &mut install_args, Some(&profile_name))?;
 
     match args.command.clone() {
         cli::HostCommand::Start => {
