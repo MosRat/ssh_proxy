@@ -492,6 +492,72 @@ fn route_and_proxy_session_policy_live_outside_app_runtime() {
         );
     }
 
+    let route_preflight = read_repo_file("crates/ssh-proxy-route/src/preflight.rs");
+    for symbol in [
+        "pub struct RouteProbeResult",
+        "pub struct RoutePreflightInput",
+        "pub struct RoutePreflightDecision",
+        "pub struct RouteFallbackInput",
+        "pub struct RouteFallbackDecision",
+        "pub fn decide_route_preflight",
+        "pub fn decide_route_fallback",
+    ] {
+        assert_contains(
+            &route_preflight,
+            symbol,
+            "route crate should own preflight probe classification and fallback policy",
+        );
+    }
+    let app_preflight = read_repo_file("crates/ssh-proxy/src/route/preflight.rs");
+    assert_contains(
+        &app_preflight,
+        "decide_route_preflight",
+        "app preflight should delegate pure classification to route crate",
+    );
+    assert_contains(
+        &app_preflight,
+        "decide_route_fallback",
+        "app preflight should delegate fallback selection to route crate",
+    );
+    let app_response = read_repo_file("crates/ssh-proxy/src/route/response.rs");
+    assert_not_contains(
+        &app_response,
+        "fn candidate_failures",
+        "app route response should not retain preflight candidate classification logic",
+    );
+
+    let route_remote_use = read_repo_file("crates/ssh-proxy-route/src/remote_use.rs");
+    for symbol in [
+        "pub enum RemoteUseConnectMode",
+        "pub enum RemoteUsePlan",
+        "pub struct RemoteUseDecision",
+        "pub struct RemoteUseInput",
+        "pub fn decide_remote_use",
+        "pub fn resolve_remote_use_local_peer",
+    ] {
+        assert_contains(
+            &route_remote_use,
+            symbol,
+            "route crate should own remote-uses-local direct/reverse-link policy",
+        );
+    }
+    let app_selection = read_repo_file("crates/ssh-proxy/src/route/selection.rs");
+    assert_contains(
+        &app_selection,
+        "RemoteUseInput",
+        "app route selection should adapt CLI/config into route remote-use input",
+    );
+    assert_not_contains(
+        &app_selection,
+        "enum RemoteUsePlan",
+        "app route selection should not retain remote-use plan enums",
+    );
+    assert_not_contains(
+        &app_selection,
+        "struct RemoteUseDecision",
+        "app route selection should not retain remote-use decision DTOs",
+    );
+
     let daemon_spec = read_repo_file("crates/ssh-proxy-daemon/src/session_spec.rs");
     for symbol in [
         "pub struct ProxySessionSpec",
@@ -526,6 +592,54 @@ fn route_and_proxy_session_policy_live_outside_app_runtime() {
         "fn proxy_session_specs_match",
         "app proxy session runtime should not retain pure spec matching logic",
     );
+}
+
+#[test]
+fn service_status_summaries_live_in_service_crate() {
+    let service_status = read_repo_file("crates/ssh-proxy-service/src/status.rs");
+    for symbol in [
+        "pub struct ServiceManagerSummaryInput",
+        "pub fn service_manager_summary",
+        "pub fn selected_control_summary",
+        "pub fn service_candidates_summary",
+        "pub fn service_state_name",
+        "pub fn service_next_action",
+        "pub fn persistent_manager_kind",
+        "pub fn control_endpoint_kind_from_str",
+    ] {
+        assert_contains(
+            &service_status,
+            symbol,
+            "service crate should own status summary DTO rendering",
+        );
+    }
+
+    let app_status = read_repo_file("crates/ssh-proxy/src/service/status.rs");
+    for delegated in [
+        "ssh_proxy_service::service_manager_summary",
+        "ssh_proxy_service::selected_control_summary",
+        "ssh_proxy_service::service_candidates_summary",
+        "ssh_proxy_service::service_state_name",
+        "ssh_proxy_service::service_next_action",
+    ] {
+        assert_contains(
+            &app_status,
+            delegated,
+            "app service status should delegate pure report rendering to service crate",
+        );
+    }
+    for local_logic in [
+        "fn persistent_manager_kind",
+        "fn control_endpoint_kind_from_str",
+        "let mut candidates = Vec::new()",
+        "\"session_daemon_fallback\": {",
+    ] {
+        assert_not_contains(
+            &app_status,
+            local_logic,
+            "app service status should not retain moved service summary logic",
+        );
+    }
 }
 
 #[test]
