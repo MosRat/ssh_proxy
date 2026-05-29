@@ -6,8 +6,8 @@ use serde_json::Value;
 use crate::{cli, peer_lifecycle, ssh_client};
 
 use super::{
-    apply_remote_auto_defaults, default_persistent_remote_path, upload_helper,
-    wait_remote_peer_descriptor,
+    defaults::apply_remote_auto_defaults, descriptor::wait_remote_peer_descriptor,
+    helper::upload_helper, remote_commands::default_persistent_remote_path,
 };
 use peer_lifecycle::{
     service_provider::PeerServiceProvider,
