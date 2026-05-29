@@ -28,6 +28,48 @@ The daemon owns these persistent stores:
 State writes use atomic temp-file plus rename. Startup reconciliation adopts
 known sessions and routes, refreshes peers, and resumes unfinished jobs.
 
+## Protocol Layers
+
+v0.3 keeps existing wire formats stable while sharing the protocol vocabulary:
+
+- `protocol_core::version` owns control API version, peer protocol version,
+  feature sets, and compatibility classification.
+- `protocol_core::envelope` owns `ControlEnvelope`, `ControlResponse`, and
+  `ControlError`. Daemon JSON-line control responses are generated through this
+  shape while keeping existing public fields such as `api_version`, `ok`,
+  `code`, `message`, `error`, and `data`.
+- `protocol_core::control` owns daemon command alias normalization and typed
+  dispatch names. Legacy wide `NodeRequest` JSON still parses, but command
+  matching does not live in the socket server.
+- `protocol_core::descriptor` owns the typed peer descriptor DTO used by config
+  import/export, descriptor refresh, compatibility checks, and doctor output.
+- `protocol_core::codec` wraps the SPX data frame codec and the generic
+  `magic + version + length + JSON` control-frame shell used by QUIC-native
+  control. The SPX 9-byte header and the `QNC1` outer frame remain unchanged.
+- `protocol_core::report` owns shared health state, dependency
+  classification, repair-action references, and runtime decision DTOs.
+- `protocol_core::redaction` delegates to the lifecycle redaction rules so
+  token, credential, identity path, and `known_hosts` handling stays consistent
+  across status, doctor, daemon events, and VS Code diagnose.
+
+The protocol boundary is intentionally split by layer:
+
+- Control plane: JSON-line daemon control and remote peer control use shared
+  envelopes, version checks, command names, error fields, blockers, and repair
+  actions.
+- Data plane: SPX frames keep their binary format and are addressed through the
+  shared `DataFrame`/`SpxFrameCodec` contract.
+- Native QUIC control: `QNC1` still frames JSON route-control messages, but the
+  framing helper is shared with other control-plane transports.
+- Reports: status, doctor, events, and VS Code diagnose should render shared
+  DTOs instead of rebuilding health, dependency, connection, and redaction
+  fields in each subsystem.
+
+OpenSSH subprocess compatibility and remote shell TCP probes are not part of
+the normal protocol stack. They remain explicit compatibility or diagnostic
+paths and must surface `requires_external_ssh`, dependency classification, and a
+repair action when used.
+
 ## Symmetric Peer Lifecycle
 
 Local daemons and remote peer servers share the same lifecycle vocabulary:
