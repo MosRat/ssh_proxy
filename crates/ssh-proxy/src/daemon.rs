@@ -214,7 +214,7 @@ async fn wait_for_daemon_health() -> Result<()> {
 }
 
 pub async fn up(args: cli::UpArgs, config: config::AppConfig) -> Result<()> {
-    let spec = node_daemon::ProxySessionSpec::from_up_args(&args);
+    let spec = node_daemon::proxy_session_spec_from_up_args(&args);
     let request = node_daemon::NodeRequest::ensure_proxy_session(spec.clone())
         .to_value()
         .context("failed to encode proxy session request")?;
@@ -631,7 +631,7 @@ fn now_unix() -> u64 {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::{cli, control_socket, node_daemon::ProxySessionSpec};
+    use crate::{cli, control_socket, node_daemon};
 
     #[test]
     fn up_args_map_to_proxy_session_spec() {
@@ -669,7 +669,7 @@ mod tests {
             volatile: true,
             json: true,
         };
-        let spec = ProxySessionSpec::from_up_args(&args);
+        let spec = node_daemon::proxy_session_spec_from_up_args(&args);
         assert_eq!(spec.target, "edge");
         assert_eq!(spec.connect_mode, cli::RouteConnectMode::ReverseLink.into());
         assert_eq!(spec.local_proxy, "http://127.0.0.1:10808/");

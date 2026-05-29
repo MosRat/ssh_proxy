@@ -47,7 +47,7 @@ use state::ProductionState;
 
 pub(crate) use args::{proxy_args_from_node_forward, reverse_args_from_node_reverse};
 pub(crate) use control_protocol::{NodeRequest, NodeResponse, attach_auth_token, response_line};
-pub(crate) use proxy_session::ProxySessionSpec;
+pub(crate) use proxy_session::{ProxySessionSpec, proxy_session_spec_from_up_args};
 #[cfg(test)]
 pub(crate) use proxy_session::{RemotePortPolicy, SshTargetSpec};
 

@@ -11,6 +11,7 @@ use super::{
     remote_setup, response_line,
     state::ProxySessionRecordExt,
 };
+use ssh_proxy_daemon::proxy_session_specs_match;
 
 mod apply_settings;
 mod job_runner;
@@ -22,9 +23,8 @@ mod status;
 use job_runner::job_for_phase;
 #[cfg(test)]
 use job_runner::{route_request_from_spec, validate_proxy_session_spec};
-#[cfg(test)]
-use spec::proxy_url_for_remote;
-pub(crate) use spec::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy, SshTargetSpec};
+pub(crate) use spec::proxy_session_spec_from_up_args;
+pub(crate) use ssh_proxy_daemon::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy, SshTargetSpec};
 
 impl NodeManager {
     pub(super) async fn ensure_proxy_session(
@@ -260,20 +260,6 @@ impl NodeManager {
     }
 }
 
-fn proxy_session_specs_match(left: &ProxySessionSpec, right: &ProxySessionSpec) -> bool {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    normalize_proxy_session_spec_for_live_reuse(&mut left);
-    normalize_proxy_session_spec_for_live_reuse(&mut right);
-    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
-}
-
-fn normalize_proxy_session_spec_for_live_reuse(spec: &mut ProxySessionSpec) {
-    if let Some(ssh) = spec.ssh.as_mut() {
-        ssh.identity.clear();
-    }
-}
-
 fn error_chain(err: &anyhow::Error) -> String {
     format!("{err:#}")
 }
@@ -283,35 +269,6 @@ mod tests {
     use std::{net::IpAddr, path::PathBuf};
 
     use super::*;
-
-    #[test]
-    fn proxy_session_spec_derives_stable_ids() {
-        let spec = ProxySessionSpec {
-            target: "126".to_string(),
-            workspace_id: Some("Window A".to_string()),
-            ssh: None,
-            workspace_paths: Vec::new(),
-            local_proxy: "http://127.0.0.1:10808/".to_string(),
-            remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
-            connect_mode: RouteConnectMode::ReverseLink,
-            apply_policy: ApplyPolicy::default(),
-        };
-        assert_eq!(spec.route_id(), "v3-window-a");
-        assert_eq!(spec.job_id(), "proxy:window-a");
-        assert_eq!(spec.remote_url(), "http://127.0.0.1:17890/");
-    }
-
-    #[test]
-    fn proxy_url_preserves_userinfo_and_suffix() {
-        assert_eq!(
-            proxy_url_for_remote("http://user:pass@127.0.0.1:10808/path", "127.0.0.1", 17890),
-            "http://user:pass@127.0.0.1:17890/path",
-        );
-    }
 
     #[test]
     fn healthy_proxy_session_job_requires_live_route_for_reuse() {
@@ -378,43 +335,6 @@ mod tests {
         assert_eq!(route.jump, vec!["hub"]);
         assert!(route.accept_new);
         assert_eq!(route.ssh_args, vec!["-o", "HostName=10.10.100.71"]);
-    }
-
-    #[test]
-    fn proxy_session_reuse_ignores_identity_enrichment() {
-        let mut existing = ProxySessionSpec {
-            target: "125".to_string(),
-            workspace_id: Some("wenhongli@172.18.116.125".to_string()),
-            ssh: Some(SshTargetSpec {
-                host_name: Some("172.18.116.125".to_string()),
-                user: Some("wenhongli".to_string()),
-                port: None,
-                identity: Vec::new(),
-                config: Some(PathBuf::from("C:/Users/whl/.ssh/config")),
-                known_hosts: Some(PathBuf::from("C:/Users/whl/.ssh/known_hosts")),
-                jump: Vec::new(),
-                accept_new: true,
-            }),
-            workspace_paths: Vec::new(),
-            local_proxy: "http://127.0.0.1:10808/".to_string(),
-            remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
-            connect_mode: RouteConnectMode::ReverseLink,
-            apply_policy: ApplyPolicy::default(),
-        };
-        let mut enriched = existing.clone();
-        enriched.ssh.as_mut().unwrap().identity = vec![
-            PathBuf::from("C:/Users/whl/.ssh/id_rsa"),
-            PathBuf::from("C:/Users/whl/.ssh/id_ed25519"),
-        ];
-
-        assert!(proxy_session_specs_match(&existing, &enriched));
-
-        existing.remote_port_policy.preferred = 17891;
-        assert!(!proxy_session_specs_match(&existing, &enriched));
     }
 
     #[test]

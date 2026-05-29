@@ -3,6 +3,7 @@ use std::{net::IpAddr, time::Duration};
 use anyhow::{Result, anyhow};
 use serde_json::json;
 use ssh_proxy_core::model::RouteConnectMode;
+use ssh_proxy_daemon::sanitize_key;
 
 use crate::node_daemon::{
     NodeManager, NodeRequest,
@@ -12,7 +13,7 @@ use crate::node_daemon::{
     state::{ProxySessionRecordExt, RemoteSetupStatus},
 };
 
-use super::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy, error_chain, spec::sanitize_key};
+use super::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy, error_chain};
 
 impl NodeManager {
     pub(in crate::node_daemon) async fn apply_remote_settings(
