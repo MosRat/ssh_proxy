@@ -1,66 +1,30 @@
-use std::path::PathBuf;
-
-use anyhow::{Result, bail};
-use russh::client;
+use anyhow::Result;
+use ssh_proxy_core::intent::SshTargetIntent;
 
 use crate::cli;
 
-pub use ssh_proxy_ssh::{ExecOutput, Target, resolve_target};
+pub use ssh_proxy_ssh::{ExecOutput, SshStream, Target};
 
 pub struct Client(ssh_proxy_ssh::Client);
 
 impl Client {
     pub async fn connect_proxy_args(args: &cli::ProxyArgs) -> Result<Self> {
-        if args.ssh_command.is_some() {
-            reject_external_ssh_command()?;
-        }
-        connect_target(
-            &args.target,
-            &args.ssh_args,
-            args.user.clone(),
-            args.port,
-            args.identity.clone(),
-            args.config.clone(),
-            args.known_hosts.clone(),
-            args.accept_new,
-            args.insecure_ignore_host_key,
-            args.jump.clone(),
-        )
-        .await
+        connect_intent(proxy_ssh_intent(args)).await
     }
 
     pub async fn connect_install_args(args: &cli::InstallRemoteArgs) -> Result<Self> {
-        if args.ssh_command.is_some() {
-            reject_external_ssh_command()?;
-        }
-        connect_target(
-            &args.target,
-            &args.ssh_args,
-            args.user.clone(),
-            args.port,
-            args.identity.clone(),
-            args.config.clone(),
-            args.known_hosts.clone(),
-            args.accept_new,
-            args.insecure_ignore_host_key,
-            args.jump.clone(),
-        )
-        .await
+        connect_intent(install_ssh_intent(args)).await
     }
 
     pub fn target(&self) -> &Target {
         self.0.target()
     }
 
-    pub async fn exec_stream(&self, command: String) -> Result<russh::ChannelStream<client::Msg>> {
+    pub async fn exec_stream(&self, command: String) -> Result<SshStream> {
         self.0.exec_stream(command).await
     }
 
-    pub async fn direct_tcpip_stream(
-        &self,
-        host: String,
-        port: u16,
-    ) -> Result<russh::ChannelStream<client::Msg>> {
+    pub async fn direct_tcpip_stream(&self, host: String, port: u16) -> Result<SshStream> {
         self.0.direct_tcpip_stream(host, port).await
     }
 
@@ -82,49 +46,57 @@ impl Client {
 }
 
 pub fn resolve_route_target(args: &cli::RouteArgs) -> Result<Target> {
-    resolve_target(
-        &args.target,
-        &args.ssh_args,
-        args.user.clone(),
-        args.ssh_port,
-        args.identity.clone(),
-        args.config.clone(),
-        args.known_hosts.clone(),
-        args.accept_new,
-        args.insecure_ignore_host_key,
-        args.jump.clone(),
-    )
+    ssh_proxy_ssh::resolve_intent_target(&route_ssh_intent(args))
 }
 
-async fn connect_target(
-    target: &str,
-    ssh_args: &[String],
-    user: Option<String>,
-    port: Option<u16>,
-    identities: Vec<PathBuf>,
-    config: Option<PathBuf>,
-    known_hosts: Option<PathBuf>,
-    accept_new: bool,
-    insecure_ignore_host_key: bool,
-    jump: Vec<String>,
-) -> Result<Client> {
-    let target = resolve_target(
-        target,
-        ssh_args,
-        user,
-        port,
-        identities,
-        config,
-        known_hosts,
-        accept_new,
-        insecure_ignore_host_key,
-        jump,
-    )?;
-    Ok(Client(ssh_proxy_ssh::Client::connect(target).await?))
+async fn connect_intent(intent: SshTargetIntent) -> Result<Client> {
+    Ok(Client(ssh_proxy_ssh::connect_intent(&intent).await?))
 }
 
-fn reject_external_ssh_command() -> Result<()> {
-    bail!(
-        "--ssh-command cannot be executed by russh; use --ssh-arg/-F/-i/-p/--user or ~/.ssh/config"
-    )
+fn proxy_ssh_intent(args: &cli::ProxyArgs) -> SshTargetIntent {
+    SshTargetIntent {
+        target: args.target.clone(),
+        ssh_args: args.ssh_args.clone(),
+        ssh_command: args.ssh_command.clone(),
+        user: args.user.clone(),
+        port: args.port,
+        identity: args.identity.clone(),
+        config: args.config.clone(),
+        known_hosts: args.known_hosts.clone(),
+        accept_new: args.accept_new,
+        insecure_ignore_host_key: args.insecure_ignore_host_key,
+        jump: args.jump.clone(),
+    }
+}
+
+fn install_ssh_intent(args: &cli::InstallRemoteArgs) -> SshTargetIntent {
+    SshTargetIntent {
+        target: args.target.clone(),
+        ssh_args: args.ssh_args.clone(),
+        ssh_command: args.ssh_command.clone(),
+        user: args.user.clone(),
+        port: args.port,
+        identity: args.identity.clone(),
+        config: args.config.clone(),
+        known_hosts: args.known_hosts.clone(),
+        accept_new: args.accept_new,
+        insecure_ignore_host_key: args.insecure_ignore_host_key,
+        jump: args.jump.clone(),
+    }
+}
+
+fn route_ssh_intent(args: &cli::RouteArgs) -> SshTargetIntent {
+    SshTargetIntent {
+        target: args.target.clone(),
+        ssh_args: args.ssh_args.clone(),
+        ssh_command: None,
+        user: args.user.clone(),
+        port: args.ssh_port,
+        identity: args.identity.clone(),
+        config: args.config.clone(),
+        known_hosts: args.known_hosts.clone(),
+        accept_new: args.accept_new,
+        insecure_ignore_host_key: args.insecure_ignore_host_key,
+        jump: args.jump.clone(),
+    }
 }

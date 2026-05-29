@@ -9,7 +9,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use russh::client;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpListener,
@@ -20,7 +19,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     cli, protocol, socks,
-    ssh_client::{self, Client},
+    ssh_client::{self, Client, SshStream},
 };
 
 mod control;
@@ -92,7 +91,7 @@ struct Session {
 }
 
 pub struct Stream {
-    inner: russh::ChannelStream<client::Msg>,
+    inner: SshStream,
     state: Arc<State>,
     session: Arc<Session>,
     opened_at: Instant,

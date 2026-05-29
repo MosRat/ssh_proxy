@@ -1,7 +1,6 @@
 use std::{future::Future, net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use russh::client;
 use serde::Serialize;
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt},
@@ -457,7 +456,7 @@ fn local_node_name() -> String {
 pub async fn open_remote_reverse_socks(
     args: &cli::ProxyArgs,
     remote_listen: SocketAddr,
-) -> Result<russh::ChannelStream<client::Msg>> {
+) -> Result<ssh_client::SshStream> {
     let client = ssh_client::Client::connect_proxy_args(args).await?;
     let remote_path = ensure_helper(
         args,

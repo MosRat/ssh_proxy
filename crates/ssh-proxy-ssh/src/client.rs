@@ -1,6 +1,8 @@
 use std::{
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
+    task::{Context as TaskContext, Poll},
     time::Duration,
 };
 
@@ -10,7 +12,8 @@ use russh::{
     client::{self, DisconnectReason},
     keys,
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use ssh_proxy_core::intent::SshTargetIntent;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::{debug, error, info, warn};
 
 use crate::auth;
@@ -34,6 +37,47 @@ pub struct Client {
     target: Target,
     session: client::Handle<ClientHandler>,
     _parents: Vec<client::Handle<ClientHandler>>,
+}
+
+pub struct SshStream {
+    inner: russh::ChannelStream<client::Msg>,
+}
+
+impl SshStream {
+    fn new(inner: russh::ChannelStream<client::Msg>) -> Self {
+        Self { inner }
+    }
+}
+
+impl AsyncRead for SshStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for SshStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 impl Client {
@@ -159,7 +203,7 @@ fn handler_for(target: &Target) -> ClientHandler {
 }
 
 impl Client {
-    pub async fn exec_stream(&self, command: String) -> Result<russh::ChannelStream<client::Msg>> {
+    pub async fn exec_stream(&self, command: String) -> Result<SshStream> {
         let channel = self
             .session
             .channel_open_session()
@@ -169,14 +213,10 @@ impl Client {
             .exec(true, command.into_bytes())
             .await
             .context("failed to exec remote command")?;
-        Ok(channel.into_stream())
+        Ok(SshStream::new(channel.into_stream()))
     }
 
-    pub async fn direct_tcpip_stream(
-        &self,
-        host: String,
-        port: u16,
-    ) -> Result<russh::ChannelStream<client::Msg>> {
+    pub async fn direct_tcpip_stream(&self, host: String, port: u16) -> Result<SshStream> {
         let target = Target {
             alias: host.clone(),
             host,
@@ -189,7 +229,9 @@ impl Client {
             jumps: Vec::new(),
             jump_specs: Vec::new(),
         };
-        open_direct_stream(&self.session, &target).await
+        open_direct_stream(&self.session, &target)
+            .await
+            .map(SshStream::new)
     }
 
     pub async fn exec_upload(&self, command: String, bytes: Vec<u8>) -> Result<()> {
@@ -448,6 +490,35 @@ pub fn resolve_target(
         bail!("empty SSH host");
     }
     Ok(resolved)
+}
+
+pub fn resolve_intent_target(intent: &SshTargetIntent) -> Result<Target> {
+    if intent.requires_external_ssh() {
+        reject_external_ssh_command()?;
+    }
+    resolve_target(
+        &intent.target,
+        &intent.ssh_args,
+        intent.user.clone(),
+        intent.port,
+        intent.identity.clone(),
+        intent.config.clone(),
+        intent.known_hosts.clone(),
+        intent.accept_new,
+        intent.insecure_ignore_host_key,
+        intent.jump.clone(),
+    )
+}
+
+pub async fn connect_intent(intent: &SshTargetIntent) -> Result<Client> {
+    let target = resolve_intent_target(intent)?;
+    Client::connect(target).await
+}
+
+fn reject_external_ssh_command() -> Result<()> {
+    bail!(
+        "--ssh-command cannot be executed by russh; use --ssh-arg/-F/-i/-p/--user or ~/.ssh/config"
+    )
 }
 
 fn parse_target(target: &str) -> (Option<String>, String, Option<u16>) {
