@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::Path};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use ssh_proxy_core::model::RemotePlatform;
+use ssh_proxy_core::{external::ExternalActionClass, model::RemotePlatform};
 
 use crate::commands::sh_quote;
 
@@ -92,6 +92,7 @@ pub fn remote_admin_ok(kind: &str, data: Value) -> Value {
         "execution_backend": "own_binary",
         "native_api_available": true,
         "fallback_used": false,
+        "external_action": remote_admin_external_action(kind),
         "data": data,
     })
 }
@@ -103,7 +104,17 @@ pub fn remote_admin_error(kind: &str, error: &str) -> Value {
         "execution_backend": "own_binary",
         "native_api_available": true,
         "fallback_used": false,
+        "external_action": remote_admin_external_action(kind),
         "error": error,
+    })
+}
+
+fn remote_admin_external_action(kind: &str) -> Value {
+    json!({
+        "class": ExternalActionClass::RequiredProvider.as_str(),
+        "execution_backend": "own_binary",
+        "fallback_used": false,
+        "reason": format!("{kind} through ssh_proxy remote admin"),
     })
 }
 
@@ -197,6 +208,17 @@ mod tests {
 
         assert_eq!(command, "'/tmp/ssh proxy' remote admin");
         assert!(!command.contains(" sha256sum "));
+    }
+
+    #[test]
+    fn remote_admin_reports_own_binary_external_action() {
+        let value = remote_admin_ok("remote_admin_status", json!({"state": "ok"}));
+
+        assert_eq!(value["execution_backend"], "own_binary");
+        assert_eq!(value["fallback_used"], false);
+        assert_eq!(value["external_action"]["class"], "required_provider");
+        assert_eq!(value["external_action"]["execution_backend"], "own_binary");
+        assert_eq!(value["external_action"]["fallback_used"], false);
     }
 
     #[test]
