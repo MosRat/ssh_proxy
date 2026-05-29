@@ -10,15 +10,65 @@ pub use windows_service;
 #[cfg(windows)]
 pub use windows_sys;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionBackend {
+    NativeApi,
+    Dbus,
+    Com,
+    OwnBinary,
+    ProviderCommand,
+    RemoteShellBootstrap,
+}
+
+impl ExecutionBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeApi => "native_api",
+            Self::Dbus => "dbus",
+            Self::Com => "com",
+            Self::OwnBinary => "own_binary",
+            Self::ProviderCommand => "provider_command",
+            Self::RemoteShellBootstrap => "remote_shell_bootstrap",
+        }
+    }
+}
+
+impl std::fmt::Display for ExecutionBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformCommandPlan {
     pub program: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
     pub class: ExternalActionClass,
+    #[serde(default = "default_execution_backend")]
+    pub execution_backend: ExecutionBackend,
     pub reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_action: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeProviderOutcome {
+    pub ok: bool,
+    pub execution_backend: ExecutionBackend,
+    pub native_api_available: bool,
+    pub fallback_used: bool,
+    pub class: ExternalActionClass,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,9 +88,15 @@ impl PlatformCommandPlan {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
             class,
+            execution_backend: ExecutionBackend::ProviderCommand,
             reason: reason.into(),
             repair_action: None,
         }
+    }
+
+    pub fn with_backend(mut self, execution_backend: ExecutionBackend) -> Self {
+        self.execution_backend = execution_backend;
+        self
     }
 
     pub fn with_repair_action(mut self, repair_action: impl Into<String>) -> Self {
@@ -53,6 +109,60 @@ impl PlatformCommandPlan {
             .chain(self.args.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+impl NativeProviderOutcome {
+    pub fn new(
+        ok: bool,
+        execution_backend: ExecutionBackend,
+        class: ExternalActionClass,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok,
+            execution_backend,
+            native_api_available: matches!(
+                execution_backend,
+                ExecutionBackend::NativeApi | ExecutionBackend::Dbus | ExecutionBackend::Com
+            ),
+            fallback_used: false,
+            class,
+            reason: reason.into(),
+            repair_action: None,
+            status: None,
+            message: None,
+            details: None,
+        }
+    }
+
+    pub fn fallback(mut self, fallback_used: bool) -> Self {
+        self.fallback_used = fallback_used;
+        self
+    }
+
+    pub fn with_repair_action(mut self, repair_action: impl Into<String>) -> Self {
+        self.repair_action = Some(repair_action.into());
+        self
+    }
+
+    pub fn with_status(mut self, status: impl Into<String>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!(self)
     }
 }
 
@@ -126,6 +236,7 @@ impl PlatformCommandOutcome {
             "program": self.plan.program,
             "args": self.plan.args,
             "class": self.plan.class.as_str(),
+            "execution_backend": self.plan.execution_backend.as_str(),
             "reason": self.plan.reason,
             "repair_action": self.plan.repair_action,
             "ok": self.ok,
@@ -134,6 +245,10 @@ impl PlatformCommandOutcome {
             "stderr": self.stderr,
         })
     }
+}
+
+fn default_execution_backend() -> ExecutionBackend {
+    ExecutionBackend::ProviderCommand
 }
 
 pub fn capture_command(plan: PlatformCommandPlan) -> Result<PlatformCommandOutcome> {
@@ -192,8 +307,27 @@ mod tests {
         let value = outcome.to_json();
 
         assert_eq!(value["class"], "required_provider");
+        assert_eq!(value["execution_backend"], "provider_command");
         assert_eq!(value["repair_action"], "rerun daemon install");
         assert_eq!(value["status_code"], 3);
+    }
+
+    #[test]
+    fn native_provider_outcome_renders_backend() {
+        let value = NativeProviderOutcome::new(
+            true,
+            ExecutionBackend::Dbus,
+            ExternalActionClass::RequiredProvider,
+            "start service through systemd dbus",
+        )
+        .with_status("active")
+        .to_json();
+
+        assert_eq!(value["execution_backend"], "dbus");
+        assert_eq!(value["native_api_available"], true);
+        assert_eq!(value["fallback_used"], false);
+        assert_eq!(value["class"], "required_provider");
+        assert_eq!(value["status"], "active");
     }
 
     #[test]

@@ -37,6 +37,7 @@ pub(super) fn capture_command_output(program: &str, args: &[&str]) -> Value {
             "program": outcome.plan.program,
             "args": outcome.plan.args,
             "class": outcome.plan.class.as_str(),
+            "execution_backend": outcome.plan.execution_backend.as_str(),
             "reason": outcome.plan.reason,
             "status": outcome.status_code,
             "stdout": outcome.stdout,
