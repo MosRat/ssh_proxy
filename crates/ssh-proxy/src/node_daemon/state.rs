@@ -6,6 +6,7 @@ use std::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+pub(super) use ssh_proxy_daemon::{DaemonStateRecord, PeerStatusRecord};
 use tokio::sync::Mutex;
 
 use crate::{config, repair};
@@ -243,42 +244,6 @@ impl RemoteSetupStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct PeerStatusRecord {
-    pub(super) target: String,
-    pub(super) state: String,
-    #[serde(default = "default_unknown_health")]
-    pub(super) health: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) control_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) transport: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(super) transport_protocols: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) service_manager: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) descriptor_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) install: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) dependency_report: Option<Value>,
-    pub(super) update_required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) blocker: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) repair_action: Option<repair::RepairAction>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) last_error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) retry_after_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub(super) recovery_attempts: u32,
-    pub(super) updated_at_unix: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionStore {
     version: u32,
     sessions: BTreeMap<String, ProxySessionRecord>,
@@ -318,40 +283,7 @@ impl Default for DaemonStateStore {
     fn default() -> Self {
         Self {
             version: STORE_VERSION,
-            daemon: DaemonStateRecord::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DaemonStateRecord {
-    schema_version: u32,
-    version: String,
-    health: String,
-    update_state: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    update: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    control_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    started_at_unix: u64,
-    updated_at_unix: u64,
-}
-
-impl Default for DaemonStateRecord {
-    fn default() -> Self {
-        let now = now_unix();
-        Self {
-            schema_version: STORE_VERSION,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            health: "starting".to_string(),
-            update_state: "idle".to_string(),
-            update: None,
-            control_endpoint: None,
-            name: None,
-            started_at_unix: now,
-            updated_at_unix: now,
+            daemon: DaemonStateRecord::new(env!("CARGO_PKG_VERSION")),
         }
     }
 }
@@ -404,10 +336,6 @@ fn is_false(value: &bool) -> bool {
 
 fn is_zero(value: &u32) -> bool {
     *value == 0
-}
-
-fn default_unknown_health() -> String {
-    "unknown".to_string()
 }
 
 fn now_unix() -> u64 {
