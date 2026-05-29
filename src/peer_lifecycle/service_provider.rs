@@ -2,7 +2,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli;
 
-use super::commands;
+use super::{
+    commands,
+    executor::ServiceControlAction,
+    report::DependencyStatus,
+    spec::PeerLifecycleSpec,
+    workflow::{
+        LifecycleAction, LifecycleOperation, LifecyclePlan, LifecycleStep, PeerLifecyclePhase,
+    },
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +112,137 @@ impl ServiceProviderPlan {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProviderStatusState {
+    Healthy,
+    Present,
+    Missing,
+    PermissionDenied,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProviderStatus {
+    pub(crate) state: ProviderStatusState,
+    pub(crate) healthy: bool,
+    pub(crate) message: String,
+}
+
+pub(crate) trait PeerServiceProvider {
+    fn kind(&self) -> ServiceProviderKind;
+    fn service_name(&self) -> &str;
+    fn dependency_report(&self) -> Vec<DependencyStatus>;
+    fn lifecycle_plan(
+        &self,
+        spec: &PeerLifecycleSpec,
+        operation: LifecycleOperation,
+        command: Option<String>,
+    ) -> LifecyclePlan;
+    fn classify_status(&self, exit_status: u32, stdout: &str, stderr: &str) -> ProviderStatus;
+    fn repair_hint(&self, blocker: &str) -> Option<String>;
+}
+
+impl PeerServiceProvider for ServiceProviderPlan {
+    fn kind(&self) -> ServiceProviderKind {
+        self.kind
+    }
+
+    fn service_name(&self) -> &str {
+        &self.service_name
+    }
+
+    fn dependency_report(&self) -> Vec<DependencyStatus> {
+        vec![
+            DependencyStatus::new(
+                format!("provider:{}", self.kind.manager_name()),
+                provider_dependency_classification(self.kind),
+                provider_dependency_state(self.kind),
+            )
+            .with_message(self.install_hint.clone()),
+        ]
+    }
+
+    fn lifecycle_plan(
+        &self,
+        spec: &PeerLifecycleSpec,
+        operation: LifecycleOperation,
+        command: Option<String>,
+    ) -> LifecyclePlan {
+        let mut plan = LifecyclePlan::new(operation).push(LifecycleStep::new(
+            PeerLifecyclePhase::DependencyCheck,
+            LifecycleAction::Noop,
+        ));
+        let phase = lifecycle_phase_for_provider_operation(operation);
+        let action = command
+            .filter(|command| !command.trim().is_empty())
+            .map(|command| LifecycleAction::RunCommand {
+                command,
+                stdin: None,
+            })
+            .unwrap_or_else(|| LifecycleAction::ServiceControl {
+                service_name: spec.service_name.clone(),
+                action: service_control_action(operation),
+            });
+        plan = plan.push(LifecycleStep::new(phase, action));
+        plan
+    }
+
+    fn classify_status(&self, exit_status: u32, stdout: &str, stderr: &str) -> ProviderStatus {
+        let text = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+        let permission_denied = text.contains("access is denied")
+            || text.contains("permission denied")
+            || text.contains("not permitted")
+            || text.contains("operation not permitted");
+        let missing = text.contains("not-found")
+            || text.contains("not found")
+            || text.contains("could not be found")
+            || text.contains("does not exist");
+        let healthy = exit_status == 0
+            && (text.contains("running")
+                || text.contains("active")
+                || text.contains("healthy")
+                || text.contains("success"));
+        let state = if permission_denied {
+            ProviderStatusState::PermissionDenied
+        } else if healthy {
+            ProviderStatusState::Healthy
+        } else if missing {
+            ProviderStatusState::Missing
+        } else if exit_status == 0 {
+            ProviderStatusState::Present
+        } else {
+            ProviderStatusState::Unknown
+        };
+        ProviderStatus {
+            state,
+            healthy,
+            message: if stderr.trim().is_empty() {
+                stdout.trim().to_string()
+            } else {
+                stderr.trim().to_string()
+            },
+        }
+    }
+
+    fn repair_hint(&self, blocker: &str) -> Option<String> {
+        match blocker {
+            "permission_denied" | "requires_elevation" if self.kind.requires_elevation() => {
+                Some("retry with the interactive elevated repair action".to_string())
+            }
+            "service_missing" | "install_service_failed" => Some(format!(
+                "reinstall {} using {}",
+                self.service_name, self.install_hint
+            )),
+            "service_not_running" | "start_service_failed" => Some(format!(
+                "start {} using {}",
+                self.service_name, self.status_hint
+            )),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) fn provider_for_remote_os(
     remote_os: cli::RemoteOs,
     persist: cli::PersistMode,
@@ -118,6 +257,49 @@ pub(crate) fn provider_for_remote_os(
             cli::RemoteOs::Windows => ServiceProviderKind::WindowsScheduledTaskUser,
             cli::RemoteOs::Unix | cli::RemoteOs::Auto => ServiceProviderKind::SystemdUser,
         },
+    }
+}
+
+fn provider_dependency_classification(kind: ServiceProviderKind) -> &'static str {
+    match kind {
+        ServiceProviderKind::WindowsScmSystem
+        | ServiceProviderKind::SystemdSystem
+        | ServiceProviderKind::LaunchdSystem => "required",
+        ServiceProviderKind::WindowsScheduledTaskUser
+        | ServiceProviderKind::SystemdUser
+        | ServiceProviderKind::LaunchdUser => "required",
+        ServiceProviderKind::NohupSupervisor => "emergency_compat",
+    }
+}
+
+fn provider_dependency_state(kind: ServiceProviderKind) -> &'static str {
+    match kind {
+        ServiceProviderKind::NohupSupervisor => "fallback_provider",
+        _ => "selected_provider",
+    }
+}
+
+fn lifecycle_phase_for_provider_operation(operation: LifecycleOperation) -> PeerLifecyclePhase {
+    match operation {
+        LifecycleOperation::Install => PeerLifecyclePhase::InstallService,
+        LifecycleOperation::Ensure | LifecycleOperation::Start | LifecycleOperation::Repair => {
+            PeerLifecyclePhase::StartService
+        }
+        LifecycleOperation::Stop => PeerLifecyclePhase::Repairing,
+        LifecycleOperation::Status => PeerLifecyclePhase::HealthProbe,
+        LifecycleOperation::Rollback => PeerLifecyclePhase::Rollback,
+    }
+}
+
+fn service_control_action(operation: LifecycleOperation) -> ServiceControlAction {
+    match operation {
+        LifecycleOperation::Install | LifecycleOperation::Ensure | LifecycleOperation::Repair => {
+            ServiceControlAction::Install
+        }
+        LifecycleOperation::Start => ServiceControlAction::Start,
+        LifecycleOperation::Stop => ServiceControlAction::Stop,
+        LifecycleOperation::Status => ServiceControlAction::Status,
+        LifecycleOperation::Rollback => ServiceControlAction::Rollback,
     }
 }
 
@@ -193,6 +375,76 @@ mod tests {
         );
         assert!(ServiceProviderKind::WindowsScmSystem.requires_elevation());
         assert!(!ServiceProviderKind::WindowsScheduledTaskUser.requires_elevation());
+    }
+
+    #[test]
+    fn provider_contract_builds_lifecycle_plan() {
+        let provider = ServiceProviderPlan::new(ServiceProviderKind::SystemdUser, "ssh_proxy");
+        let args = cli::InstallRemoteArgs {
+            target: "edge".to_string(),
+            ssh_args: Vec::new(),
+            ssh_command: None,
+            user: None,
+            port: None,
+            identity: Vec::new(),
+            config: None,
+            known_hosts: None,
+            accept_new: false,
+            insecure_ignore_host_key: false,
+            jump: Vec::new(),
+            remote_path: None,
+            remote_bin: None,
+            remote_os: cli::RemoteOs::Unix,
+            remote_token: Some("secret".to_string()),
+            remote_tcp: "127.0.0.1:19080".parse().unwrap(),
+            remote_control: "127.0.0.1:19081".parse().unwrap(),
+            local_node_id: None,
+            local_node_name: None,
+            local_control_endpoint: None,
+            local_transport: None,
+            remote_node_id: None,
+            remote_node_name: None,
+            remote_tls_transport: None,
+            remote_quic_transport: None,
+            remote_tls_cert: None,
+            remote_tls_key: None,
+            remote_tls_client_ca: None,
+            persist: cli::PersistMode::Systemd,
+        };
+        let spec = PeerLifecycleSpec::remote_peer(
+            "edge",
+            "/home/me/bin/ssh_proxy",
+            &args,
+            ServiceProviderKind::SystemdUser,
+        );
+
+        let plan = provider.lifecycle_plan(
+            &spec,
+            LifecycleOperation::Install,
+            Some("systemctl --user restart ssh_proxy".to_string()),
+        );
+
+        assert_eq!(provider.kind(), ServiceProviderKind::SystemdUser);
+        assert_eq!(provider.service_name(), "ssh_proxy");
+        assert_eq!(provider.dependency_report()[0].state, "selected_provider");
+        assert_eq!(plan.operation, LifecycleOperation::Install);
+        assert_eq!(plan.steps.len(), 2);
+        assert_eq!(plan.steps[0].phase, PeerLifecyclePhase::DependencyCheck);
+        assert_eq!(plan.steps[1].phase, PeerLifecyclePhase::InstallService);
+    }
+
+    #[test]
+    fn provider_status_classification_is_stable() {
+        let provider = ServiceProviderPlan::new(ServiceProviderKind::SystemdUser, "ssh_proxy");
+
+        let healthy = provider.classify_status(0, "ActiveState=active", "");
+        let missing = provider.classify_status(3, "LoadState=not-found", "");
+        let denied = provider.classify_status(1, "", "permission denied");
+
+        assert_eq!(healthy.state, ProviderStatusState::Healthy);
+        assert_eq!(missing.state, ProviderStatusState::Missing);
+        assert_eq!(denied.state, ProviderStatusState::PermissionDenied);
+        assert!(provider.repair_hint("service_missing").is_some());
     }
 
     #[test]
