@@ -2,7 +2,7 @@ use std::{net::IpAddr, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::control_socket;
+use ssh_proxy_control as control_socket;
 
 use super::{NodeDaemonArgs, RouteConnectMode};
 

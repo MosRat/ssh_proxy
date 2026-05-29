@@ -3,7 +3,8 @@ use std::{net::SocketAddr, path::PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use crate::{control_socket, peer_transport};
+use ssh_proxy_control as control_socket;
+use ssh_proxy_transport::peer_transport;
 
 use super::{DeployMode, RemoteOs, RemoteTransport, RouteArgs, RouteWorkloadHint, TcpTarget};
 

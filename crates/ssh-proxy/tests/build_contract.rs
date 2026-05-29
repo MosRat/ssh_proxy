@@ -196,6 +196,10 @@ fn workspace_crate_boundaries_remain_layered() {
         &["clap", "russh", "tokio", "windows-service", "ssh-proxy"],
     );
     assert_manifest_avoids(
+        "crates/ssh-proxy-cli/Cargo.toml",
+        &["russh", "tokio", "windows-service", "ssh-proxy"],
+    );
+    assert_manifest_avoids(
         "crates/ssh-proxy-control/Cargo.toml",
         &["clap", "russh", "windows-service", "ssh-proxy"],
     );

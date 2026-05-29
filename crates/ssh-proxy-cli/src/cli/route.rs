@@ -6,7 +6,7 @@ use std::{
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use crate::control_socket;
+use ssh_proxy_control as control_socket;
 
 use super::{DeployMode, RemoteOs, RemoteTransport, TcpTarget};
 

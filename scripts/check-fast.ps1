@@ -97,6 +97,7 @@ try {
         } else {
             Invoke-CargoChecked "cargo test -p ssh-proxy-protocol" @("test", "-p", "ssh-proxy-protocol")
             Invoke-CargoChecked "cargo test -p ssh-proxy-lifecycle" @("test", "-p", "ssh-proxy-lifecycle")
+            Invoke-CargoChecked "cargo test -p ssh-proxy-cli" @("test", "-p", "ssh-proxy-cli")
             Invoke-CargoChecked "cargo test -p ssh-proxy-config" @("test", "-p", "ssh-proxy-config")
             Invoke-CargoChecked "cargo test -p ssh-proxy-control" @("test", "-p", "ssh-proxy-control")
             Invoke-CargoChecked "cargo test -p ssh-proxy-ssh" @("test", "-p", "ssh-proxy-ssh")

@@ -2238,6 +2238,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh-proxy-cli"
+version = "0.1.1"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "ssh-proxy-control",
+ "ssh-proxy-transport",
+]
+
+[[package]]
 name = "ssh-proxy-config"
 version = "0.1.1"
 dependencies = [
@@ -2336,6 +2347,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "ssh-proxy-cli",
  "ssh-proxy-config",
  "ssh-proxy-control",
  "ssh-proxy-core",

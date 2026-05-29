@@ -29,6 +29,7 @@ rustls-pemfile = "2.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
+ssh-proxy-cli = { path = "crates/ssh-proxy-cli" }
 ssh-proxy-config = { path = "crates/ssh-proxy-config" }
 ssh-proxy-control = { path = "crates/ssh-proxy-control" }
 ssh-proxy-core = { path = "crates/ssh-proxy-core" }
