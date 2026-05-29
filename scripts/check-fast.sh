@@ -105,6 +105,8 @@ if [ "$SKIP_RUST" != "1" ]; then
     # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test -p ssh-proxy-config
     # shellcheck disable=SC2086
+    cargo $CARGO_CONFIG_ARGS test -p ssh-proxy-control
+    # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test -p ssh-proxy-ssh
     # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test -p ssh-proxy-transport

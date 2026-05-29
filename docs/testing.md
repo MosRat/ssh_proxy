@@ -37,6 +37,8 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
   `cargo test -p ssh-proxy-lifecycle` for shared lifecycle contracts, and
   `cargo test -p ssh_proxy --bin ssh_proxy peer_lifecycle` for app adapters;
 - path and atomic file store helpers: `cargo test -p ssh-proxy-config`;
+- control socket endpoints, JSON-line request limits, Unix socket and named
+  pipe helpers: `cargo test -p ssh-proxy-control`;
 - Rust-native SSH config parsing, auth helpers, jump chains, exec/upload API:
   `cargo test -p ssh-proxy-ssh`;
 - data-plane frame compatibility: `cargo test -p ssh-proxy-protocol`;
