@@ -1,8 +1,15 @@
+use std::{future::Future, net::SocketAddr, pin::Pin};
+
 use serde::{Deserialize, Serialize};
 
 use anyhow::{Context, Result, bail};
 
-use super::{executor::PeerExecutor, report::PeerLifecycleReport, spec::PeerLifecycleSpec};
+use super::{
+    artifacts::PeerArtifact,
+    executor::{PeerExecutor, ServiceControlAction},
+    report::PeerLifecycleReport,
+    spec::PeerLifecycleSpec,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,14 +136,112 @@ impl LifecycleCommandPlan {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum LifecycleAction {
+    RunCommand {
+        command: String,
+        stdin: Option<Vec<u8>>,
+    },
+    StageBinary {
+        source: String,
+        target: String,
+    },
+    WriteArtifact {
+        target: String,
+        artifact: PeerArtifact,
+        bytes: Vec<u8>,
+    },
+    ReadArtifact {
+        target: String,
+    },
+    ProbeTcp {
+        addr: SocketAddr,
+    },
+    ServiceControl {
+        service_name: String,
+        action: ServiceControlAction,
+    },
+    Noop,
+}
+
+impl LifecycleAction {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::RunCommand { .. } => "run_command",
+            Self::StageBinary { .. } => "stage_binary",
+            Self::WriteArtifact { .. } => "write_artifact",
+            Self::ReadArtifact { .. } => "read_artifact",
+            Self::ProbeTcp { .. } => "probe_tcp",
+            Self::ServiceControl { .. } => "service_control",
+            Self::Noop => "noop",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LifecycleStep {
+    pub(crate) phase: PeerLifecyclePhase,
+    pub(crate) action: LifecycleAction,
+}
+
+impl LifecycleStep {
+    pub(crate) fn new(phase: PeerLifecyclePhase, action: LifecycleAction) -> Self {
+        Self { phase, action }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LifecyclePlan {
+    pub(crate) operation: LifecycleOperation,
+    pub(crate) steps: Vec<LifecycleStep>,
+}
+
+impl LifecyclePlan {
+    pub(crate) fn new(operation: LifecycleOperation) -> Self {
+        Self {
+            operation,
+            steps: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push(mut self, step: LifecycleStep) -> Self {
+        self.steps.push(step);
+        self
+    }
+}
+
+impl From<LifecycleCommandPlan> for LifecyclePlan {
+    fn from(plan: LifecycleCommandPlan) -> Self {
+        let steps = plan
+            .commands
+            .into_iter()
+            .map(|command| {
+                LifecycleStep::new(
+                    command.phase,
+                    LifecycleAction::RunCommand {
+                        command: command.command,
+                        stdin: command.stdin,
+                    },
+                )
+            })
+            .collect();
+        Self {
+            operation: plan.operation,
+            steps,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct LifecycleEvent {
     pub(crate) operation: LifecycleOperation,
     pub(crate) report: PeerLifecycleReport,
     pub(crate) message: String,
 }
 
+pub(crate) type BoxEventFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
 pub(crate) trait LifecycleEventSink {
-    fn emit(&mut self, event: LifecycleEvent);
+    fn emit<'a>(&'a mut self, event: LifecycleEvent) -> BoxEventFuture<'a>;
 }
 
 #[derive(Debug, Default)]
@@ -145,8 +250,10 @@ pub(crate) struct VecLifecycleEventSink {
 }
 
 impl LifecycleEventSink for VecLifecycleEventSink {
-    fn emit(&mut self, event: LifecycleEvent) {
-        self.events.push(event);
+    fn emit<'a>(&'a mut self, event: LifecycleEvent) -> BoxEventFuture<'a> {
+        Box::pin(async move {
+            self.events.push(event);
+        })
     }
 }
 
@@ -155,6 +262,8 @@ pub(crate) struct PeerLifecycleWorkflowResult {
     pub(crate) operation: LifecycleOperation,
     pub(crate) report: PeerLifecycleReport,
     pub(crate) phase_reports: Vec<PeerLifecycleReport>,
+    pub(crate) events: Vec<LifecycleEvent>,
+    pub(crate) redacted_report: serde_json::Value,
 }
 
 pub(crate) async fn run_lifecycle_commands<E: PeerExecutor>(
@@ -174,68 +283,184 @@ pub(crate) async fn run_lifecycle_commands<E: PeerExecutor>(
     .await
 }
 
-pub(crate) async fn run_lifecycle_plan<E: PeerExecutor, S: LifecycleEventSink>(
+pub(crate) async fn run_lifecycle_plan<E, S, P>(
     executor: &E,
     spec: &PeerLifecycleSpec,
-    plan: LifecycleCommandPlan,
+    plan: P,
     sink: &mut S,
-) -> Result<PeerLifecycleWorkflowResult> {
+) -> Result<PeerLifecycleWorkflowResult>
+where
+    E: PeerExecutor,
+    S: LifecycleEventSink,
+    P: Into<LifecyclePlan>,
+{
+    let plan = plan.into();
     let mut phase_reports = Vec::new();
     let prepare = phase_report_for_operation(spec, plan.operation, PeerLifecyclePhase::Prepare);
-    sink.emit(LifecycleEvent {
-        operation: plan.operation,
-        report: prepare.clone(),
-        message: "preparing lifecycle operation".to_string(),
-    });
+    let mut events = Vec::new();
+    emit_event(
+        sink,
+        &mut events,
+        LifecycleEvent {
+            operation: plan.operation,
+            report: prepare.clone(),
+            message: "preparing lifecycle operation".to_string(),
+        },
+    )
+    .await;
     phase_reports.push(prepare);
-    for command in plan.commands {
-        let mut report = phase_report_for_operation(spec, plan.operation, command.phase);
-        let output = executor
-            .exec_capture(command.command.clone(), command.stdin)
-            .await
-            .with_context(|| format!("failed to run lifecycle phase {}", command.phase.as_str()))?;
-        if output.exit_status != 0 {
-            let error = if output.stderr.trim().is_empty() {
-                output.stdout.trim().to_string()
-            } else {
-                output.stderr.trim().to_string()
-            };
-            report.state = PeerLifecyclePhase::Failed.as_str().to_string();
-            report.phase = PeerLifecyclePhase::Failed;
-            report.blocker = Some(format!("{}_failed", command.phase.as_str()));
-            report.last_error = Some(error.clone());
-            sink.emit(LifecycleEvent {
+    for step in plan.steps {
+        let mut report = phase_report_for_operation(spec, plan.operation, step.phase);
+        match execute_action(executor, &step.action).await {
+            Ok(Some(output)) if output.exit_status != 0 => {
+                let error = if output.stderr.trim().is_empty() {
+                    output.stdout.trim().to_string()
+                } else {
+                    output.stderr.trim().to_string()
+                };
+                report.state = PeerLifecyclePhase::Failed.as_str().to_string();
+                report.phase = PeerLifecyclePhase::Failed;
+                report.blocker = Some(format!("{}_failed", step.phase.as_str()));
+                report.last_error = Some(error.clone());
+                emit_event(
+                    sink,
+                    &mut events,
+                    LifecycleEvent {
+                        operation: plan.operation,
+                        report: report.clone(),
+                        message: format!(
+                            "lifecycle phase {} action {} failed",
+                            step.phase.as_str(),
+                            step.action.label()
+                        ),
+                    },
+                )
+                .await;
+                phase_reports.push(report);
+                bail!(
+                    "lifecycle phase {} failed with status {}: {}",
+                    step.phase.as_str(),
+                    output.exit_status,
+                    error
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                let error = format!("{err:#}");
+                report.state = PeerLifecyclePhase::Failed.as_str().to_string();
+                report.phase = PeerLifecyclePhase::Failed;
+                report.blocker = Some(format!("{}_failed", step.phase.as_str()));
+                report.last_error = Some(error.clone());
+                emit_event(
+                    sink,
+                    &mut events,
+                    LifecycleEvent {
+                        operation: plan.operation,
+                        report: report.clone(),
+                        message: format!(
+                            "lifecycle phase {} action {} failed",
+                            step.phase.as_str(),
+                            step.action.label()
+                        ),
+                    },
+                )
+                .await;
+                phase_reports.push(report);
+                bail!(
+                    "lifecycle phase {} action {} failed: {}",
+                    step.phase.as_str(),
+                    step.action.label(),
+                    error
+                );
+            }
+        }
+        emit_event(
+            sink,
+            &mut events,
+            LifecycleEvent {
                 operation: plan.operation,
                 report: report.clone(),
-                message: format!("lifecycle phase {} failed", command.phase.as_str()),
-            });
-            phase_reports.push(report);
-            bail!(
-                "lifecycle phase {} failed with status {}: {}",
-                command.phase.as_str(),
-                output.exit_status,
-                error
-            );
-        }
-        sink.emit(LifecycleEvent {
-            operation: plan.operation,
-            report: report.clone(),
-            message: format!("lifecycle phase {} completed", command.phase.as_str()),
-        });
+                message: format!("lifecycle phase {} completed", step.phase.as_str()),
+            },
+        )
+        .await;
         phase_reports.push(report);
     }
     let report = phase_report_for_operation(spec, plan.operation, PeerLifecyclePhase::Healthy);
-    sink.emit(LifecycleEvent {
-        operation: plan.operation,
-        report: report.clone(),
-        message: "lifecycle operation completed".to_string(),
-    });
+    emit_event(
+        sink,
+        &mut events,
+        LifecycleEvent {
+            operation: plan.operation,
+            report: report.clone(),
+            message: "lifecycle operation completed".to_string(),
+        },
+    )
+    .await;
     phase_reports.push(report.clone());
     Ok(PeerLifecycleWorkflowResult {
         operation: plan.operation,
+        redacted_report: report.to_redacted_value(),
         report,
         phase_reports,
+        events,
     })
+}
+
+async fn emit_event<S: LifecycleEventSink>(
+    sink: &mut S,
+    events: &mut Vec<LifecycleEvent>,
+    event: LifecycleEvent,
+) {
+    events.push(event.clone());
+    sink.emit(event).await;
+}
+
+async fn execute_action<E: PeerExecutor>(
+    executor: &E,
+    action: &LifecycleAction,
+) -> Result<Option<crate::ssh_client::ExecOutput>> {
+    match action {
+        LifecycleAction::RunCommand { command, stdin } => Ok(Some(
+            executor
+                .exec_capture(command.clone(), stdin.clone())
+                .await
+                .with_context(|| format!("failed to run lifecycle command {command}"))?,
+        )),
+        LifecycleAction::StageBinary { source, target } => {
+            executor
+                .stage_binary(source.clone(), target.clone())
+                .await?;
+            Ok(None)
+        }
+        LifecycleAction::WriteArtifact {
+            target,
+            artifact,
+            bytes,
+        } => {
+            executor
+                .write_artifact(target.clone(), *artifact, bytes.clone())
+                .await?;
+            Ok(None)
+        }
+        LifecycleAction::ReadArtifact { target } => {
+            executor.read_artifact(target.clone()).await?;
+            Ok(None)
+        }
+        LifecycleAction::ProbeTcp { addr } => {
+            executor.probe_tcp(*addr).await?;
+            Ok(None)
+        }
+        LifecycleAction::ServiceControl {
+            service_name,
+            action,
+        } => Ok(Some(
+            executor
+                .service_control(service_name.clone(), *action)
+                .await?,
+        )),
+        LifecycleAction::Noop => Ok(None),
+    }
 }
 
 pub(crate) fn phase_report(
@@ -342,6 +567,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.operation, LifecycleOperation::Install);
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.redacted_report["operation"], "install");
         assert_eq!(sink.events.len(), 3);
         assert_eq!(sink.events[0].operation, LifecycleOperation::Install);
         assert_eq!(sink.events[0].report.operation.as_deref(), Some("install"));
@@ -378,5 +605,68 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("install_service"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_action_plan_runs_structured_actions() {
+        let executor = crate::peer_lifecycle::executor::FakeExecutor::default();
+        executor.push_output(crate::ssh_client::ExecOutput {
+            exit_status: 0,
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+        });
+        let spec = crate::peer_lifecycle::spec::PeerLifecycleSpec::local_daemon(
+            "local",
+            "ssh_proxy",
+            crate::peer_lifecycle::service_provider::ServiceProviderKind::SystemdUser,
+            "ssh_proxy",
+            None,
+            None,
+            None,
+            "$HOME/.ssh_proxy",
+        );
+        let mut sink = VecLifecycleEventSink::default();
+
+        let result = run_lifecycle_plan(
+            &executor,
+            &spec,
+            LifecyclePlan::new(LifecycleOperation::Install)
+                .push(LifecycleStep::new(
+                    PeerLifecyclePhase::StageBinary,
+                    LifecycleAction::StageBinary {
+                        source: "source".to_string(),
+                        target: "target".to_string(),
+                    },
+                ))
+                .push(LifecycleStep::new(
+                    PeerLifecyclePhase::WriteConfig,
+                    LifecycleAction::WriteArtifact {
+                        target: "config.toml".to_string(),
+                        artifact: PeerArtifact::Config,
+                        bytes: b"config".to_vec(),
+                    },
+                ))
+                .push(LifecycleStep::new(
+                    PeerLifecyclePhase::StartService,
+                    LifecycleAction::ServiceControl {
+                        service_name: "ssh_proxy".to_string(),
+                        action: ServiceControlAction::Start,
+                    },
+                )),
+            &mut sink,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.report.state, "healthy");
+        assert_eq!(
+            executor.commands(),
+            vec!["stage_binary source target".to_string()]
+        );
+        assert_eq!(executor.artifacts()[0].1, PeerArtifact::Config);
+        assert_eq!(
+            executor.service_controls(),
+            vec![("ssh_proxy".to_string(), ServiceControlAction::Start)]
+        );
     }
 }

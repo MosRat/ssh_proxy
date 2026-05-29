@@ -7,6 +7,27 @@ use crate::{peer_lifecycle::artifacts::PeerArtifact, ssh_client, ssh_client::Exe
 
 pub(crate) type BoxExecutorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServiceControlAction {
+    Install,
+    Start,
+    Stop,
+    Status,
+    Rollback,
+}
+
+impl ServiceControlAction {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Status => "status",
+            Self::Rollback => "rollback",
+        }
+    }
+}
+
 pub(crate) trait PeerExecutor {
     fn exec_capture<'a>(
         &'a self,
@@ -44,6 +65,19 @@ pub(crate) trait PeerExecutor {
                 .await
                 .with_context(|| format!("failed to probe TCP endpoint {addr}"))?;
             Ok(())
+        })
+    }
+
+    fn service_control<'a>(
+        &'a self,
+        service_name: String,
+        action: ServiceControlAction,
+    ) -> BoxExecutorFuture<'a, ExecOutput> {
+        Box::pin(async move {
+            bail!(
+                "service control {} for {service_name} is not supported by this executor",
+                action.as_str()
+            )
         })
     }
 }
@@ -150,6 +184,23 @@ impl PeerExecutor for LocalExecutor {
             Ok(())
         })
     }
+
+    fn service_control<'a>(
+        &'a self,
+        service_name: String,
+        action: ServiceControlAction,
+    ) -> BoxExecutorFuture<'a, ExecOutput> {
+        Box::pin(async move {
+            Ok(ExecOutput {
+                exit_status: 1,
+                stdout: String::new(),
+                stderr: format!(
+                    "local service control {} for {service_name} is not implemented in LocalExecutor",
+                    action.as_str()
+                ),
+            })
+        })
+    }
 }
 
 pub(crate) fn write_local_file(path: &Path, bytes: &[u8], preserve_existing: bool) -> Result<()> {
@@ -183,6 +234,7 @@ pub(crate) struct FakeExecutor {
     pub(crate) outputs: std::sync::Mutex<Vec<ExecOutput>>,
     pub(crate) commands: std::sync::Mutex<Vec<String>>,
     pub(crate) artifacts: std::sync::Mutex<Vec<(String, PeerArtifact, Vec<u8>)>>,
+    pub(crate) service_controls: std::sync::Mutex<Vec<(String, ServiceControlAction)>>,
 }
 
 #[cfg(test)]
@@ -197,6 +249,10 @@ impl FakeExecutor {
 
     pub(crate) fn artifacts(&self) -> Vec<(String, PeerArtifact, Vec<u8>)> {
         self.artifacts.lock().unwrap().clone()
+    }
+
+    pub(crate) fn service_controls(&self) -> Vec<(String, ServiceControlAction)> {
+        self.service_controls.lock().unwrap().clone()
     }
 }
 
@@ -246,6 +302,24 @@ impl PeerExecutor for FakeExecutor {
                 .unwrap()
                 .push(format!("stage_binary {source} {target}"));
             Ok(())
+        })
+    }
+
+    fn service_control<'a>(
+        &'a self,
+        service_name: String,
+        action: ServiceControlAction,
+    ) -> BoxExecutorFuture<'a, ExecOutput> {
+        Box::pin(async move {
+            self.service_controls
+                .lock()
+                .unwrap()
+                .push((service_name, action));
+            self.outputs
+                .lock()
+                .unwrap()
+                .pop()
+                .context("fake executor has no queued service control output")
         })
     }
 }
@@ -304,5 +378,26 @@ mod tests {
         assert_eq!(executor.artifacts()[0].0, "config.toml");
         assert_eq!(executor.artifacts()[0].1, PeerArtifact::Config);
         assert_eq!(executor.commands(), vec!["stage_binary source target"]);
+    }
+
+    #[tokio::test]
+    async fn fake_executor_records_service_control() {
+        let executor = FakeExecutor::default();
+        executor.push_output(ExecOutput {
+            exit_status: 0,
+            stdout: "running".to_string(),
+            stderr: String::new(),
+        });
+
+        let output = executor
+            .service_control("ssh_proxy".to_string(), ServiceControlAction::Status)
+            .await
+            .unwrap();
+
+        assert_eq!(output.stdout, "running");
+        assert_eq!(
+            executor.service_controls(),
+            vec![("ssh_proxy".to_string(), ServiceControlAction::Status)]
+        );
     }
 }
