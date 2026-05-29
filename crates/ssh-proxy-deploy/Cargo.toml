@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+gix-config = { version = "0.57.0", features = ["sha1"] }
 serde_json.workspace = true
 ssh-proxy-config.workspace = true
 ssh-proxy-core.workspace = true
