@@ -134,8 +134,14 @@ Command-neutral intent models sit below CLI parsing and above runtime adapters:
   `russh` types.
 - `ssh-proxy-transport` owns transport-facing protocol adapters: peer
   transport TLS/QUIC helpers, QUIC stream wrappers, remote helper stream/error
-  models, and SOCKS5/HTTP parser primitives. The app crate keeps listener,
-  relay, and outbound runtime orchestration.
+  models, remote helper opener runtime, peer listener bind/accept loops, and
+  SOCKS5/HTTP parser primitives. The app crate adapts CLI/config into typed
+  transport intents and supplies daemon/SSH callbacks, but it should not grow
+  new TLS or QUIC setup code.
+- `ssh-proxy-platform` owns local OS command plans, command outcomes, and
+  external action classification for service-provider commands. Service
+  adapters should route systemd, launchd, scheduled task, Windows SCM, and UAC
+  execution through this layer before rendering reports.
 
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening and session

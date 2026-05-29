@@ -46,8 +46,8 @@ Current horizontal crates:
   direct-tcpip streams, and the opaque `SshStream` wrapper that hides `russh`
   from app runtimes.
 - `crates/ssh-proxy-transport/`: peer transport contracts, TLS/QUIC helpers,
-  QUIC stream adapters, remote helper stream/error models, and SOCKS5/HTTP
-  proxy parser primitives.
+  QUIC stream adapters, remote helper opener runtime, peer listener runtime,
+  remote helper stream/error models, and SOCKS5/HTTP proxy parser primitives.
 - `crates/ssh-proxy-route/`: route runtime decision reports, route plan
   rendering, pool sizing policy, preflight metadata, route task status records,
   and route status JSON contracts.
@@ -55,6 +55,8 @@ Current horizontal crates:
   remote install plans, and remote setup artifact intents.
 - `crates/ssh-proxy-service/`: local service-management contracts and provider
   report DTOs.
+- `crates/ssh-proxy-platform/`: local platform command plans, command outcomes,
+  and external execution classification for service adapters.
 - `crates/ssh-proxy-daemon/`: command-neutral daemon job, session, peer,
   update, state, request-view DTOs, and daemon client fallback reports.
 - `crates/ssh-proxy-cli/`: Clap command and argument contracts plus adapters
