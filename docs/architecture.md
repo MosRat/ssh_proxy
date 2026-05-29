@@ -152,6 +152,23 @@ Command-neutral intent models sit below CLI parsing and above runtime adapters:
   `capture_command`/`spawn_command` helpers instead of constructing raw
   subprocesses.
 
+Native execution is preferred over shell execution whenever it can preserve the
+same public behavior:
+
+- Linux local systemd actions try `ssh-proxy-platform::systemd` D-Bus plans for
+  start, stop, restart, enable, reload, and linger before falling back to
+  `systemctl` or `loginctl`.
+- Windows system service status uses `windows-service`; user scheduled-task
+  install uses Task Scheduler COM through `ssh-proxy-platform::windows_tasks`
+  before falling back to `schtasks`.
+- macOS launchd plists render tokenized `ProgramArguments` for
+  `ssh_proxy daemon serve`; `launchctl` remains the provider command, but the
+  daemon is not launched through `/bin/sh -lc`.
+- Remote helpers expose `ssh_proxy remote admin` JSON intents for checksum,
+  defaults, status, doctor, and Git config edits. Deploy and remote setup try
+  this own-binary path first, then fall back to legacy bootstrap or diagnostic
+  scripts when the helper is absent or incompatible.
+
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening, listener
 orchestration, session scheduling, and active-channel counter guards into

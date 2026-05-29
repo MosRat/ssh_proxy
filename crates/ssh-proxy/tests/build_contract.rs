@@ -619,6 +619,88 @@ fn production_command_execution_stays_in_execution_crates() {
     );
 }
 
+#[test]
+fn native_provider_success_paths_are_preferred() {
+    let platform = read_repo_file("crates/ssh-proxy-platform/src/lib.rs");
+    assert_contains(
+        &platform,
+        "pub enum ExecutionBackend",
+        "platform crate should classify native and fallback execution backends",
+    );
+    assert_contains(
+        &platform,
+        "NativeApi",
+        "platform backend classification should include native APIs",
+    );
+    assert_contains(
+        &platform,
+        "OwnBinary",
+        "platform backend classification should include own-binary helpers",
+    );
+
+    let systemd = read_repo_file("crates/ssh-proxy/src/service/platform/systemd.rs");
+    assert_contains(
+        &systemd,
+        "run_systemd_plan",
+        "systemd service path should try D-Bus plans before systemctl fallback",
+    );
+
+    let windows_tasks = read_repo_file("crates/ssh-proxy-platform/src/windows_tasks.rs");
+    assert_contains(
+        &windows_tasks,
+        "Task Scheduler COM",
+        "Windows scheduled task provider should use COM as the native path",
+    );
+    let windows_tasks_production = windows_tasks.split("#[cfg(test)]").next().unwrap_or("");
+    assert_not_contains(
+        windows_tasks_production,
+        "schtasks",
+        "platform scheduled task provider should not shell out to schtasks",
+    );
+
+    let launchd = read_repo_file("crates/ssh-proxy/src/service/platform/launchd.rs");
+    let launchd_production = launchd.split("#[cfg(test)]").next().unwrap_or("");
+    assert_contains(
+        launchd_production,
+        "daemon_program_arguments",
+        "launchd plist should render tokenized ProgramArguments",
+    );
+    assert_not_contains(
+        launchd_production,
+        "<string>/bin/sh</string>",
+        "launchd plist should not start the daemon through a shell",
+    );
+    assert_not_contains(
+        launchd_production,
+        "<string>-lc</string>",
+        "launchd plist should not start the daemon through a shell",
+    );
+
+    let helper = read_repo_file("crates/ssh-proxy/src/deploy/helper.rs");
+    assert_contains(
+        &helper,
+        "remote_helper_checksum_via_admin",
+        "remote helper upload should try own-binary checksum first",
+    );
+    assert_contains(
+        &helper,
+        "falling back to shell checksum probe",
+        "legacy checksum shell should be explicit fallback only",
+    );
+
+    let remote_setup = read_repo_file("crates/ssh-proxy/src/node_daemon/remote_setup/executor.rs");
+    assert_contains(
+        &remote_setup,
+        "RemoteAdminIntent::GitApply",
+        "remote setup should try own-binary Git config edits first",
+    );
+    assert_contains(
+        &remote_setup,
+        "falling back to script",
+        "remote setup shell scripts should be explicit fallback only",
+    );
+}
+
 fn read_repo_file(relative: &str) -> String {
     let path = workspace_root().join(relative);
     fs::read_to_string(&path)
