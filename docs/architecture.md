@@ -43,6 +43,9 @@ The implementation keeps platform differences behind small adapters:
 - `PeerLifecycleSpec` is the shared model for `local_daemon` and `remote_peer`
   roles; legacy CLI/daemon entrypoints convert into this model before reporting
   service state.
+- `PeerLifecycleContext` carries the current role, platform, scope, provider,
+  executor, store, and report sink. Entrypoints should pass this context across
+  same-layer helpers instead of threading loosely related arguments.
 - `LocalExecutor` and `SshExecutor` run the same lifecycle against local files
   or Rust SSH exec/upload/direct-tcpip.
 - `LifecyclePlan` contains executable actions (`StageBinary`, `WriteArtifact`,
@@ -95,14 +98,19 @@ execution to shared modules.
   install phase reports.
 - `node_daemon::proxy_session` owns the session state machine that sequences
   remote peer ensure, route creation, Rust-native handoff, remote setup, and
-  health monitoring.
+  health monitoring. `ProxySessionSpec`, SSH target details, apply policy, and
+  URL/key helpers live in the `spec` submodule so the runner consumes a stable
+  intent model.
 - `node_daemon::remote_setup` owns VS Code and shell environment artifacts. Rust
   renders payloads and uses `SshExecutor.write_artifact`; shell remains limited
   to stdin file writes, optional Git config, cleanup, and platform commands.
+  `RemoteArtifactPlan` is the single place that names the server directory,
+  relative path, artifact kind, backup policy, and read/write command shape.
 - `route` owns user-visible route plans and preflight probes. Transport names,
   direct-policy labels, SSH-mode labels, and data-plane reasons come from
   `peer_lifecycle::connection` so status, doctor, daemon, and route output use
-  one vocabulary.
+  one vocabulary. Daemon route status consumes `RouteRuntimeDecision` instead of
+  rebuilding selected transport, preflight, and SSH-mode metadata.
 
 ## Public CLI Surface
 

@@ -34,6 +34,8 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
   `cargo test --bin ssh_proxy peer_lifecycle`;
 - remote install lifecycle execution: `cargo test --bin ssh_proxy deploy`;
 - remote setup artifact writes: `cargo test --bin ssh_proxy remote_setup`;
+- proxy session spec/state-machine boundaries:
+  `cargo test --bin ssh_proxy proxy_session`;
 - remote peer file command rendering: `cargo test --bin ssh_proxy remote_config_write`;
 - local service lifecycle reporting: `cargo test --bin ssh_proxy service`;
 - route transport decisions and daemon route metadata: `cargo test --bin ssh_proxy routes`;
