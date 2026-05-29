@@ -1,11 +1,17 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::Value;
 
 use super::proxy_session::ProxySessionSpec;
-use crate::cli;
+use crate::{
+    cli,
+    protocol_core::{
+        envelope::{ControlError, ControlResponse},
+        version::CONTROL_API_VERSION,
+    },
+};
 
-pub(crate) const NODE_CONTROL_VERSION: u16 = 1;
+pub(crate) const NODE_CONTROL_VERSION: u16 = CONTROL_API_VERSION;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct NodeResponse {
@@ -19,29 +25,19 @@ pub(crate) struct NodeResponse {
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) blocker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) repair_action: Option<Value>,
 }
 
 impl NodeResponse {
     pub(crate) fn ok_message(message: impl Into<String>) -> Self {
-        Self {
-            api_version: NODE_CONTROL_VERSION,
-            ok: true,
-            code: None,
-            message: Some(message.into()),
-            error: None,
-            data: None,
-        }
+        Self::from_control(ControlResponse::<Value>::ok_message(message))
     }
 
     pub(crate) fn error(code: impl Into<String>, error: impl Into<String>) -> Self {
-        Self {
-            api_version: NODE_CONTROL_VERSION,
-            ok: false,
-            code: Some(code.into()),
-            message: None,
-            error: Some(error.into()),
-            data: None,
-        }
+        Self::from_control(ControlResponse::error(ControlError::new(code, error)))
     }
 
     pub(crate) fn to_line(&self) -> Result<String> {
@@ -53,6 +49,19 @@ impl NodeResponse {
             .to_line()
             .unwrap_or_else(|_| "{\"api_version\":1,\"ok\":false,\"code\":\"internal\",\"error\":\"failed to encode node response\"}\n".to_string())
     }
+
+    fn from_control(response: ControlResponse<Value>) -> Self {
+        Self {
+            api_version: response.api_version,
+            ok: response.ok,
+            code: response.code,
+            message: response.message,
+            error: response.error,
+            data: response.data,
+            blocker: response.blocker,
+            repair_action: response.repair_action,
+        }
+    }
 }
 
 pub(crate) fn response_line(value: Value) -> Result<String> {
@@ -63,21 +72,7 @@ pub(crate) fn response_line(value: Value) -> Result<String> {
 }
 
 pub(crate) fn response_value(value: Value) -> Value {
-    match value {
-        Value::Object(mut object) => {
-            object
-                .entry("api_version")
-                .or_insert_with(|| json!(NODE_CONTROL_VERSION));
-            Value::Object(object)
-        }
-        other => {
-            let mut object = Map::new();
-            object.insert("api_version".to_string(), json!(NODE_CONTROL_VERSION));
-            object.insert("ok".to_string(), json!(true));
-            object.insert("data".to_string(), other);
-            Value::Object(object)
-        }
-    }
+    ControlResponse::public_ok_value(value)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -460,5 +455,44 @@ pub(crate) fn attach_auth_token(value: &mut Value, token: Option<&str>) {
         object
             .entry("auth_token")
             .or_insert_with(|| Value::String(token.to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn node_response_uses_shared_control_shape() {
+        let value = serde_json::to_value(NodeResponse::error("bad_request", "nope")).unwrap();
+
+        assert_eq!(value["api_version"], NODE_CONTROL_VERSION);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["code"], "bad_request");
+        assert_eq!(value["error"], "nope");
+        assert!(value.get("data").is_none());
+    }
+
+    #[test]
+    fn response_value_preserves_existing_object_payloads() {
+        let value = response_value(json!({
+            "ok": true,
+            "kind": "status",
+            "items": []
+        }));
+
+        assert_eq!(value["api_version"], NODE_CONTROL_VERSION);
+        assert_eq!(value["kind"], "status");
+        assert!(value.get("data").is_none());
+    }
+
+    #[test]
+    fn response_value_wraps_legacy_non_object_payloads() {
+        let value = response_value(json!(["route-1"]));
+
+        assert_eq!(value["api_version"], NODE_CONTROL_VERSION);
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["data"][0], "route-1");
     }
 }
