@@ -1,14 +1,12 @@
 use std::{
     collections::BTreeMap,
-    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use tracing::warn;
 
 use crate::{config, repair};
 
@@ -19,6 +17,13 @@ use super::{
 };
 
 const STORE_VERSION: u32 = 1;
+
+mod daemon_store;
+mod file_store;
+mod peer_store;
+mod session_store;
+
+use file_store::load_store;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct ProxySessionRecord {
@@ -374,300 +379,6 @@ impl ProductionState {
             _peers_path: peers_path,
         })
     }
-
-    pub(super) async fn record_daemon_started(
-        &self,
-        name: &str,
-        control_endpoint: &str,
-    ) -> Result<()> {
-        let mut store = self.daemon.lock().await;
-        let now = now_unix();
-        store.version = STORE_VERSION;
-        store.daemon.version = env!("CARGO_PKG_VERSION").to_string();
-        store.daemon.health = "healthy".to_string();
-        if matches!(
-            store.daemon.update_state.as_str(),
-            "switching" | "restart_daemon"
-        ) {
-            store.daemon.update_state = "healthy".to_string();
-            let update = json!({
-                "state": "healthy",
-                "message": "daemon restarted after staged update",
-                "updated_at_unix": now,
-            });
-            store.daemon.update = Some(match store.daemon.update.take() {
-                Some(Value::Object(mut existing)) => {
-                    if let Value::Object(update_object) = update {
-                        existing.extend(update_object);
-                    }
-                    Value::Object(existing)
-                }
-                _ => update,
-            });
-        } else {
-            store.daemon.update_state = "idle".to_string();
-        }
-        store.daemon.control_endpoint = Some(control_endpoint.to_string());
-        store.daemon.name = Some(name.to_string());
-        store.daemon.started_at_unix = now;
-        store.daemon.updated_at_unix = now;
-        save_store(&self.daemon_path, &*store)
-    }
-
-    pub(super) async fn record_daemon_update_requested(
-        &self,
-        source: Option<String>,
-    ) -> Result<Value> {
-        let mut store = self.daemon.lock().await;
-        let now = now_unix();
-        store.version = STORE_VERSION;
-        store.daemon.version = env!("CARGO_PKG_VERSION").to_string();
-        store.daemon.health = "healthy".to_string();
-        store.daemon.update_state = "pending".to_string();
-        store.daemon.updated_at_unix = now;
-        store.daemon.update = Some(json!({
-            "state": store.daemon.update_state,
-            "source": source,
-            "updated_at_unix": now,
-        }));
-        save_store(&self.daemon_path, &*store)?;
-        Ok(store.daemon.update.clone().unwrap_or_else(|| {
-            json!({
-                "state": store.daemon.update_state,
-            })
-        }))
-    }
-
-    pub(super) async fn record_daemon_update_state(
-        &self,
-        state: &str,
-        source: Option<String>,
-        staged_path: Option<String>,
-        staged_hash: Option<String>,
-        staged_version: Option<String>,
-        switch_script: Option<String>,
-        backup_path: Option<String>,
-        last_error: Option<String>,
-    ) -> Result<Value> {
-        let mut store = self.daemon.lock().await;
-        let now = now_unix();
-        store.version = STORE_VERSION;
-        store.daemon.version = env!("CARGO_PKG_VERSION").to_string();
-        store.daemon.health = if state == "failed" {
-            "degraded".to_string()
-        } else {
-            "healthy".to_string()
-        };
-        store.daemon.update_state = state.to_string();
-        store.daemon.updated_at_unix = now;
-        let update = json!({
-            "state": store.daemon.update_state,
-            "source": source,
-            "staged_path": staged_path,
-            "staged_hash": staged_hash,
-            "staged_version": staged_version,
-            "switch_script": switch_script,
-            "backup_path": backup_path,
-            "last_error": last_error,
-            "updated_at_unix": now,
-        });
-        store.daemon.update = Some(update.clone());
-        save_store(&self.daemon_path, &*store)?;
-        Ok(update)
-    }
-
-    pub(super) async fn daemon_value(&self) -> Value {
-        let store = self.daemon.lock().await;
-        serde_json::to_value(&store.daemon).unwrap_or_else(|_| json!({ "health": "unknown" }))
-    }
-
-    pub(super) async fn upsert_session_from_job(
-        &self,
-        spec: &ProxySessionSpec,
-        job: &JobRecord,
-        route: Option<Value>,
-    ) -> Result<ProxySessionRecord> {
-        let mut store = self.sessions.lock().await;
-        let session_id = spec.session_id();
-        let entry = store
-            .sessions
-            .entry(session_id.clone())
-            .or_insert_with(|| ProxySessionRecord::from_spec_and_job(spec, job));
-        entry.update_from_job(spec, job);
-        if route.is_some() {
-            entry.route = route;
-        }
-        let record = entry.clone();
-        save_store(&self.sessions_path, &*store)?;
-        Ok(record)
-    }
-
-    pub(super) async fn cancel_session(
-        &self,
-        route_id: &str,
-        job_id: &str,
-        error: Option<String>,
-    ) -> Result<Option<ProxySessionRecord>> {
-        let mut store = self.sessions.lock().await;
-        let mut found = None;
-        for record in store.sessions.values_mut() {
-            if record.route_id == route_id || record.job_id == job_id {
-                record.state = "cancelled".to_string();
-                record.phase = "cancelled".to_string();
-                record.health = "cancelled".to_string();
-                record.last_error = error.clone();
-                record.updated_at_unix = now_unix();
-                found = Some(record.clone());
-                break;
-            }
-        }
-        save_store(&self.sessions_path, &*store)?;
-        Ok(found)
-    }
-
-    pub(super) async fn update_remote_setup_status(
-        &self,
-        session_id: &str,
-        job_id: &str,
-        status: RemoteSetupStatus,
-    ) -> Result<Option<ProxySessionRecord>> {
-        let mut store = self.sessions.lock().await;
-        let mut found = None;
-        for record in store.sessions.values_mut() {
-            if record.session_id == session_id || record.job_id == job_id {
-                record.remote_setup = status.clone();
-                record.updated_at_unix = now_unix();
-                found = Some(record.clone());
-                break;
-            }
-        }
-        save_store(&self.sessions_path, &*store)?;
-        Ok(found)
-    }
-
-    pub(super) async fn update_handoff_probe_status(
-        &self,
-        session_id: &str,
-        job_id: &str,
-        status: HandoffProbeStatus,
-    ) -> Result<Option<ProxySessionRecord>> {
-        let mut store = self.sessions.lock().await;
-        let mut found = None;
-        for record in store.sessions.values_mut() {
-            if record.session_id == session_id || record.job_id == job_id {
-                record.handoff_probe = Some(status.clone());
-                record.updated_at_unix = now_unix();
-                found = Some(record.clone());
-                break;
-            }
-        }
-        save_store(&self.sessions_path, &*store)?;
-        Ok(found)
-    }
-
-    pub(super) async fn session_by_job(&self, job_id: &str) -> Option<ProxySessionRecord> {
-        self.sessions
-            .lock()
-            .await
-            .sessions
-            .values()
-            .find(|session| session.job_id == job_id)
-            .cloned()
-    }
-
-    pub(super) async fn session_by_route(&self, route_id: &str) -> Option<ProxySessionRecord> {
-        self.sessions
-            .lock()
-            .await
-            .sessions
-            .values()
-            .find(|session| session.route_id == route_id)
-            .cloned()
-    }
-
-    pub(super) async fn sessions_value(&self) -> Value {
-        let sessions = self
-            .sessions
-            .lock()
-            .await
-            .sessions
-            .values()
-            .map(ProxySessionRecord::to_value)
-            .collect::<Vec<_>>();
-        json!(sessions)
-    }
-
-    pub(super) async fn peers_value(&self) -> Value {
-        let peers = self
-            .peers
-            .lock()
-            .await
-            .peers
-            .values()
-            .map(|peer| serde_json::to_value(peer).unwrap_or_else(|_| json!({})))
-            .collect::<Vec<_>>();
-        json!(peers)
-    }
-
-    pub(super) async fn upsert_peer_status(&self, record: PeerStatusRecord) -> Result<()> {
-        let mut store = self.peers.lock().await;
-        store.version = STORE_VERSION;
-        store.peers.insert(record.target.clone(), record);
-        save_store(&self._peers_path, &*store)
-    }
-
-    pub(super) async fn peer_status(&self, target: &str) -> Option<PeerStatusRecord> {
-        self.peers.lock().await.peers.get(target).cloned()
-    }
-
-    pub(super) async fn unfinished_sessions(&self) -> Vec<ProxySessionRecord> {
-        self.sessions
-            .lock()
-            .await
-            .sessions
-            .values()
-            .filter(|session| !matches!(session.state.as_str(), "healthy" | "failed" | "cancelled"))
-            .cloned()
-            .collect()
-    }
-}
-
-fn load_store<T>(path: &Path) -> Result<T>
-where
-    T: DeserializeOwned + Default,
-{
-    match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str(&text) {
-            Ok(store) => Ok(store),
-            Err(err) => {
-                warn!(path = %path.display(), error = %err, "quarantining corrupt daemon state store");
-                quarantine_corrupt_store(path)?;
-                Ok(T::default())
-            }
-        },
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
-        Err(err) => Err(err).with_context(|| format!("failed to read {}", path.display())),
-    }
-}
-
-fn save_store<T: Serialize>(path: &Path, store: &T) -> Result<()> {
-    let text =
-        serde_json::to_string_pretty(store).context("failed to encode daemon state store")?;
-    config::save_text_file_private(path, &text)
-}
-
-fn quarantine_corrupt_store(path: &Path) -> Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let stamp = now_unix();
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("state.json");
-    let quarantine = path.with_file_name(format!("{name}.corrupt-{stamp}"));
-    std::fs::rename(path, quarantine)
-        .with_context(|| format!("failed to quarantine corrupt store {}", path.display()))
 }
 
 fn enum_value<T: Serialize>(value: &T) -> String {
