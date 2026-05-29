@@ -1,21 +1,23 @@
 use std::net::SocketAddr;
 
 use serde_json::{Value, json};
-use ssh_proxy_route::{RoutePlanReport, RouteRuntimePlanReport, SshSessionPoolReport};
+use ssh_proxy_core::model::TransportMode;
+use ssh_proxy_route::{
+    RoutePlanReport, RouteRuntimePlanReport, SshSessionPoolReport, direct_transport_policy,
+    direct_transport_policy_reason, remote_transport_name, ssh_data_plane_reason, ssh_mode_name,
+    ssh_mode_reason, tls_peer_auth_mode,
+};
 
 use crate::{cli, ssh_client};
 
 use super::policy::pool_policy_name;
-use super::transport::{
-    direct_transport_policy, direct_transport_policy_reason, remote_transport_name,
-    ssh_data_plane_reason, ssh_mode_name, ssh_mode_reason, tls_peer_auth_mode,
-};
 
 pub(crate) fn local_uses_remote_plan(
     args: &cli::RouteArgs,
     id: &str,
     forward: &cli::NodeForwardArgs,
 ) -> Value {
+    let transport = TransportMode::from(forward.remote_transport);
     RoutePlanReport {
         route_id: id.to_string(),
         direction: "local-uses-remote".to_string(),
@@ -32,7 +34,7 @@ pub(crate) fn local_uses_remote_plan(
             "upstream_proxy": forward.egress_proxy.clone(),
         }),
         transport_candidates: transport_candidates(forward),
-        selected_transport: remote_transport_name(forward.remote_transport).to_string(),
+        selected_transport: remote_transport_name(transport).to_string(),
         transport_selection_source: Some(
             forward
                 .transport_selection_source
@@ -47,17 +49,17 @@ pub(crate) fn local_uses_remote_plan(
                 .unwrap_or("unknown")
                 .to_string(),
         ),
-        direct_transport_policy: direct_transport_policy(forward.remote_transport),
-        direct_transport_policy_reason: direct_transport_policy_reason(forward.remote_transport),
+        direct_transport_policy: direct_transport_policy(transport),
+        direct_transport_policy_reason: direct_transport_policy_reason(transport),
         tls_peer_auth_mode: tls_peer_auth_mode(
-            forward.remote_transport,
-            forward.remote_client_cert.as_ref(),
-            forward.remote_client_key.as_ref(),
+            transport,
+            forward.remote_client_cert.is_some(),
+            forward.remote_client_key.is_some(),
         ),
-        ssh_mode: ssh_mode_name(forward.remote_transport),
-        ssh_mode_reason: ssh_mode_reason(forward.remote_transport),
+        ssh_mode: ssh_mode_name(transport),
+        ssh_mode_reason: ssh_mode_reason(transport),
         ssh_data_plane_reason: ssh_data_plane_reason(
-            forward.remote_transport,
+            transport,
             forward.transport_selection_source.as_deref(),
         ),
         include_ssh_session_pool_fields: true,
@@ -146,6 +148,7 @@ pub(crate) fn remote_uses_local_direct_plan(
     forward: &cli::NodeForwardArgs,
     local_peer: SocketAddr,
 ) -> Value {
+    let transport = TransportMode::from(forward.remote_transport);
     RoutePlanReport {
         route_id: id.to_string(),
         direction: "remote-uses-local".to_string(),
@@ -163,7 +166,7 @@ pub(crate) fn remote_uses_local_direct_plan(
             "upstream_proxy": forward.egress_proxy.clone(),
         }),
         transport_candidates: transport_candidates(forward),
-        selected_transport: remote_transport_name(forward.remote_transport).to_string(),
+        selected_transport: remote_transport_name(transport).to_string(),
         transport_selection_source: Some(
             forward
                 .transport_selection_source
@@ -178,17 +181,17 @@ pub(crate) fn remote_uses_local_direct_plan(
                 .unwrap_or("unknown")
                 .to_string(),
         ),
-        direct_transport_policy: direct_transport_policy(forward.remote_transport),
-        direct_transport_policy_reason: direct_transport_policy_reason(forward.remote_transport),
+        direct_transport_policy: direct_transport_policy(transport),
+        direct_transport_policy_reason: direct_transport_policy_reason(transport),
         tls_peer_auth_mode: tls_peer_auth_mode(
-            forward.remote_transport,
-            forward.remote_client_cert.as_ref(),
-            forward.remote_client_key.as_ref(),
+            transport,
+            forward.remote_client_cert.is_some(),
+            forward.remote_client_key.is_some(),
         ),
-        ssh_mode: ssh_mode_name(forward.remote_transport),
-        ssh_mode_reason: ssh_mode_reason(forward.remote_transport),
+        ssh_mode: ssh_mode_name(transport),
+        ssh_mode_reason: ssh_mode_reason(transport),
         ssh_data_plane_reason: ssh_data_plane_reason(
-            forward.remote_transport,
+            transport,
             forward.transport_selection_source.as_deref(),
         ),
         include_ssh_session_pool_fields: true,

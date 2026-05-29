@@ -1,14 +1,12 @@
 use serde_json::Value;
+use ssh_proxy_core::model::{TransportMode, WorkloadHint};
 use ssh_proxy_route::{
     RoutePreflightReport, RouteRuntimeContext, SshSessionPoolReport, TransportPoolReport,
-};
-
-use crate::cli;
-
-use super::transport::{
     direct_transport_policy, direct_transport_policy_reason, remote_transport_name,
     ssh_data_plane_reason, ssh_mode_name, ssh_mode_reason, tls_peer_auth_mode,
 };
+
+use crate::cli;
 
 pub(crate) struct RouteRuntimeDecision {
     value: Value,
@@ -31,8 +29,9 @@ pub(crate) fn forward_route_runtime_metadata(proxy: &cli::ProxyArgs) -> Value {
 }
 
 fn forward_route_runtime_context(proxy: &cli::ProxyArgs) -> RouteRuntimeContext {
+    let transport = TransportMode::from(proxy.remote_transport);
     RouteRuntimeContext {
-        selected_transport: remote_transport_name(proxy.remote_transport).to_string(),
+        selected_transport: remote_transport_name(transport).to_string(),
         transport_selection_source: proxy
             .transport_selection_source
             .as_deref()
@@ -43,21 +42,21 @@ fn forward_route_runtime_context(proxy: &cli::ProxyArgs) -> RouteRuntimeContext 
             .as_deref()
             .unwrap_or("daemon received an already-materialized forward route task")
             .to_string(),
-        direct_transport_policy: direct_transport_policy(proxy.remote_transport),
-        direct_transport_policy_reason: direct_transport_policy_reason(proxy.remote_transport),
+        direct_transport_policy: direct_transport_policy(transport),
+        direct_transport_policy_reason: direct_transport_policy_reason(transport),
         tls_peer_auth_mode: tls_peer_auth_mode(
-            proxy.remote_transport,
-            proxy.remote_client_cert.as_ref(),
-            proxy.remote_client_key.as_ref(),
+            transport,
+            proxy.remote_client_cert.is_some(),
+            proxy.remote_client_key.is_some(),
         ),
-        ssh_mode: ssh_mode_name(proxy.remote_transport),
-        ssh_mode_reason: ssh_mode_reason(proxy.remote_transport),
+        ssh_mode: ssh_mode_name(transport),
+        ssh_mode_reason: ssh_mode_reason(transport),
         ssh_data_plane_reason: ssh_data_plane_reason(
-            proxy.remote_transport,
+            transport,
             proxy.transport_selection_source.as_deref(),
         ),
-        requires_external_ssh: matches!(proxy.remote_transport, cli::RemoteTransport::Exec),
-        selected_endpoint: selected_endpoint(proxy),
+        requires_external_ssh: matches!(transport, TransportMode::Exec),
+        selected_endpoint: selected_endpoint(transport, proxy),
         preflight: preflight_report(proxy),
         ssh_session_pool: ssh_session_pool_report(proxy),
         transport_pool: TransportPoolReport {
@@ -80,8 +79,8 @@ fn forward_route_runtime_context(proxy: &cli::ProxyArgs) -> RouteRuntimeContext 
         },
         workload_hint: proxy
             .workload_hint
-            .map(workload_hint_name)
-            .map(str::to_string),
+            .map(WorkloadHint::from)
+            .map(|hint| hint.to_string()),
         connect_timeout_secs: proxy.connect_timeout_secs,
         reconnect_delay_secs: proxy.reconnect_delay_secs,
         reconnect_max_delay_secs: proxy.reconnect_max_delay_secs,
@@ -89,17 +88,15 @@ fn forward_route_runtime_context(proxy: &cli::ProxyArgs) -> RouteRuntimeContext 
     }
 }
 
-fn selected_endpoint(proxy: &cli::ProxyArgs) -> Option<String> {
-    match proxy.remote_transport {
-        cli::RemoteTransport::Quic | cli::RemoteTransport::QuicNative => {
+fn selected_endpoint(transport: TransportMode, proxy: &cli::ProxyArgs) -> Option<String> {
+    match transport {
+        TransportMode::Quic | TransportMode::QuicNative => {
             proxy.remote_quic.map(|addr| format!("quic://{addr}"))
         }
-        cli::RemoteTransport::TlsTcp => proxy.remote_tls.map(|addr| format!("tls-tcp://{addr}")),
-        cli::RemoteTransport::PlainTcp => Some(format!("plain-tcp://{}", proxy.remote_tcp)),
-        cli::RemoteTransport::Tcp => Some(format!("ssh-direct-tcpip://{}", proxy.remote_tcp)),
-        cli::RemoteTransport::Auto
-        | cli::RemoteTransport::SshNative
-        | cli::RemoteTransport::Exec => None,
+        TransportMode::TlsTcp => proxy.remote_tls.map(|addr| format!("tls-tcp://{addr}")),
+        TransportMode::PlainTcp => Some(format!("plain-tcp://{}", proxy.remote_tcp)),
+        TransportMode::Tcp => Some(format!("ssh-direct-tcpip://{}", proxy.remote_tcp)),
+        TransportMode::Auto | TransportMode::SshNative | TransportMode::Exec => None,
     }
 }
 
@@ -136,12 +133,4 @@ fn ssh_session_pool_report(proxy: &cli::ProxyArgs) -> Option<SshSessionPoolRepor
             warning: proxy.ssh_session_pool_warning.clone(),
         }
     })
-}
-
-fn workload_hint_name(hint: cli::RouteWorkloadHint) -> &'static str {
-    match hint {
-        cli::RouteWorkloadHint::Large => "large",
-        cli::RouteWorkloadHint::Concurrent => "concurrent",
-        cli::RouteWorkloadHint::Mixed => "mixed",
-    }
 }

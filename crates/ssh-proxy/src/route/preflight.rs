@@ -1,13 +1,14 @@
 use std::{net::SocketAddr, time::Duration};
 
 use serde_json::{Value, json};
+use ssh_proxy_core::model::TransportMode;
+use ssh_proxy_route::{ssh_data_plane_reason, ssh_mode_reason};
 use ssh_proxy_transport::quic::connect_client;
 use tokio::{net::TcpStream, time};
 
 use crate::{cli, peer_transport};
 
 use super::response::{candidate_failures, is_direct_probe_protocol, refresh_decision_chain};
-use super::transport::{ssh_data_plane_reason, ssh_mode_reason};
 
 pub(crate) async fn add_local_transport_probe_results(
     plan: &mut Value,
@@ -134,12 +135,12 @@ pub(crate) fn apply_local_forward_fallback(
         object.insert("ssh_mode".to_string(), json!("native-direct-tcpip"));
         object.insert(
             "ssh_mode_reason".to_string(),
-            ssh_mode_reason(cli::RemoteTransport::SshNative),
+            ssh_mode_reason(TransportMode::SshNative),
         );
         object.insert(
             "ssh_data_plane_reason".to_string(),
             ssh_data_plane_reason(
-                cli::RemoteTransport::SshNative,
+                TransportMode::SshNative,
                 forward.transport_selection_source.as_deref(),
             ),
         );

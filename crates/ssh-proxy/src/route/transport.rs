@@ -1,15 +1,6 @@
 use anyhow::{Result, bail};
 
-use crate::{cli, peer_lifecycle};
-
-pub(crate) fn remote_transport_name(transport: cli::RemoteTransport) -> &'static str {
-    peer_lifecycle::connection::remote_transport_name(transport)
-}
-
-pub(crate) use peer_lifecycle::connection::{
-    direct_transport_policy, direct_transport_policy_reason, ssh_data_plane_reason, ssh_mode_name,
-    ssh_mode_reason, tls_peer_auth_mode,
-};
+use crate::cli;
 
 pub(crate) fn parse_remote_os(value: &str) -> Result<cli::RemoteOs> {
     match value.to_ascii_lowercase().as_str() {
@@ -22,5 +13,7 @@ pub(crate) fn parse_remote_os(value: &str) -> Result<cli::RemoteOs> {
 
 #[cfg(test)]
 pub(crate) fn parse_remote_transport(value: &str) -> Result<cli::RemoteTransport> {
-    peer_lifecycle::connection::parse_remote_transport(value)
+    ssh_proxy_route::parse_transport_mode(value)
+        .map(Into::into)
+        .map_err(anyhow::Error::msg)
 }
