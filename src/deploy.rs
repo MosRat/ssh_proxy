@@ -17,6 +17,11 @@ mod remote_commands;
 mod transport;
 
 use helper::upload_helper;
+use peer_lifecycle::{
+    executor::PeerExecutor,
+    service_provider::PeerServiceProvider,
+    workflow::{LifecycleOperation, LifecyclePlan},
+};
 use remote_commands::*;
 pub(crate) use transport::{AutoTransportError, RemoteHelperTimings, TransportCandidateFailure};
 pub use transport::{open_remote_helper, open_remote_reverse_socks};
@@ -92,6 +97,7 @@ async fn install_remote_service(
         plan.provider.kind,
     );
     let executor = peer_lifecycle::executor::SshExecutor::new(client);
+    let provider = plan.provider.clone();
     match args.persist {
         cli::PersistMode::None => {
             println!("installed helper at {remote_path}");
@@ -102,27 +108,52 @@ async fn install_remote_service(
             Ok((plan.reported_service_manager, None))
         }
         cli::PersistMode::Auto => {
-            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
+            let install_report = run_remote_install_plan(
+                &executor,
+                &spec,
+                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
+            )
+            .await?;
             println!("installed persistent helper on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Systemd => {
-            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
+            let install_report = run_remote_install_plan(
+                &executor,
+                &spec,
+                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
+            )
+            .await?;
             println!("installed user systemd service on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Nohup => {
-            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
+            let install_report = run_remote_install_plan(
+                &executor,
+                &spec,
+                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
+            )
+            .await?;
             println!("started nohup helper on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Launchd => {
-            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
+            let install_report = run_remote_install_plan(
+                &executor,
+                &spec,
+                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
+            )
+            .await?;
             println!("installed user launchd service on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Schtasks => {
-            let install_report = run_remote_install_plan(&executor, &spec, plan.command).await?;
+            let install_report = run_remote_install_plan(
+                &executor,
+                &spec,
+                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
+            )
+            .await?;
             println!("installed user scheduled task on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
@@ -132,22 +163,11 @@ async fn install_remote_service(
 async fn run_remote_install_plan<E: peer_lifecycle::executor::PeerExecutor>(
     executor: &E,
     spec: &peer_lifecycle::spec::PeerLifecycleSpec,
-    command: String,
+    plan: LifecyclePlan,
 ) -> Result<Value> {
     let mut sink = peer_lifecycle::workflow::VecLifecycleEventSink::default();
-    let result = peer_lifecycle::workflow::run_lifecycle_plan(
-        executor,
-        spec,
-        peer_lifecycle::workflow::LifecycleCommandPlan::new(
-            peer_lifecycle::workflow::LifecycleOperation::Install,
-        )
-        .push(peer_lifecycle::workflow::LifecycleCommand::new(
-            peer_lifecycle::workflow::PeerLifecyclePhase::InstallService,
-            command,
-        )),
-        &mut sink,
-    )
-    .await?;
+    let result =
+        peer_lifecycle::workflow::run_lifecycle_plan(executor, spec, plan, &mut sink).await?;
     Ok(result.report.to_redacted_value())
 }
 
@@ -1132,13 +1152,15 @@ async fn apply_remote_auto_defaults(
             service_manager: "pending".to_string(),
             updated_at_unix: now_unix(),
         });
+    let executor = peer_lifecycle::executor::SshExecutor::new(client);
     for artifact in peer_lifecycle::artifacts::materialized_peer_artifacts(files) {
-        client
-            .exec_upload(
+        executor
+            .write_artifact(
                 peer_lifecycle::commands::remote_write_peer_artifact_command(
                     artifact.artifact,
                     args.remote_os,
                 ),
+                artifact.artifact,
                 artifact.bytes,
             )
             .await
@@ -1215,9 +1237,17 @@ mod tests {
             stderr: String::new(),
         });
 
-        let report = run_remote_install_plan(&executor, &spec, "true".to_string())
-            .await
-            .unwrap();
+        let provider = peer_lifecycle::service_provider::ServiceProviderPlan::new(
+            peer_lifecycle::service_provider::ServiceProviderKind::SystemdUser,
+            "ssh-proxy-helper",
+        );
+        let report = run_remote_install_plan(
+            &executor,
+            &spec,
+            provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some("true".to_string())),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report["role"], "remote_peer");
         assert_eq!(report["operation"], "install");
