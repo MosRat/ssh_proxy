@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
 
 use crate::peer_lifecycle::{
-    executor::PeerExecutor, report::PeerLifecycleReport, spec::PeerLifecycleSpec,
+    context::PeerLifecycleContext, executor::PeerExecutor, report::PeerLifecycleReport,
+    spec::PeerLifecycleSpec,
 };
 
 use super::{
@@ -235,7 +236,5 @@ pub(crate) fn phase_report_for_operation(
     operation: LifecycleOperation,
     phase: PeerLifecyclePhase,
 ) -> PeerLifecycleReport {
-    let mut report = PeerLifecycleReport::new(spec.target.clone(), phase);
-    report.apply_spec(spec, operation);
-    report
+    PeerLifecycleContext::from_spec(spec).phase_report(operation, phase)
 }
