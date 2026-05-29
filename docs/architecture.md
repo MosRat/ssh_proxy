@@ -73,6 +73,37 @@ logging, rollback behavior, and remote provider command rendering.
 See `docs/service-provider-evaluation.md` for the provider contract and adoption
 gate.
 
+## Component Boundaries
+
+The v0.3 lifecycle code is the execution authority. Other subsystems translate
+user intent into lifecycle specs, route specs, or setup artifacts and then hand
+execution to shared modules.
+
+- `peer_lifecycle` owns shared specs, lifecycle actions, event sinks, executor
+  traits, service-provider contracts, connection decision metadata, stores,
+  reports, and redaction. It should not know VS Code command text or daemon RPC
+  framing.
+- `service` owns local CLI option parsing and platform permission boundaries.
+  It builds `PeerLifecycleSpec(local_daemon)` and calls the lifecycle runner;
+  Windows SCM FFI and UAC worker behavior stay behind the local provider
+  adapter.
+- `deploy` owns remote bootstrap inputs, descriptor refresh, token/config
+  materialization, and compatibility helpers. Remote peer installation runs as
+  `PeerLifecycleSpec(remote_peer)` through `SshExecutor`.
+- `node_daemon::remote_peer` owns daemon RPC/job glue, retry/adopt policy, and
+  peer registry updates. It streams lifecycle events instead of rebuilding
+  install phase reports.
+- `node_daemon::proxy_session` owns the session state machine that sequences
+  remote peer ensure, route creation, Rust-native handoff, remote setup, and
+  health monitoring.
+- `node_daemon::remote_setup` owns VS Code and shell environment artifacts. Rust
+  renders payloads and uses `SshExecutor.write_artifact`; shell remains limited
+  to stdin file writes, optional Git config, cleanup, and platform commands.
+- `route` owns user-visible route plans and preflight probes. Transport names,
+  direct-policy labels, SSH-mode labels, and data-plane reasons come from
+  `peer_lifecycle::connection` so status, doctor, daemon, and route output use
+  one vocabulary.
+
 ## Public CLI Surface
 
 Production commands are:

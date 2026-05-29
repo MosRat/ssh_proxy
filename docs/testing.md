@@ -30,7 +30,8 @@ context. Avoid jumping straight to the release gate during normal edit loops.
 
 Add targeted Rust tests instead of the full suite when only one subsystem moved:
 
-- peer lifecycle schema/provider/config: `cargo test --bin ssh_proxy peer_lifecycle`;
+- peer lifecycle schema/provider/config/connection metadata:
+  `cargo test --bin ssh_proxy peer_lifecycle`;
 - remote install lifecycle execution: `cargo test --bin ssh_proxy deploy`;
 - remote setup artifact writes: `cargo test --bin ssh_proxy remote_setup`;
 - remote peer file command rendering: `cargo test --bin ssh_proxy remote_config_write`;
