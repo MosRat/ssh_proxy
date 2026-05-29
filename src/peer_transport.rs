@@ -1,11 +1,9 @@
 use std::{
-    fmt, fs::File, future::Future, io::BufReader, net::SocketAddr, path::Path, str::FromStr,
-    sync::Arc, time::Duration,
+    fs::File, future::Future, io::BufReader, net::SocketAddr, path::Path, sync::Arc, time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     time,
@@ -16,10 +14,14 @@ use tokio_rustls::rustls::{
     server::WebPkiClientVerifier,
 };
 
+pub use crate::protocol_core::peer::{
+    PEER_VERSION, PeerEndpoint, PeerHello, PeerProtocol, PeerWelcome, default_feature_bits,
+    default_features, select_supported_protocol,
+};
+
 const HANDSHAKE_MAGIC: &[u8; 4] = b"SPX1";
 const MAX_HANDSHAKE: usize = 64 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-pub const PEER_VERSION: u16 = 1;
 pub const QUIC_MAX_BIDI_STREAMS: u32 = 256;
 pub const QUIC_STREAM_RECEIVE_WINDOW: u32 = 2 * 1024 * 1024;
 pub const QUIC_RECEIVE_WINDOW: u32 = 16 * 1024 * 1024;
@@ -155,103 +157,6 @@ pub fn quic_runtime_diagnostics(options: QuicTransportOptions) -> QuicRuntimeDia
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PeerProtocol {
-    SshNative,
-    QuicNative,
-    Quic,
-    TlsTcp,
-    Tcp,
-    SshDirect,
-    SshExec,
-}
-
-impl fmt::Display for PeerProtocol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            Self::SshNative => "ssh-native",
-            Self::QuicNative => "quic-native",
-            Self::Quic => "quic",
-            Self::TlsTcp => "tls-tcp",
-            Self::Tcp => "tcp",
-            Self::SshDirect => "ssh-direct",
-            Self::SshExec => "ssh-exec",
-        };
-        f.write_str(value)
-    }
-}
-
-impl PeerProtocol {
-    pub fn data_plane_label(self) -> &'static str {
-        match self {
-            Self::SshNative => "ssh-native",
-            Self::QuicNative => "quic-native",
-            Self::Quic => "quic-framed",
-            Self::TlsTcp => "tls-spx-framed",
-            Self::Tcp => "plain-spx-framed",
-            Self::SshDirect => "ssh-direct-spx",
-            Self::SshExec => "ssh-exec-spx",
-        }
-    }
-}
-
-impl FromStr for PeerProtocol {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value.to_ascii_lowercase().as_str() {
-            "quic" => Ok(Self::Quic),
-            "quic-native" | "quic_native" | "native-quic" | "native_quic" => Ok(Self::QuicNative),
-            "ssh-native" | "ssh_native" | "native-ssh" | "native_ssh" => Ok(Self::SshNative),
-            "tls-tcp" | "tls_tcp" | "tls" => Ok(Self::TlsTcp),
-            "tcp" | "plain-tcp" | "plain_tcp" | "direct-tcp" | "direct_tcp" => Ok(Self::Tcp),
-            "ssh-direct" | "ssh_direct" | "ssh-tcp" | "ssh_tcp" => Ok(Self::SshDirect),
-            "ssh-exec" | "ssh_exec" | "exec" => Ok(Self::SshExec),
-            _ => bail!("invalid peer protocol {value:?}"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PeerEndpoint {
-    pub protocol: PeerProtocol,
-    pub addr: Option<SocketAddr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PeerHello {
-    pub version: u16,
-    pub node: String,
-    pub protocols: Vec<PeerProtocol>,
-    pub features: Vec<String>,
-    #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub feature_bits: Map<String, Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binary_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub os: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub arch: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PeerWelcome {
-    pub version: u16,
-    pub node: String,
-    pub accepted: Option<PeerProtocol>,
-    pub features: Vec<String>,
-    #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub feature_bits: Map<String, Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binary_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub os: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub arch: Option<String>,
-    pub message: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkHints {
     pub peer_addr: Option<SocketAddr>,
@@ -316,37 +221,6 @@ pub fn implemented_auto_candidates(hints: &NetworkHints) -> Vec<PeerEndpoint> {
             )
         })
         .collect()
-}
-
-pub fn default_features() -> Vec<String> {
-    [
-        "frames-v1",
-        "socks5h",
-        "tcp-connect",
-        "udp-associate",
-        "ssh-native-direct-tcpip",
-        "quic-native-streams-v1",
-    ]
-    .into_iter()
-    .map(ToOwned::to_owned)
-    .collect()
-}
-
-pub fn default_feature_bits() -> Map<String, Value> {
-    default_features()
-        .into_iter()
-        .map(|feature| (feature, Value::Bool(true)))
-        .collect()
-}
-
-pub fn select_supported_protocol(
-    requested: &[PeerProtocol],
-    supported: &[PeerProtocol],
-) -> Option<PeerProtocol> {
-    requested
-        .iter()
-        .copied()
-        .find(|protocol| supported.contains(protocol))
 }
 
 #[allow(dead_code)]
