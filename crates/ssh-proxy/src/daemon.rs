@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
+use ssh_proxy_daemon::report as daemon_report;
 
 use crate::{
     cli, config, control_socket, diagnostics, install_report, node_daemon, repair, service,
@@ -88,25 +89,7 @@ pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<
                 &config,
                 request,
                 args.json,
-                || {
-                    json!({
-                        "ok": false,
-                        "kind": "daemon_update",
-                        "daemon_api": "v0.3",
-                        "job": job_status(
-                            "self-update:pending",
-                            "self_update",
-                            "blocked",
-                            "daemon_unavailable",
-                            "daemon self-update requires the running daemon",
-                        ),
-                        "source": update_source.clone(),
-                        "requires_daemon": true,
-                        "requires_elevation": true,
-                        "blocker": "daemon_unavailable",
-                        "next_action": "ssh_proxy daemon install --scope system --elevate",
-                    })
-                },
+                || daemon_report::daemon_update_unavailable(update_source.clone()),
             )
             .await
         }
@@ -241,26 +224,7 @@ pub async fn up(args: cli::UpArgs, config: config::AppConfig) -> Result<()> {
         &config,
         request,
         args.json,
-        || {
-            json!({
-                "ok": false,
-                "kind": "proxy_session",
-                "daemon_api": "v0.3",
-                "spec": spec.to_value(),
-                "job": job_status(
-                    &spec.job_id(),
-                    "ensure_proxy_session",
-                    "blocked",
-                    "daemon_unavailable",
-                    "install or start the ssh_proxy daemon, then retry this proxy session",
-                ),
-                "blocker": "daemon_unavailable",
-                "next_action": "ssh_proxy daemon install --scope system --elevate",
-                "retry_after_ms": 1000,
-                "requires_daemon": true,
-                "requires_elevation": true,
-            })
-        },
+        || daemon_report::proxy_session_unavailable(spec.to_value(), &spec.job_id()),
     )
     .await
 }
@@ -284,20 +248,7 @@ pub async fn down(args: cli::DownArgs, config: config::AppConfig) -> Result<()> 
         &config,
         request,
         args.json,
-        || {
-            json!({
-                "ok": false,
-                "kind": "proxy_session_down",
-                "daemon_api": "v0.3",
-                "route_id": id,
-                "code": "daemon_unavailable",
-                "blocker": "daemon_unavailable",
-                "next_action": "ssh_proxy daemon install --scope system --elevate",
-                "retry_after_ms": 1000,
-                "requires_daemon": true,
-                "requires_elevation": true,
-            })
-        },
+        || daemon_report::proxy_session_down_unavailable(id.clone()),
     )
     .await
 }
@@ -320,20 +271,11 @@ pub async fn status(args: cli::StatusArgs, config: config::AppConfig) -> Result<
         request,
         args.json,
         || {
-            json!({
-                "ok": false,
-                "kind": "daemon_status",
-                "daemon_api": "v0.3",
-                "version": env!("CARGO_PKG_VERSION"),
-                "target": args.target,
-                "workspace": args.workspace,
-                "health": "unavailable",
-                "code": "daemon_unavailable",
-                "blocker": "daemon_unavailable",
-                "requires_elevation": true,
-                "next_action": "ssh_proxy daemon install --scope system --elevate",
-                "retry_after_ms": 1000,
-            })
+            daemon_report::daemon_status_unavailable(
+                env!("CARGO_PKG_VERSION"),
+                args.target.clone(),
+                args.workspace.clone(),
+            )
         },
     )
     .await
@@ -349,20 +291,7 @@ pub async fn events(args: cli::EventsArgs, config: config::AppConfig) -> Result<
         &config,
         request,
         args.json,
-        || {
-            json!({
-                "ok": false,
-                "kind": "daemon_events",
-                "daemon_api": "v0.3",
-                "job": args.job,
-                "events": [],
-                "code": "daemon_unavailable",
-                "blocker": "daemon_unavailable",
-                "next_action": "ssh_proxy daemon install --scope system --elevate",
-                "retry_after_ms": 1000,
-                "requires_daemon": true,
-            })
-        },
+        || daemon_report::daemon_events_unavailable(args.job.clone()),
     )
     .await
 }
@@ -452,25 +381,11 @@ pub async fn vscode(args: cli::VscodeArgs, config: config::AppConfig) -> Result<
                 request,
                 args.json,
                 || {
-                    json!({
-                        "ok": false,
-                        "kind": "vscode_apply_settings",
-                        "daemon_api": "v0.3",
-                        "target": args.target,
-                        "workspace": args.workspace,
-                        "proxy_url": args.proxy_url,
-                        "job": job_status(
-                            "vscode-settings:blocked",
-                            "apply_remote_settings",
-                            "blocked",
-                            "daemon_unavailable",
-                            "remote settings application requires the running daemon",
-                        ),
-                        "blocker": "daemon_unavailable",
-                        "next_action": "ssh_proxy daemon install --scope system --elevate",
-                        "requires_daemon": true,
-                        "retry_after_ms": 1000,
-                    })
+                    daemon_report::vscode_apply_settings_unavailable(
+                        args.target.clone(),
+                        args.workspace.clone(),
+                        args.proxy_url.clone(),
+                    )
                 },
             )
             .await
@@ -684,22 +599,6 @@ fn attach_top_level_repair_action(value: &mut Value) {
 
 fn is_access_denied(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(5)
-}
-
-fn job_status(id: &str, kind: &str, state: &str, phase: &str, message: &str) -> Value {
-    let blocker = (state == "blocked").then_some(phase);
-    json!({
-        "id": id,
-        "kind": kind,
-        "state": state,
-        "phase": phase,
-        "progress": 0,
-        "blocker": blocker,
-        "next_action": Value::Null,
-        "repair_action": blocker.map(repair::action_value_for_blocker).unwrap_or(Value::Null),
-        "last_error": Value::Null,
-        "message": message,
-    })
 }
 
 fn daemon_update_source(source: Option<&Path>) -> Result<Option<String>> {
