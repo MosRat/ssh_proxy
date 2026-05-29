@@ -1,7 +1,9 @@
 use std::{thread, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use ssh_proxy_platform::windows_tasks::{WindowsScheduledTaskPlan, register_logon_task};
+use tracing::warn;
 
 use crate::service::{
     inventory::{ServiceProbeState, ServiceProbeSummary},
@@ -15,6 +17,7 @@ use super::{
 
 pub(super) fn print(plan: &ServicePlan, service_name: &str) {
     println!("Windows user scheduled task:");
+    println!("  native: Task Scheduler COM RegisterTaskDefinition");
     println!("  {}", create_command(&plan.daemon_command(), service_name));
     println!("  schtasks /Run /TN {service_name}");
     println!("  schtasks /Query /TN {service_name}");
@@ -66,6 +69,16 @@ pub(super) fn prepare_install(service_name: &str) -> Result<()> {
 }
 
 pub(super) fn install(plan: &ServicePlan, service_name: &str) -> Result<()> {
+    match install_native(plan, service_name) {
+        Ok(()) => return Ok(()),
+        Err(err) => {
+            warn!(
+                service_name,
+                error = %err,
+                "Task Scheduler COM install failed; falling back to schtasks"
+            );
+        }
+    }
     run_command(
         "schtasks",
         &[
@@ -81,6 +94,19 @@ pub(super) fn install(plan: &ServicePlan, service_name: &str) -> Result<()> {
             &plan.daemon_command(),
         ],
     )
+}
+
+fn install_native(plan: &ServicePlan, service_name: &str) -> Result<()> {
+    let args = plan.daemon_program_arguments();
+    let (program, action_args) = args
+        .split_first()
+        .context("daemon program arguments cannot be empty")?;
+    register_logon_task(&WindowsScheduledTaskPlan::new(
+        service_name,
+        program,
+        action_args.iter().cloned(),
+    ))?;
+    Ok(())
 }
 
 pub(super) fn uninstall(service_name: &str) -> Result<()> {

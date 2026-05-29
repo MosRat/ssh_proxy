@@ -11,6 +11,8 @@ pub use windows_service;
 pub use windows_sys;
 
 pub mod systemd;
+#[cfg(windows)]
+pub mod windows_tasks;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
