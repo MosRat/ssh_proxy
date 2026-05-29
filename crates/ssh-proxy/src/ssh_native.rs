@@ -26,9 +26,11 @@ use crate::{
 mod control;
 mod scheduler;
 
+#[cfg(test)]
+use scheduler::calculate_session_score;
 use scheduler::{
     RECENT_FAILURE_WINDOW_MS, SSH_SESSION_GROWTH_MIN_ACTIVE_CHANNELS, SessionScoreComponents,
-    calculate_session_score, should_open_new_session,
+    should_open_new_session,
 };
 
 pub struct State {
