@@ -10,7 +10,7 @@ use crate::{
         handoff::{self, HandoffProbeStatus},
         jobs::{JobPhase, JobRecord, JobState},
         remote_setup, response_line,
-        state::RemoteSetupStatus,
+        state::{ProxySessionRecordExt, RemoteSetupStatus},
     },
 };
 

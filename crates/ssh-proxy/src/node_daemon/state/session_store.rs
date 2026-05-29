@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 
 use super::{
     HandoffProbeStatus, JobRecord, ProductionState, ProxySessionRecord, ProxySessionSpec,
-    RemoteSetupStatus, file_store::save_store, now_unix,
+    RemoteSetupStatus, file_store::save_store, now_unix, proxy_session_record_from_spec_and_job,
+    update_proxy_session_record_from_job,
 };
 
 impl ProductionState {
@@ -18,8 +19,8 @@ impl ProductionState {
         let entry = store
             .sessions
             .entry(session_id.clone())
-            .or_insert_with(|| ProxySessionRecord::from_spec_and_job(spec, job));
-        entry.update_from_job(spec, job);
+            .or_insert_with(|| proxy_session_record_from_spec_and_job(spec, job));
+        update_proxy_session_record_from_job(entry, spec, job);
         if route.is_some() {
             entry.route = route;
         }
@@ -81,7 +82,7 @@ impl ProductionState {
         let mut found = None;
         for record in store.sessions.values_mut() {
             if record.session_id == session_id || record.job_id == job_id {
-                record.handoff_probe = Some(status.clone());
+                record.handoff_probe = Some(serde_json::to_value(status).unwrap_or(Value::Null));
                 record.updated_at_unix = now_unix();
                 found = Some(record.clone());
                 break;

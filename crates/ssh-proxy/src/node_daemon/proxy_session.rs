@@ -10,6 +10,7 @@ use super::{
     NodeManager, NodeRequest,
     jobs::{JobPhase, JobRecord, JobState},
     remote_setup, response_line,
+    state::ProxySessionRecordExt,
 };
 
 mod apply_settings;
