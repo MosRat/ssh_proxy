@@ -1,9 +1,8 @@
-use std::net::SocketAddr;
-
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+pub(crate) use ssh_proxy_deploy::RemoteTokenRotateResult;
 
-use crate::{cli, config, ssh_client};
+use crate::{cli, ssh_client};
 
 use super::{
     descriptor::apply_descriptor_to_install_args,
@@ -66,18 +65,4 @@ pub(crate) async fn rotate_remote_peer_token(
         descriptor,
         response,
     })
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RemoteTokenRotateResult {
-    pub(crate) target: String,
-    pub(crate) remote_path: String,
-    pub(crate) remote_control: SocketAddr,
-    pub(crate) remote_tcp: SocketAddr,
-    pub(crate) remote_tls_transport: Option<SocketAddr>,
-    pub(crate) remote_quic_transport: Option<SocketAddr>,
-    pub(crate) remote_token: String,
-    pub(crate) token_metadata: Option<config::TokenMetadata>,
-    pub(crate) descriptor: Option<Value>,
-    pub(crate) response: Value,
 }

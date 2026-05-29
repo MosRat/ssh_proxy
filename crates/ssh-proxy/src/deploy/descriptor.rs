@@ -2,6 +2,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+pub(crate) use ssh_proxy_deploy::RemoteDescriptorResult;
 use tokio::time::{self, Instant};
 
 use crate::{cli, protocol_core::descriptor::PeerDescriptor, ssh_client};
@@ -75,18 +76,6 @@ pub(super) async fn wait_remote_peer_descriptor(
         }
         time::sleep(Duration::from_millis(500)).await;
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RemoteDescriptorResult {
-    pub(crate) target: String,
-    pub(crate) remote_path: String,
-    pub(crate) remote_control: SocketAddr,
-    pub(crate) remote_tcp: SocketAddr,
-    pub(crate) remote_tls_transport: Option<SocketAddr>,
-    pub(crate) remote_quic_transport: Option<SocketAddr>,
-    pub(crate) remote_token: Option<String>,
-    pub(crate) descriptor: Value,
 }
 
 pub(super) fn apply_descriptor_to_install_args(

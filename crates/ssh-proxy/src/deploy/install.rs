@@ -1,7 +1,6 @@
-use std::net::SocketAddr;
-
 use anyhow::Result;
 use serde_json::Value;
+pub use ssh_proxy_deploy::RemoteInstallResult;
 
 use crate::{cli, peer_lifecycle, ssh_client};
 
@@ -13,22 +12,6 @@ use peer_lifecycle::{
     service_provider::PeerServiceProvider,
     workflow::{LifecycleOperation, LifecyclePlan},
 };
-
-#[derive(Debug, Clone)]
-pub struct RemoteInstallResult {
-    pub target: String,
-    pub remote_node_id: Option<String>,
-    pub remote_node_name: Option<String>,
-    pub remote_path: String,
-    pub service_manager: String,
-    pub remote_tcp: SocketAddr,
-    pub remote_control: SocketAddr,
-    pub remote_tls_transport: Option<SocketAddr>,
-    pub remote_quic_transport: Option<SocketAddr>,
-    pub remote_token: Option<String>,
-    pub descriptor: Option<Value>,
-    pub install_report: Option<Value>,
-}
 
 pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteInstallResult> {
     let client = ssh_client::Client::connect_install_args(&args).await?;

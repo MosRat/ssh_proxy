@@ -28,6 +28,7 @@ ssh-proxy-cli.workspace = true
 ssh-proxy-config.workspace = true
 ssh-proxy-control.workspace = true
 ssh-proxy-core.workspace = true
+ssh-proxy-deploy = { version = "0.1.1", path = "../ssh-proxy-deploy" }
 ssh-proxy-lifecycle.workspace = true
 ssh-proxy-protocol.workspace = true
 ssh-proxy-route = { version = "0.1.1", path = "../ssh-proxy-route" }
