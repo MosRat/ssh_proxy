@@ -1,9 +1,12 @@
 use std::net::SocketAddr;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Clone, Parser)]
 pub struct RemoteArgs {
+    #[command(subcommand)]
+    pub command: Option<RemoteCommand>,
+
     #[arg(long, help = "Use stdio framed transport")]
     pub stdio: bool,
 
@@ -18,4 +21,13 @@ pub struct RemoteArgs {
 
     #[arg(long, help = "Shared token required by TCP framed transport")]
     pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum RemoteCommand {
+    #[command(hide = true, about = "Run a structured remote admin intent")]
+    Admin {
+        #[arg(help = "RemoteAdminIntent JSON; reads stdin when omitted")]
+        json: Option<String>,
+    },
 }

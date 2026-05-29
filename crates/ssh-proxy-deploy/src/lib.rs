@@ -5,6 +5,7 @@ use ssh_proxy_config::TokenMetadata;
 
 mod commands;
 mod install;
+mod remote_admin;
 mod remote_setup;
 
 pub use commands::{
@@ -14,6 +15,11 @@ pub use commands::{
     remote_stop_command, sh_quote,
 };
 pub use install::RemoteInstallPlan;
+pub use remote_admin::{
+    RemoteAdminChecksumReport, RemoteAdminDefaultsReport, RemoteAdminGitConfigReport,
+    RemoteAdminIntent, apply_git_proxy_config, cleanup_git_proxy_config, remote_admin_error,
+    remote_admin_ok, remote_admin_stdin_command,
+};
 pub use remote_setup::{
     RemoteArtifactIntent, RemoteArtifactKind, RemoteSetupExecutionPlan, RemoteSetupPayloadInput,
     RemoteSetupPlan, RemoteSetupScriptIntent, build_proxy_env, build_remote_setup_payload,

@@ -27,7 +27,7 @@ pub use proxy::ProxyArgs;
 mod reverse;
 pub use reverse::{ReverseArgs, ReverseTaskArgs};
 mod remote;
-pub use remote::RemoteArgs;
+pub use remote::{RemoteArgs, RemoteCommand};
 mod route;
 pub use route::{RouteArgs, RouteConnectMode, RouteDirection, RouteWorkloadHint};
 mod service;

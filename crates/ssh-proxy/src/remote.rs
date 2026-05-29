@@ -20,11 +20,17 @@ use crate::{
     socks,
 };
 
+mod admin;
 pub(crate) mod egress;
 
 const TCP_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub async fn run(args: cli::RemoteArgs) -> Result<()> {
+    if let Some(command) = args.command {
+        match command {
+            cli::RemoteCommand::Admin { json } => return admin::run(json).await,
+        }
+    }
     if let Some(addr) = args.reverse_socks {
         run_reverse_socks(addr).await
     } else if let Some(addr) = args.tcp_listen {
