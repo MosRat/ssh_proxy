@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::cli;
+use crate::{cli, protocol_core::report::RuntimeDecisionReport};
 
 use super::transport::{
     direct_transport_policy, direct_transport_policy_reason, remote_transport_name,
@@ -24,10 +24,14 @@ impl RouteRuntimeDecision {
 }
 
 pub(crate) fn forward_route_runtime_metadata(proxy: &cli::ProxyArgs) -> Value {
+    let connection_decision = forward_route_runtime_report(proxy);
+    let connection_decision_value =
+        serde_json::to_value(&connection_decision).unwrap_or(Value::Null);
     json!({
         "selected_transport": remote_transport_name(proxy.remote_transport),
         "transport_selection_source": proxy.transport_selection_source.as_deref().unwrap_or("unknown"),
         "transport_selection_reason": proxy.transport_selection_reason.as_deref().unwrap_or("daemon received an already-materialized forward route task"),
+        "connection_decision": connection_decision_value,
         "direct_transport_policy": direct_transport_policy(proxy.remote_transport),
         "direct_transport_policy_reason": direct_transport_policy_reason(proxy.remote_transport),
         "tls_peer_auth_mode": tls_peer_auth_mode(
@@ -73,6 +77,57 @@ pub(crate) fn forward_route_runtime_metadata(proxy: &cli::ProxyArgs) -> Value {
         "reconnect_max_delay_secs": proxy.reconnect_max_delay_secs,
         "no_reconnect": proxy.no_reconnect,
     })
+}
+
+pub(crate) fn forward_route_runtime_report(proxy: &cli::ProxyArgs) -> RuntimeDecisionReport {
+    let mut report = RuntimeDecisionReport::new(
+        remote_transport_name(proxy.remote_transport),
+        proxy.transport_selection_source
+            .as_deref()
+            .unwrap_or("unknown"),
+        proxy.transport_selection_reason.as_deref().unwrap_or(
+            "daemon received an already-materialized forward route task",
+        ),
+    )
+    .requires_external_ssh(matches!(proxy.remote_transport, cli::RemoteTransport::Exec))
+    .with_details(json!({
+        "direct_transport_policy": direct_transport_policy(proxy.remote_transport),
+        "direct_transport_policy_reason": direct_transport_policy_reason(proxy.remote_transport),
+        "tls_peer_auth_mode": tls_peer_auth_mode(
+            proxy.remote_transport,
+            proxy.remote_client_cert.as_ref(),
+            proxy.remote_client_key.as_ref(),
+        ),
+        "ssh_mode": ssh_mode_name(proxy.remote_transport),
+        "ssh_mode_reason": ssh_mode_reason(proxy.remote_transport),
+        "ssh_data_plane_reason": ssh_data_plane_reason(
+            proxy.remote_transport,
+            proxy.transport_selection_source.as_deref(),
+        ),
+        "transport_pool_size": proxy.transport_pool_size,
+        "transport_pool_source": proxy.transport_pool_source.as_deref().unwrap_or("route-task"),
+        "transport_pool_reason": proxy.transport_pool_reason.as_deref().unwrap_or("daemon received an already-materialized forward route task"),
+        "pool_policy": proxy.pool_policy.as_deref().unwrap_or("explicit"),
+        "workload_hint": proxy.workload_hint.map(workload_hint_name),
+    }));
+    if let Some(endpoint) = selected_endpoint(proxy) {
+        report = report.with_endpoint(endpoint);
+    }
+    report
+}
+
+fn selected_endpoint(proxy: &cli::ProxyArgs) -> Option<String> {
+    match proxy.remote_transport {
+        cli::RemoteTransport::Quic | cli::RemoteTransport::QuicNative => {
+            proxy.remote_quic.map(|addr| format!("quic://{addr}"))
+        }
+        cli::RemoteTransport::TlsTcp => proxy.remote_tls.map(|addr| format!("tls-tcp://{addr}")),
+        cli::RemoteTransport::PlainTcp => Some(format!("plain-tcp://{}", proxy.remote_tcp)),
+        cli::RemoteTransport::Tcp => Some(format!("ssh-direct-tcpip://{}", proxy.remote_tcp)),
+        cli::RemoteTransport::Auto
+        | cli::RemoteTransport::SshNative
+        | cli::RemoteTransport::Exec => None,
+    }
 }
 
 fn preflight_metadata(proxy: &cli::ProxyArgs) -> Value {

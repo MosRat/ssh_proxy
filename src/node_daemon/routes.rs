@@ -16,7 +16,8 @@ use tokio::{
 use tracing::{error, info, warn};
 
 use crate::{
-    cli, config, controller, quic_native, reverse, route::RouteRuntimeDecision, ssh_native,
+    cli, config, controller, protocol_core::report::RuntimeDecisionReport, quic_native, reverse,
+    route::RouteRuntimeDecision, ssh_native,
 };
 
 use super::{NodeManager, NodeRequest, response_line};
@@ -165,6 +166,11 @@ impl RouteSpec {
             Self::Forward { proxy } => RouteRuntimeDecision::from_forward_task(proxy).into_value(),
             Self::Reverse { reverse } => json!({
                 "selected_transport": "ssh-reverse-link",
+                "connection_decision": RuntimeDecisionReport::new(
+                    "ssh-reverse-link",
+                    "topology",
+                    "remote-uses-local reverse-link uses the SSH-established reverse channel",
+                ),
                 "transport_pool_size": 1,
                 "transport_pool_source": reverse.transport_pool_source.as_deref().unwrap_or("fixed"),
                 "transport_pool_reason": reverse.transport_pool_reason.as_deref().unwrap_or("reverse-link currently uses one SSH-established route link"),
@@ -732,6 +738,16 @@ mod tests {
 
         assert_eq!(runtime["selected_transport"], "ssh-native");
         assert_eq!(runtime["transport_selection_source"], "route-preflight");
+        assert_eq!(
+            runtime["connection_decision"]["selected_transport"],
+            "ssh-native"
+        );
+        assert_eq!(runtime["connection_decision"]["source"], "route-preflight");
+        assert_eq!(runtime["connection_decision"]["reason"], "test selection");
+        assert_eq!(
+            runtime["connection_decision"]["requires_external_ssh"],
+            false
+        );
         assert_eq!(runtime["ssh_mode"], "native-direct-tcpip");
         assert_eq!(runtime["ssh_data_plane_reason"], "simple_egress");
         assert!(
@@ -802,6 +818,25 @@ mod tests {
     }
 
     #[test]
+    fn forward_runtime_metadata_marks_exec_as_external_compatibility() {
+        let mut proxy = proxy_args();
+        proxy.remote_transport = cli::RemoteTransport::Exec;
+        let spec = RouteSpec::Forward { proxy };
+
+        let runtime = spec.runtime_metadata();
+
+        assert_eq!(runtime["selected_transport"], "ssh-exec");
+        assert_eq!(
+            runtime["connection_decision"]["requires_external_ssh"],
+            true
+        );
+        assert_eq!(
+            runtime["connection_decision"]["details"]["ssh_data_plane_reason"],
+            "ssh_exec_compatibility"
+        );
+    }
+
+    #[test]
     fn forward_runtime_metadata_explains_spx_over_ssh_mode() {
         let mut proxy = proxy_args();
         proxy.remote_transport = cli::RemoteTransport::Tcp;
@@ -810,6 +845,10 @@ mod tests {
         let runtime = spec.runtime_metadata();
 
         assert_eq!(runtime["selected_transport"], "ssh-direct-tcpip");
+        assert_eq!(
+            runtime["connection_decision"]["endpoint"],
+            "ssh-direct-tcpip://127.0.0.1:19080"
+        );
         assert_eq!(runtime["ssh_mode"], "spx-over-ssh-direct");
         assert_eq!(runtime["ssh_data_plane_reason"], "daemon_policy_required");
         assert!(
@@ -830,11 +869,16 @@ mod tests {
     fn forward_runtime_metadata_reports_direct_transport_policy() {
         let mut proxy = proxy_args();
         proxy.remote_transport = cli::RemoteTransport::TlsTcp;
+        proxy.remote_tls = Some("127.0.0.1:19443".parse().unwrap());
         let spec = RouteSpec::Forward { proxy };
 
         let runtime = spec.runtime_metadata();
 
         assert_eq!(runtime["direct_transport_policy"], "production_direct");
+        assert_eq!(
+            runtime["connection_decision"]["endpoint"],
+            "tls-tcp://127.0.0.1:19443"
+        );
         assert!(
             runtime["direct_transport_policy_reason"]
                 .as_str()
@@ -854,6 +898,10 @@ mod tests {
         let runtime = spec.runtime_metadata();
 
         assert_eq!(runtime["direct_transport_policy"], "lab_baseline");
+        assert_eq!(
+            runtime["connection_decision"]["endpoint"],
+            "plain-tcp://127.0.0.1:19080"
+        );
         assert!(
             runtime["direct_transport_policy_reason"]
                 .as_str()
@@ -861,5 +909,25 @@ mod tests {
                 .contains("lab or explicitly trusted baseline")
         );
         assert!(runtime["tls_peer_auth_mode"].is_null());
+    }
+
+    #[test]
+    fn reverse_runtime_metadata_uses_shared_connection_decision_shape() {
+        let spec = RouteSpec::Reverse {
+            reverse: reverse_args(),
+        };
+
+        let runtime = spec.runtime_metadata();
+
+        assert_eq!(runtime["selected_transport"], "ssh-reverse-link");
+        assert_eq!(
+            runtime["connection_decision"]["selected_transport"],
+            "ssh-reverse-link"
+        );
+        assert_eq!(runtime["connection_decision"]["source"], "topology");
+        assert_eq!(
+            runtime["connection_decision"]["requires_external_ssh"],
+            false
+        );
     }
 }
