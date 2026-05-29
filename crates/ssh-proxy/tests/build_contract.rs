@@ -464,6 +464,71 @@ fn runtime_control_uses_command_neutral_intents() {
 }
 
 #[test]
+fn route_and_proxy_session_policy_live_outside_app_runtime() {
+    let app_route_conflict =
+        read_repo_file("crates/ssh-proxy/src/node_daemon/routes/conflict_policy.rs");
+    assert_contains(
+        &app_route_conflict,
+        "decide_route_conflict",
+        "app route conflict code should delegate pure decisions to route crate",
+    );
+    assert_not_contains(
+        &app_route_conflict,
+        "crate::cli",
+        "route conflict policy should not depend on CLI types",
+    );
+
+    let route_conflict = read_repo_file("crates/ssh-proxy-route/src/conflict.rs");
+    for symbol in [
+        "pub struct RouteConflictInput",
+        "pub enum RouteConflictDecision",
+        "pub fn decide_route_conflict",
+        "pub fn route_specs_match_values",
+    ] {
+        assert_contains(
+            &route_conflict,
+            symbol,
+            "route crate should own pure route conflict semantics",
+        );
+    }
+
+    let daemon_spec = read_repo_file("crates/ssh-proxy-daemon/src/session_spec.rs");
+    for symbol in [
+        "pub struct ProxySessionSpec",
+        "pub struct SshTargetSpec",
+        "pub struct RemotePortPolicy",
+        "pub struct ApplyPolicy",
+        "pub fn sanitize_key",
+        "pub fn proxy_url_for_remote",
+        "pub fn proxy_session_specs_match",
+    ] {
+        assert_contains(
+            &daemon_spec,
+            symbol,
+            "daemon crate should own pure proxy session spec semantics",
+        );
+    }
+
+    let app_spec = read_repo_file("crates/ssh-proxy/src/node_daemon/proxy_session/spec.rs");
+    assert_contains(
+        &app_spec,
+        "proxy_session_spec_from_up_args",
+        "app proxy session spec module should only adapt CLI args into daemon specs",
+    );
+    assert_contains(
+        &app_spec,
+        "crate::cli",
+        "CLI dependency should stay in the app adapter",
+    );
+    let app_proxy_session = read_repo_file("crates/ssh-proxy/src/node_daemon/proxy_session.rs");
+    assert_not_contains(
+        &app_proxy_session,
+        "fn proxy_session_specs_match",
+        "app proxy session runtime should not retain pure spec matching logic",
+    );
+}
+
+#[test]
 fn self_update_execution_goes_through_platform_plans() {
     let update = read_repo_file("crates/ssh-proxy/src/node_daemon/management/update.rs");
     assert_contains(
@@ -523,6 +588,32 @@ fn remote_setup_execution_plans_stay_in_deploy_crate() {
         &app_payload,
         "build_remote_setup_payload(RemoteSetupPayloadInput",
         "app remote setup payload code should adapt into deploy crate plans",
+    );
+
+    let deploy_scripts = read_repo_file("crates/ssh-proxy-deploy/src/remote_setup_scripts.rs");
+    for symbol in [
+        "pub fn build_git_config_script",
+        "pub fn build_cleanup_script_with_git",
+        "pub fn build_server_env_setup_content",
+    ] {
+        assert_contains(
+            &deploy_scripts,
+            symbol,
+            "deploy crate should own pure remote setup script rendering",
+        );
+    }
+
+    let remote_setup_executor =
+        read_repo_file("crates/ssh-proxy/src/node_daemon/remote_setup/executor.rs");
+    assert_contains(
+        &remote_setup_executor,
+        "RemoteSetupScriptIntent::fallback_shell",
+        "app remote setup executor should classify shell fallback scripts",
+    );
+    assert_contains(
+        &remote_setup_executor,
+        "intent.class.as_str()",
+        "fallback script failures should carry the fallback classification",
     );
 }
 
@@ -637,6 +728,16 @@ fn native_provider_success_paths_are_preferred() {
         "OwnBinary",
         "platform backend classification should include own-binary helpers",
     );
+    assert_contains(
+        &platform,
+        "pub external_action: Value",
+        "native provider outcomes should expose external action details",
+    );
+    assert_contains(
+        &platform,
+        "native_provider_external_action",
+        "native provider outcomes should serialize backend and fallback semantics",
+    );
 
     let systemd = read_repo_file("crates/ssh-proxy/src/service/platform/systemd.rs");
     assert_contains(
@@ -699,6 +800,53 @@ fn native_provider_success_paths_are_preferred() {
         "falling back to script",
         "remote setup shell scripts should be explicit fallback only",
     );
+}
+
+#[test]
+fn remote_admin_success_paths_use_own_binary_contract() {
+    let deploy_admin = read_repo_file("crates/ssh-proxy-deploy/src/remote_admin.rs");
+    for intent in [
+        "Checksum",
+        "Defaults",
+        "Status",
+        "Doctor",
+        "GitApply",
+        "GitCleanup",
+    ] {
+        assert_contains(
+            &deploy_admin,
+            intent,
+            "deploy crate should define every remote admin intent",
+        );
+    }
+    for field in [
+        "\"execution_backend\": \"own_binary\"",
+        "\"fallback_used\": false",
+        "\"external_action\": remote_admin_external_action(kind)",
+        "ExternalActionClass::RequiredProvider",
+    ] {
+        assert_contains(
+            &deploy_admin,
+            field,
+            "remote admin responses should expose own-binary execution semantics",
+        );
+    }
+
+    let app_admin = read_repo_file("crates/ssh-proxy/src/remote/admin.rs");
+    for arm in [
+        "RemoteAdminIntent::Checksum",
+        "RemoteAdminIntent::Defaults",
+        "RemoteAdminIntent::Status",
+        "RemoteAdminIntent::Doctor",
+        "RemoteAdminIntent::GitApply",
+        "RemoteAdminIntent::GitCleanup",
+    ] {
+        assert_contains(
+            &app_admin,
+            arm,
+            "app remote admin command should handle every deploy intent",
+        );
+    }
 }
 
 fn read_repo_file(relative: &str) -> String {
