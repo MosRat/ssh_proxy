@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use ssh_proxy_core::external::ExternalActionClass;
 use ssh_proxy_platform::{PlatformCommandPlan, capture_command};
