@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fmt::Write as _, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -186,6 +186,14 @@ fn plist_path(plan: &ServicePlan) -> Result<PathBuf> {
 }
 
 fn plist(plan: &ServicePlan) -> String {
+    let mut program_arguments = String::new();
+    for arg in plan.daemon_program_arguments() {
+        let _ = writeln!(
+            &mut program_arguments,
+            "    <string>{}</string>",
+            xml_escape(&arg)
+        );
+    }
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -194,18 +202,14 @@ fn plist(plan: &ServicePlan) -> String {
   <key>Label</key><string>{LAUNCHD_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
-    <string>-lc</string>
-    <string>{}</string>
-  </array>
+{program_arguments}  </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>3</integer>
   <key>StandardOutPath</key><string>/tmp/ssh_proxy.out.log</string>
   <key>StandardErrorPath</key><string>/tmp/ssh_proxy.err.log</string>
 </dict>
-</plist>"#,
-        xml_escape(&plan.daemon_command())
+</plist>"#
     )
 }
 
@@ -249,13 +253,17 @@ mod tests {
     use crate::service::plan::ServicePlan;
 
     #[test]
-    fn launchd_plist_tokenizes_daemon_command_through_shell() {
+    fn launchd_plist_tokenizes_daemon_command_without_shell() {
         let plan = ServicePlan::new(ServiceScope::User, false).expect("plan");
         let plist = plist(&plan);
 
         assert!(plist.contains("<key>ProgramArguments</key>"));
+        assert!(plist.contains("<string>daemon</string>"));
+        assert!(plist.contains("<string>serve</string>"));
         assert!(plist.contains("<key>KeepAlive</key><true/>"));
         assert!(plist.contains("local.ssh-proxy.daemon"));
+        assert!(!plist.contains("<string>/bin/sh</string>"));
+        assert!(!plist.contains("<string>-lc</string>"));
     }
 
     #[test]

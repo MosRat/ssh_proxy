@@ -242,6 +242,42 @@ impl ServicePlan {
         )
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn daemon_program_arguments(&self) -> Vec<String> {
+        let mut args = vec![
+            self.exe.display().to_string(),
+            "daemon".to_string(),
+            "serve".to_string(),
+            "--control".to_string(),
+            self.endpoint.clone(),
+        ];
+        if let Some(addr) = self.transport {
+            args.extend(["--transport".to_string(), addr.to_string()]);
+        }
+        if let Some(token) = &self.token {
+            args.extend(["--token".to_string(), token.clone()]);
+        }
+        if let Some(addr) = self.tls_transport {
+            args.extend(["--tls-transport".to_string(), addr.to_string()]);
+        }
+        if let Some(addr) = self.quic_transport {
+            args.extend(["--quic-transport".to_string(), addr.to_string()]);
+        }
+        if let Some(path) = &self.tls_cert {
+            args.extend(["--tls-cert".to_string(), path.display().to_string()]);
+        }
+        if let Some(path) = &self.tls_key {
+            args.extend(["--tls-key".to_string(), path.display().to_string()]);
+        }
+        if let Some(path) = &self.tls_client_ca {
+            args.extend(["--tls-client-ca".to_string(), path.display().to_string()]);
+        }
+        for endpoint in &self.report_to {
+            args.extend(["--report-to".to_string(), endpoint.clone()]);
+        }
+        args
+    }
+
     pub(crate) fn install_binary(&self) -> Result<()> {
         if !self.copy_exe {
             return Ok(());
