@@ -218,6 +218,17 @@ fn workspace_crate_boundaries_remain_layered() {
             "service-manager",
         ],
     );
+    assert_manifest_avoids(
+        "crates/ssh-proxy-route/Cargo.toml",
+        &[
+            "clap",
+            "russh",
+            "tokio",
+            "windows-service",
+            "ssh-proxy",
+            "service-manager",
+        ],
+    );
 }
 
 #[test]

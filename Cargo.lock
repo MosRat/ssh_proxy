@@ -2308,6 +2308,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh-proxy-route"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ssh-proxy-core",
+]
+
+[[package]]
 name = "ssh-proxy-service"
 version = "0.1.1"
 dependencies = [
@@ -2368,6 +2377,7 @@ dependencies = [
  "ssh-proxy-core",
  "ssh-proxy-lifecycle",
  "ssh-proxy-protocol",
+ "ssh-proxy-route",
  "ssh-proxy-service",
  "ssh-proxy-ssh",
  "ssh-proxy-transport",

@@ -1,6 +1,9 @@
-use serde_json::{Value, json};
+use serde_json::Value;
+use ssh_proxy_route::{
+    RoutePreflightReport, RouteRuntimeContext, SshSessionPoolReport, TransportPoolReport,
+};
 
-use crate::{cli, protocol_core::report::RuntimeDecisionReport};
+use crate::cli;
 
 use super::transport::{
     direct_transport_policy, direct_transport_policy_reason, remote_transport_name,
@@ -24,96 +27,66 @@ impl RouteRuntimeDecision {
 }
 
 pub(crate) fn forward_route_runtime_metadata(proxy: &cli::ProxyArgs) -> Value {
-    let connection_decision = forward_route_runtime_report(proxy);
-    let connection_decision_value =
-        serde_json::to_value(&connection_decision).unwrap_or(Value::Null);
-    json!({
-        "selected_transport": remote_transport_name(proxy.remote_transport),
-        "transport_selection_source": proxy.transport_selection_source.as_deref().unwrap_or("unknown"),
-        "transport_selection_reason": proxy.transport_selection_reason.as_deref().unwrap_or("daemon received an already-materialized forward route task"),
-        "connection_decision": connection_decision_value,
-        "direct_transport_policy": direct_transport_policy(proxy.remote_transport),
-        "direct_transport_policy_reason": direct_transport_policy_reason(proxy.remote_transport),
-        "tls_peer_auth_mode": tls_peer_auth_mode(
-            proxy.remote_transport,
-            proxy.remote_client_cert.as_ref(),
-            proxy.remote_client_key.as_ref(),
-        ),
-        "preflight": preflight_metadata(proxy),
-        "decision_chain": runtime_decision_chain(proxy),
-        "ssh_mode": ssh_mode_name(proxy.remote_transport),
-        "ssh_mode_reason": ssh_mode_reason(proxy.remote_transport),
-        "ssh_data_plane_reason": ssh_data_plane_reason(
-            proxy.remote_transport,
-            proxy.transport_selection_source.as_deref(),
-        ),
-        "ssh_session_pool_size": if matches!(proxy.remote_transport, cli::RemoteTransport::SshNative) {
-            Value::from(proxy.ssh_session_pool_size.unwrap_or(1))
-        } else {
-            Value::Null
-        },
-        "ssh_session_pool_source": if matches!(proxy.remote_transport, cli::RemoteTransport::SshNative) {
-            Value::from(proxy.ssh_session_pool_source.as_deref().unwrap_or("unknown"))
-        } else {
-            Value::Null
-        },
-        "ssh_session_pool_reason": if matches!(proxy.remote_transport, cli::RemoteTransport::SshNative) {
-            Value::from(proxy.ssh_session_pool_reason.as_deref().unwrap_or("unknown"))
-        } else {
-            Value::Null
-        },
-        "ssh_session_pool_warning": if matches!(proxy.remote_transport, cli::RemoteTransport::SshNative) {
-            json!(proxy.ssh_session_pool_warning.as_deref())
-        } else {
-            Value::Null
-        },
-        "transport_pool_size": proxy.transport_pool_size,
-        "transport_pool_source": proxy.transport_pool_source.as_deref().unwrap_or("route-task"),
-        "transport_pool_reason": proxy.transport_pool_reason.as_deref().unwrap_or("daemon received an already-materialized forward route task"),
-        "pool_policy": proxy.pool_policy.as_deref().unwrap_or("explicit"),
-        "workload_hint": proxy.workload_hint.map(workload_hint_name),
-        "connect_timeout_secs": proxy.connect_timeout_secs,
-        "reconnect_delay_secs": proxy.reconnect_delay_secs,
-        "reconnect_max_delay_secs": proxy.reconnect_max_delay_secs,
-        "no_reconnect": proxy.no_reconnect,
-    })
+    forward_route_runtime_context(proxy).to_metadata_value()
 }
 
-pub(crate) fn forward_route_runtime_report(proxy: &cli::ProxyArgs) -> RuntimeDecisionReport {
-    let mut report = RuntimeDecisionReport::new(
-        remote_transport_name(proxy.remote_transport),
-        proxy.transport_selection_source
+fn forward_route_runtime_context(proxy: &cli::ProxyArgs) -> RouteRuntimeContext {
+    RouteRuntimeContext {
+        selected_transport: remote_transport_name(proxy.remote_transport).to_string(),
+        transport_selection_source: proxy
+            .transport_selection_source
             .as_deref()
-            .unwrap_or("unknown"),
-        proxy.transport_selection_reason.as_deref().unwrap_or(
-            "daemon received an already-materialized forward route task",
-        ),
-    )
-    .requires_external_ssh(matches!(proxy.remote_transport, cli::RemoteTransport::Exec))
-    .with_details(json!({
-        "direct_transport_policy": direct_transport_policy(proxy.remote_transport),
-        "direct_transport_policy_reason": direct_transport_policy_reason(proxy.remote_transport),
-        "tls_peer_auth_mode": tls_peer_auth_mode(
+            .unwrap_or("unknown")
+            .to_string(),
+        transport_selection_reason: proxy
+            .transport_selection_reason
+            .as_deref()
+            .unwrap_or("daemon received an already-materialized forward route task")
+            .to_string(),
+        direct_transport_policy: direct_transport_policy(proxy.remote_transport),
+        direct_transport_policy_reason: direct_transport_policy_reason(proxy.remote_transport),
+        tls_peer_auth_mode: tls_peer_auth_mode(
             proxy.remote_transport,
             proxy.remote_client_cert.as_ref(),
             proxy.remote_client_key.as_ref(),
         ),
-        "ssh_mode": ssh_mode_name(proxy.remote_transport),
-        "ssh_mode_reason": ssh_mode_reason(proxy.remote_transport),
-        "ssh_data_plane_reason": ssh_data_plane_reason(
+        ssh_mode: ssh_mode_name(proxy.remote_transport),
+        ssh_mode_reason: ssh_mode_reason(proxy.remote_transport),
+        ssh_data_plane_reason: ssh_data_plane_reason(
             proxy.remote_transport,
             proxy.transport_selection_source.as_deref(),
         ),
-        "transport_pool_size": proxy.transport_pool_size,
-        "transport_pool_source": proxy.transport_pool_source.as_deref().unwrap_or("route-task"),
-        "transport_pool_reason": proxy.transport_pool_reason.as_deref().unwrap_or("daemon received an already-materialized forward route task"),
-        "pool_policy": proxy.pool_policy.as_deref().unwrap_or("explicit"),
-        "workload_hint": proxy.workload_hint.map(workload_hint_name),
-    }));
-    if let Some(endpoint) = selected_endpoint(proxy) {
-        report = report.with_endpoint(endpoint);
+        requires_external_ssh: matches!(proxy.remote_transport, cli::RemoteTransport::Exec),
+        selected_endpoint: selected_endpoint(proxy),
+        preflight: preflight_report(proxy),
+        ssh_session_pool: ssh_session_pool_report(proxy),
+        transport_pool: TransportPoolReport {
+            size: proxy.transport_pool_size,
+            source: proxy
+                .transport_pool_source
+                .as_deref()
+                .unwrap_or("route-task")
+                .to_string(),
+            reason: proxy
+                .transport_pool_reason
+                .as_deref()
+                .unwrap_or("daemon received an already-materialized forward route task")
+                .to_string(),
+            pool_policy: proxy
+                .pool_policy
+                .as_deref()
+                .unwrap_or("explicit")
+                .to_string(),
+        },
+        workload_hint: proxy
+            .workload_hint
+            .map(workload_hint_name)
+            .map(str::to_string),
+        connect_timeout_secs: proxy.connect_timeout_secs,
+        reconnect_delay_secs: proxy.reconnect_delay_secs,
+        reconnect_max_delay_secs: proxy.reconnect_max_delay_secs,
+        no_reconnect: proxy.no_reconnect,
     }
-    report
 }
 
 fn selected_endpoint(proxy: &cli::ProxyArgs) -> Option<String> {
@@ -130,69 +103,38 @@ fn selected_endpoint(proxy: &cli::ProxyArgs) -> Option<String> {
     }
 }
 
-fn preflight_metadata(proxy: &cli::ProxyArgs) -> Value {
+fn preflight_report(proxy: &cli::ProxyArgs) -> Option<RoutePreflightReport> {
     let has_any = proxy.preflight_recommended_fallback.is_some()
         || proxy.preflight_selected_reason.is_some()
         || proxy.preflight_repair_hint.is_some()
         || !proxy.preflight_candidate_failures.is_empty();
     if !has_any {
-        return Value::Null;
+        return None;
     }
-    json!({
-        "recommended_fallback": proxy.preflight_recommended_fallback.as_deref(),
-        "selected_reason": proxy.preflight_selected_reason.as_deref().unwrap_or("unknown"),
-        "repair_hint": proxy.preflight_repair_hint.as_deref().unwrap_or("unknown"),
-        "candidate_failures": proxy.preflight_candidate_failures.clone(),
+    Some(RoutePreflightReport {
+        recommended_fallback: proxy.preflight_recommended_fallback.clone(),
+        selected_reason: proxy.preflight_selected_reason.clone(),
+        repair_hint: proxy.preflight_repair_hint.clone(),
+        candidate_failures: proxy.preflight_candidate_failures.clone(),
     })
 }
 
-fn runtime_decision_chain(proxy: &cli::ProxyArgs) -> Value {
-    let preflight = preflight_metadata(proxy);
-    let topology_class = if proxy.preflight_recommended_fallback.is_some() {
-        "ssh-only"
-    } else {
-        "runtime-materialized"
-    };
-    json!({
-        "preflight": preflight,
-        "topology": {
-            "class": topology_class,
-        },
-        "policy": {
-            "direct_transport_policy": direct_transport_policy(proxy.remote_transport),
-            "direct_transport_policy_reason": direct_transport_policy_reason(proxy.remote_transport),
-            "tls_peer_auth_mode": tls_peer_auth_mode(
-                proxy.remote_transport,
-                proxy.remote_client_cert.as_ref(),
-                proxy.remote_client_key.as_ref(),
-            ),
-            "ssh_data_plane_reason": ssh_data_plane_reason(
-                proxy.remote_transport,
-                proxy.transport_selection_source.as_deref(),
-            ),
-            "explicit_user_override": matches!(
-                proxy.transport_selection_source.as_deref(),
-                Some("cli" | "profile")
-            ),
-            "selection_source": proxy.transport_selection_source.as_deref().unwrap_or("unknown"),
-        },
-        "workload": {
-            "hint": proxy.workload_hint.map(workload_hint_name),
-            "pool_policy": proxy.pool_policy.as_deref().unwrap_or("explicit"),
-            "transport_pool_size": proxy.transport_pool_size,
-        },
-        "selected_transport": remote_transport_name(proxy.remote_transport),
-        "selected_reason": proxy.transport_selection_reason.as_deref().unwrap_or("daemon received an already-materialized forward route task"),
-        "fallback_reason": if proxy.preflight_recommended_fallback.is_some() {
-            proxy.transport_selection_reason.as_deref()
-        } else {
-            None
-        },
-        "next_action": if proxy.preflight_recommended_fallback.is_some() {
-            "using materialized preflight selection"
-        } else {
-            "none"
-        },
+fn ssh_session_pool_report(proxy: &cli::ProxyArgs) -> Option<SshSessionPoolReport> {
+    matches!(proxy.remote_transport, cli::RemoteTransport::SshNative).then(|| {
+        SshSessionPoolReport {
+            size: proxy.ssh_session_pool_size.unwrap_or(1),
+            source: proxy
+                .ssh_session_pool_source
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string(),
+            reason: proxy
+                .ssh_session_pool_reason
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string(),
+            warning: proxy.ssh_session_pool_warning.clone(),
+        }
     })
 }
 
