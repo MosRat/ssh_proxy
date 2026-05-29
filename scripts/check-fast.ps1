@@ -96,6 +96,7 @@ try {
             }
         } else {
             Invoke-CargoChecked "cargo test --bin ssh_proxy peer_lifecycle" @("test", "--bin", "ssh_proxy", "peer_lifecycle")
+            Invoke-CargoChecked "cargo test --bin ssh_proxy deploy" @("test", "--bin", "ssh_proxy", "deploy")
             Invoke-CargoChecked "cargo test --bin ssh_proxy remote peer config" @("test", "--bin", "ssh_proxy", "remote_config_write")
             Invoke-CargoChecked "cargo test --bin ssh_proxy remote resolve defaults" @("test", "--bin", "ssh_proxy", "remote_resolve_defaults")
             Invoke-CargoChecked "cargo test --bin ssh_proxy handoff" @("test", "--bin", "ssh_proxy", "node_daemon::handoff")

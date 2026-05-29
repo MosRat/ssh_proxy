@@ -15,6 +15,7 @@ This runs:
 
 - `cargo check --tests`
 - peer lifecycle/config/provider contract tests
+- deploy/remote install lifecycle tests
 - handoff unit tests
 - one daemon route lifecycle smoke test
 
@@ -23,10 +24,15 @@ change. Add `-Transport` only when transport routing or data-plane behavior
 changes. The transport smoke is intentionally single-threaded because it starts
 long-lived local daemon/proxy processes and binds ephemeral ports.
 
+The default gate intentionally tests subsystem bodies first. If it fails, rerun
+the failing targeted test with logs or run `-Full` for broader integration
+context. Avoid jumping straight to the release gate during normal edit loops.
+
 Add targeted Rust tests instead of the full suite when only one subsystem moved:
 
 - peer lifecycle schema/provider/config: `cargo test --bin ssh_proxy peer_lifecycle`;
 - remote install lifecycle execution: `cargo test --bin ssh_proxy deploy`;
+- remote setup artifact writes: `cargo test --bin ssh_proxy remote_setup`;
 - remote peer file command rendering: `cargo test --bin ssh_proxy remote_config_write`;
 - local service lifecycle reporting: `cargo test --bin ssh_proxy service`;
 - route transport decisions and daemon route metadata: `cargo test --bin ssh_proxy routes`;
