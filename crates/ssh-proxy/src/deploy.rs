@@ -15,8 +15,10 @@ pub(crate) use profile_record::{
     record_remote_descriptor_profile, record_remote_install_profile,
     record_remote_token_rotation_profile,
 };
+pub(crate) use ssh_proxy_transport::remote_helper::{
+    AutoTransportError, RemoteHelperTimings, TransportCandidateFailure,
+};
 pub(crate) use token::{RemoteTokenRotateResult, rotate_remote_peer_token};
-pub(crate) use transport::{AutoTransportError, RemoteHelperTimings, TransportCandidateFailure};
 pub use transport::{open_remote_helper, open_remote_reverse_socks};
 
 #[cfg(test)]

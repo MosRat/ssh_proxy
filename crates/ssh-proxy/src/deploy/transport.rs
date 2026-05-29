@@ -1,9 +1,12 @@
 use std::{future::Future, net::SocketAddr, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::Serialize;
+use ssh_proxy_transport::remote_helper::{
+    AutoTransportError, OpenedRemoteHelper, RemoteHelperTimings, TransportCandidateFailure,
+    opened_remote,
+};
 use tokio::{
-    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
+    io::{AsyncWrite, AsyncWriteExt},
     net::TcpStream,
     time,
 };
@@ -15,53 +18,6 @@ use crate::{cli, peer_transport, quic_stream, ssh_client};
 use super::helper::{
     HelperCapability, ensure_helper, remote_reverse_socks_command, remote_stdio_command,
 };
-
-pub trait RemoteStream: AsyncRead + AsyncWrite + Unpin + Send {}
-
-impl<T> RemoteStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
-
-pub type BoxedRemoteStream = Box<dyn RemoteStream>;
-
-pub(crate) struct OpenedRemoteHelper {
-    pub(crate) stream: BoxedRemoteStream,
-    pub(crate) protocol: peer_transport::PeerProtocol,
-    pub(crate) timings: RemoteHelperTimings,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RemoteHelperTimings {
-    pub(crate) ssh_direct_channel_open_latency_ms: Option<u64>,
-    pub(crate) spx_peer_handshake_latency_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct TransportCandidateFailure {
-    pub(crate) protocol: String,
-    pub(crate) error: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct AutoTransportError {
-    pub(crate) failures: Vec<TransportCandidateFailure>,
-}
-
-impl std::fmt::Display for AutoTransportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.failures.is_empty() {
-            return f.write_str("no remote transport candidates were usable");
-        }
-        write!(f, "all remote transport candidates failed: ")?;
-        for (index, failure) in self.failures.iter().enumerate() {
-            if index > 0 {
-                f.write_str("; ")?;
-            }
-            write!(f, "{}: {}", failure.protocol, failure.error)?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for AutoTransportError {}
 
 pub async fn open_remote_helper(args: &cli::ProxyArgs) -> Result<OpenedRemoteHelper> {
     match args.remote_transport {
@@ -426,17 +382,6 @@ async fn open_exec_helper(
         client.exec_stream(command).await?,
         peer_transport::PeerProtocol::SshExec,
     ))
-}
-
-fn opened_remote<S>(stream: S, protocol: peer_transport::PeerProtocol) -> OpenedRemoteHelper
-where
-    S: RemoteStream + 'static,
-{
-    OpenedRemoteHelper {
-        stream: Box::new(stream),
-        protocol,
-        timings: RemoteHelperTimings::default(),
-    }
 }
 
 fn duration_millis(duration: Duration) -> u64 {
