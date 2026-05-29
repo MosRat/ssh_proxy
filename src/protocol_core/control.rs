@@ -47,6 +47,23 @@ pub(crate) enum DaemonControlCommand {
     Unknown(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DaemonControlPayloadShape {
+    Empty,
+    Profile,
+    Id,
+    RouteStart,
+    RouteArgs,
+    PeerBootstrap,
+    Report,
+    ProxySession,
+    RemoteSettings,
+    DaemonUpdate,
+    JobEvents,
+    Unknown,
+}
+
 impl DaemonControlCommand {
     pub(crate) fn parse(value: &str) -> Self {
         let lower = value.trim().to_ascii_lowercase();
@@ -147,6 +164,51 @@ impl DaemonControlCommand {
     pub(crate) fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown(_))
     }
+
+    pub(crate) fn payload_shape(&self) -> DaemonControlPayloadShape {
+        match self {
+            Self::Status
+            | Self::Descriptor
+            | Self::Links
+            | Self::Shutdown
+            | Self::Nodes
+            | Self::Jobs
+            | Self::RouteList
+            | Self::PeerList
+            | Self::TokenRotate => DaemonControlPayloadShape::Empty,
+            Self::Connect | Self::Disconnect => DaemonControlPayloadShape::Profile,
+            Self::JobStatus
+            | Self::NodeStart
+            | Self::NodeStop
+            | Self::NodeRestart
+            | Self::RouteStop
+            | Self::RouteRestart
+            | Self::PeerForget => DaemonControlPayloadShape::Id,
+            Self::RouteStart => DaemonControlPayloadShape::RouteStart,
+            Self::RoutePlan | Self::RouteIntent => DaemonControlPayloadShape::RouteArgs,
+            Self::PeerBootstrap
+            | Self::PeerEnsure
+            | Self::PeerUpdate
+            | Self::PeerRefresh
+            | Self::PeerDiff
+            | Self::PeerReconcile
+            | Self::PeerCheckVersion
+            | Self::PeerRotateToken
+            | Self::RemotePeerEnsure
+            | Self::RemotePeerStatus
+            | Self::RemotePeerRepair
+            | Self::RemotePeerUpdate => DaemonControlPayloadShape::PeerBootstrap,
+            Self::Report => DaemonControlPayloadShape::Report,
+            Self::EnsureProxySession | Self::ProxySessionStatus | Self::ProxySessionDown => {
+                DaemonControlPayloadShape::ProxySession
+            }
+            Self::ApplyRemoteSettings => DaemonControlPayloadShape::RemoteSettings,
+            Self::DaemonUpdate => DaemonControlPayloadShape::DaemonUpdate,
+            Self::JobEvents => DaemonControlPayloadShape::JobEvents,
+            Self::Unknown(_) => DaemonControlPayloadShape::Unknown,
+            Self::NodeEnsure => DaemonControlPayloadShape::Empty,
+        }
+    }
 }
 
 pub(crate) fn normalize_command(value: &str) -> String {
@@ -187,5 +249,25 @@ mod tests {
         );
         assert_eq!(command.canonical_name(), "custom-thing");
         assert!(command.is_unknown());
+    }
+
+    #[test]
+    fn daemon_command_payload_shapes_are_typed() {
+        assert_eq!(
+            DaemonControlCommand::parse("status").payload_shape(),
+            DaemonControlPayloadShape::Empty
+        );
+        assert_eq!(
+            DaemonControlCommand::parse("connect").payload_shape(),
+            DaemonControlPayloadShape::Profile
+        );
+        assert_eq!(
+            DaemonControlCommand::parse("route_start").payload_shape(),
+            DaemonControlPayloadShape::RouteStart
+        );
+        assert_eq!(
+            DaemonControlCommand::parse("ensure-proxy-session").payload_shape(),
+            DaemonControlPayloadShape::ProxySession
+        );
     }
 }

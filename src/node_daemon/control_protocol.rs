@@ -6,7 +6,7 @@ use super::proxy_session::ProxySessionSpec;
 use crate::{
     cli,
     protocol_core::{
-        control::DaemonControlCommand,
+        control::{DaemonControlCommand, DaemonControlPayloadShape},
         envelope::{ControlError, ControlResponse},
         version::CONTROL_API_VERSION,
     },
@@ -444,12 +444,107 @@ impl NodeRequest {
         DaemonControlCommand::parse(&self.cmd)
     }
 
+    pub(crate) fn payload_shape(&self) -> DaemonControlPayloadShape {
+        self.command_kind().payload_shape()
+    }
+
+    pub(crate) fn typed_payload(&self) -> NodeRequestPayload<'_> {
+        match self.payload_shape() {
+            DaemonControlPayloadShape::Empty => NodeRequestPayload::Empty,
+            DaemonControlPayloadShape::Profile => NodeRequestPayload::Profile {
+                profile: self.profile.as_deref(),
+            },
+            DaemonControlPayloadShape::Id => NodeRequestPayload::Id {
+                id: self.id.as_deref(),
+            },
+            DaemonControlPayloadShape::RouteStart => NodeRequestPayload::RouteStart {
+                id: self.id.as_deref(),
+                direction: self.direction.as_deref(),
+                persist: self.persist,
+                has_proxy: self.proxy.is_some(),
+                has_reverse: self.reverse.is_some(),
+                connect_mode: self.connect_mode.as_deref(),
+            },
+            DaemonControlPayloadShape::RouteArgs => NodeRequestPayload::RouteArgs {
+                has_route: self.route.is_some(),
+            },
+            DaemonControlPayloadShape::PeerBootstrap => NodeRequestPayload::PeerBootstrap {
+                has_bootstrap: self.bootstrap.is_some(),
+            },
+            DaemonControlPayloadShape::Report => NodeRequestPayload::Report {
+                node: self.node.as_deref(),
+                has_status: self.status.is_some(),
+            },
+            DaemonControlPayloadShape::ProxySession => NodeRequestPayload::ProxySession {
+                id: self.id.as_deref(),
+                has_spec: self.proxy_session.is_some(),
+            },
+            DaemonControlPayloadShape::RemoteSettings => NodeRequestPayload::RemoteSettings {
+                target: self.alias.as_deref(),
+                workspace: self.id.as_deref(),
+                remote_url: self.remote_url.as_deref(),
+            },
+            DaemonControlPayloadShape::DaemonUpdate => NodeRequestPayload::DaemonUpdate {
+                source: self.update_source.as_deref(),
+            },
+            DaemonControlPayloadShape::JobEvents => NodeRequestPayload::JobEvents {
+                id: self.id.as_deref(),
+            },
+            DaemonControlPayloadShape::Unknown => NodeRequestPayload::Unknown,
+        }
+    }
+
     pub(crate) fn with_auth_token(mut self, token: Option<&str>) -> Self {
         if let Some(token) = token {
             self.auth_token = Some(token.to_string());
         }
         self
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NodeRequestPayload<'a> {
+    Empty,
+    Profile {
+        profile: Option<&'a str>,
+    },
+    Id {
+        id: Option<&'a str>,
+    },
+    RouteStart {
+        id: Option<&'a str>,
+        direction: Option<&'a str>,
+        persist: Option<bool>,
+        has_proxy: bool,
+        has_reverse: bool,
+        connect_mode: Option<&'a str>,
+    },
+    RouteArgs {
+        has_route: bool,
+    },
+    PeerBootstrap {
+        has_bootstrap: bool,
+    },
+    Report {
+        node: Option<&'a str>,
+        has_status: bool,
+    },
+    ProxySession {
+        id: Option<&'a str>,
+        has_spec: bool,
+    },
+    RemoteSettings {
+        target: Option<&'a str>,
+        workspace: Option<&'a str>,
+        remote_url: Option<&'a str>,
+    },
+    DaemonUpdate {
+        source: Option<&'a str>,
+    },
+    JobEvents {
+        id: Option<&'a str>,
+    },
+    Unknown,
 }
 
 pub(crate) fn attach_auth_token(value: &mut Value, token: Option<&str>) {
@@ -499,5 +594,51 @@ mod tests {
         assert_eq!(value["api_version"], NODE_CONTROL_VERSION);
         assert_eq!(value["ok"], true);
         assert_eq!(value["data"][0], "route-1");
+    }
+
+    #[test]
+    fn legacy_node_request_json_gets_typed_payload_view() {
+        let request: NodeRequest = serde_json::from_value(json!({
+            "cmd": "route-start",
+            "id": "route-1",
+            "direction": "forward",
+            "persist": true
+        }))
+        .unwrap();
+
+        assert_eq!(request.command_kind(), DaemonControlCommand::RouteStart);
+        assert_eq!(
+            request.payload_shape(),
+            DaemonControlPayloadShape::RouteStart
+        );
+        assert_eq!(
+            request.typed_payload(),
+            NodeRequestPayload::RouteStart {
+                id: Some("route-1"),
+                direction: Some("forward"),
+                persist: Some(true),
+                has_proxy: false,
+                has_reverse: false,
+                connect_mode: None,
+            }
+        );
+    }
+
+    #[test]
+    fn apply_settings_request_has_typed_payload_view() {
+        let request = NodeRequest::apply_remote_settings(
+            "target".to_string(),
+            "workspace".to_string(),
+            "http://127.0.0.1:17890".to_string(),
+        );
+
+        assert_eq!(
+            request.typed_payload(),
+            NodeRequestPayload::RemoteSettings {
+                target: Some("target"),
+                workspace: Some("workspace"),
+                remote_url: Some("http://127.0.0.1:17890"),
+            }
+        );
     }
 }
