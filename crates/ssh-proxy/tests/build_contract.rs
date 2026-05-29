@@ -279,6 +279,78 @@ fn workspace_members_do_not_depend_on_service_manager() {
     }
 }
 
+#[test]
+fn workspace_source_imports_remain_layered() {
+    let app_imports = [
+        "crate::cli::",
+        "crate::{cli",
+        "ssh_proxy_cli",
+        "ssh_proxy::",
+    ];
+    let ssh_runtime_imports = ["use russh", "russh::"];
+    let quic_runtime_imports = ["use quinn", "quinn::"];
+    let service_runtime_imports = ["use windows_service", "windows_service::"];
+
+    for member in [
+        "ssh-proxy-core",
+        "ssh-proxy-protocol",
+        "ssh-proxy-control",
+        "ssh-proxy-config",
+        "ssh-proxy-lifecycle",
+        "ssh-proxy-route",
+        "ssh-proxy-deploy",
+        "ssh-proxy-daemon",
+    ] {
+        assert_source_avoids(
+            &format!("crates/{member}/src"),
+            &[
+                &app_imports[..],
+                &ssh_runtime_imports[..],
+                &quic_runtime_imports[..],
+                &service_runtime_imports[..],
+            ]
+            .concat(),
+        );
+    }
+
+    assert_source_avoids(
+        "crates/ssh-proxy-transport/src",
+        &[
+            &app_imports[..],
+            &ssh_runtime_imports[..],
+            &service_runtime_imports[..],
+        ]
+        .concat(),
+    );
+    assert_source_avoids(
+        "crates/ssh-proxy-ssh/src",
+        &[
+            &app_imports[..],
+            &quic_runtime_imports[..],
+            &service_runtime_imports[..],
+        ]
+        .concat(),
+    );
+    assert_source_avoids(
+        "crates/ssh-proxy-service/src",
+        &[
+            &app_imports[..],
+            &ssh_runtime_imports[..],
+            &quic_runtime_imports[..],
+        ]
+        .concat(),
+    );
+    assert_source_avoids(
+        "crates/ssh-proxy-cli/src",
+        &[
+            &ssh_runtime_imports[..],
+            &quic_runtime_imports[..],
+            &service_runtime_imports[..],
+        ]
+        .concat(),
+    );
+}
+
 fn read_repo_file(relative: &str) -> String {
     let path = workspace_root().join(relative);
     fs::read_to_string(&path)
@@ -322,6 +394,16 @@ fn assert_manifest_avoids(relative: &str, forbidden: &[&str]) {
     }
 }
 
+fn assert_source_avoids(relative: &str, forbidden: &[&str]) {
+    let mut violations = Vec::new();
+    collect_source_pattern_violations(&workspace_root().join(relative), forbidden, &mut violations);
+    assert!(
+        violations.is_empty(),
+        "{relative} should not import across crate layers:\n{}",
+        violations.join("\n")
+    );
+}
+
 fn manifest_has_production_crate(manifest: &str, name: &str) -> bool {
     let mut in_production_dependencies = false;
     manifest.lines().any(|line| {
@@ -346,6 +428,39 @@ fn dependency_line_matches(trimmed: &str, name: &str) -> bool {
         || trimmed.starts_with(&workspace)
         || trimmed.starts_with(&quoted)
         || trimmed.starts_with(&quoted_workspace)
+}
+
+fn collect_source_pattern_violations(
+    path: &Path,
+    forbidden: &[&str],
+    violations: &mut Vec<String>,
+) {
+    let entries =
+        fs::read_dir(path).unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                path.display()
+            )
+        });
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_source_pattern_violations(&entry_path, forbidden, violations);
+            continue;
+        }
+        if entry_path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+
+        let text = fs::read_to_string(&entry_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", entry_path.display()));
+        for pattern in forbidden {
+            if text.contains(pattern) {
+                violations.push(format!("{} contains `{pattern}`", entry_path.display()));
+            }
+        }
+    }
 }
 
 fn collect_workspace_source_ffi_violations(violations: &mut Vec<String>) {
