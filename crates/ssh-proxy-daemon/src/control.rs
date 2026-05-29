@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use ssh_proxy_protocol::protocol_core::control::{DaemonControlCommand, DaemonControlPayloadShape};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +111,132 @@ pub struct NodeRequestView {
     pub alias: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "shape", rename_all = "snake_case")]
+pub enum NodeRequestPayload {
+    Empty,
+    Profile {
+        profile: Option<String>,
+    },
+    Id {
+        id: Option<String>,
+    },
+    RouteStart {
+        id: Option<String>,
+        direction: Option<String>,
+        persist: Option<bool>,
+        has_proxy: bool,
+        has_reverse: bool,
+        connect_mode: Option<String>,
+    },
+    RouteArgs {
+        has_route: bool,
+    },
+    PeerBootstrap {
+        has_bootstrap: bool,
+    },
+    Report {
+        node: Option<String>,
+        has_status: bool,
+    },
+    ProxySession {
+        id: Option<String>,
+        has_spec: bool,
+    },
+    RemoteSettings {
+        target: Option<String>,
+        workspace: Option<String>,
+        remote_url: Option<String>,
+    },
+    DaemonUpdate {
+        source: Option<String>,
+    },
+    JobEvents {
+        id: Option<String>,
+    },
+    Unknown,
+}
+
+impl NodeRequestPayload {
+    pub fn empty_for_shape(shape: DaemonControlPayloadShape) -> Self {
+        match shape {
+            DaemonControlPayloadShape::Empty => Self::Empty,
+            DaemonControlPayloadShape::Profile => Self::Profile { profile: None },
+            DaemonControlPayloadShape::Id => Self::Id { id: None },
+            DaemonControlPayloadShape::RouteStart => Self::RouteStart {
+                id: None,
+                direction: None,
+                persist: None,
+                has_proxy: false,
+                has_reverse: false,
+                connect_mode: None,
+            },
+            DaemonControlPayloadShape::RouteArgs => Self::RouteArgs { has_route: false },
+            DaemonControlPayloadShape::PeerBootstrap => Self::PeerBootstrap {
+                has_bootstrap: false,
+            },
+            DaemonControlPayloadShape::Report => Self::Report {
+                node: None,
+                has_status: false,
+            },
+            DaemonControlPayloadShape::ProxySession => Self::ProxySession {
+                id: None,
+                has_spec: false,
+            },
+            DaemonControlPayloadShape::RemoteSettings => Self::RemoteSettings {
+                target: None,
+                workspace: None,
+                remote_url: None,
+            },
+            DaemonControlPayloadShape::DaemonUpdate => Self::DaemonUpdate { source: None },
+            DaemonControlPayloadShape::JobEvents => Self::JobEvents { id: None },
+            DaemonControlPayloadShape::Unknown => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRequestIntent {
+    pub kind: NodeRequestKind,
+    pub command: String,
+    pub api_version: Option<u16>,
+    pub id: Option<String>,
+    pub alias: Option<String>,
+    pub payload: NodeRequestPayload,
+}
+
+impl NodeRequestIntent {
+    pub fn new(
+        command: impl AsRef<str>,
+        api_version: Option<u16>,
+        id: Option<String>,
+        alias: Option<String>,
+        payload: NodeRequestPayload,
+    ) -> Self {
+        let command = DaemonControlCommand::parse(command.as_ref())
+            .canonical_name()
+            .to_string();
+        Self {
+            kind: NodeRequestKind::from_command(&command),
+            command,
+            api_version,
+            id,
+            alias,
+            payload,
+        }
+    }
+
+    pub fn view(&self) -> NodeRequestView {
+        NodeRequestView {
+            kind: self.kind,
+            command: self.command.clone(),
+            api_version: self.api_version,
+            id: self.id.clone(),
+            alias: self.alias.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +262,40 @@ mod tests {
         assert_eq!(
             NodeRequestKind::from_command("new_command"),
             NodeRequestKind::Unknown
+        );
+    }
+
+    #[test]
+    fn request_intent_preserves_legacy_route_start_payload() {
+        let intent = NodeRequestIntent::new(
+            "route-start",
+            Some(1),
+            Some("route-a".to_string()),
+            None,
+            NodeRequestPayload::RouteStart {
+                id: Some("route-a".to_string()),
+                direction: Some("forward".to_string()),
+                persist: Some(true),
+                has_proxy: true,
+                has_reverse: false,
+                connect_mode: None,
+            },
+        );
+
+        assert_eq!(intent.kind, NodeRequestKind::RouteStart);
+        assert_eq!(intent.command, "route_start");
+        assert_eq!(intent.view().id.as_deref(), Some("route-a"));
+    }
+
+    #[test]
+    fn empty_payload_matches_protocol_shape() {
+        assert_eq!(
+            NodeRequestPayload::empty_for_shape(DaemonControlPayloadShape::RemoteSettings),
+            NodeRequestPayload::RemoteSettings {
+                target: None,
+                workspace: None,
+                remote_url: None,
+            }
         );
     }
 }

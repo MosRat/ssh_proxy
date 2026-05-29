@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ssh_proxy_daemon::control::{NodeRequestKind, NodeRequestView};
+use ssh_proxy_daemon::control::{
+    NodeRequestIntent, NodeRequestKind, NodeRequestPayload, NodeRequestView,
+};
 
 use super::proxy_session::ProxySessionSpec;
 use crate::{
@@ -449,22 +451,22 @@ impl NodeRequest {
         self.command_kind().payload_shape()
     }
 
-    pub(crate) fn typed_payload(&self) -> NodeRequestPayload<'_> {
+    pub(crate) fn typed_payload(&self) -> NodeRequestPayload {
         match self.payload_shape() {
             DaemonControlPayloadShape::Empty => NodeRequestPayload::Empty,
             DaemonControlPayloadShape::Profile => NodeRequestPayload::Profile {
-                profile: self.profile.as_deref(),
+                profile: self.profile.clone(),
             },
             DaemonControlPayloadShape::Id => NodeRequestPayload::Id {
-                id: self.id.as_deref(),
+                id: self.id.clone(),
             },
             DaemonControlPayloadShape::RouteStart => NodeRequestPayload::RouteStart {
-                id: self.id.as_deref(),
-                direction: self.direction.as_deref(),
+                id: self.id.clone(),
+                direction: self.direction.clone(),
                 persist: self.persist,
                 has_proxy: self.proxy.is_some(),
                 has_reverse: self.reverse.is_some(),
-                connect_mode: self.connect_mode.as_deref(),
+                connect_mode: self.connect_mode.clone(),
             },
             DaemonControlPayloadShape::RouteArgs => NodeRequestPayload::RouteArgs {
                 has_route: self.route.is_some(),
@@ -473,38 +475,41 @@ impl NodeRequest {
                 has_bootstrap: self.bootstrap.is_some(),
             },
             DaemonControlPayloadShape::Report => NodeRequestPayload::Report {
-                node: self.node.as_deref(),
+                node: self.node.clone(),
                 has_status: self.status.is_some(),
             },
             DaemonControlPayloadShape::ProxySession => NodeRequestPayload::ProxySession {
-                id: self.id.as_deref(),
+                id: self.id.clone(),
                 has_spec: self.proxy_session.is_some(),
             },
             DaemonControlPayloadShape::RemoteSettings => NodeRequestPayload::RemoteSettings {
-                target: self.alias.as_deref(),
-                workspace: self.id.as_deref(),
-                remote_url: self.remote_url.as_deref(),
+                target: self.alias.clone(),
+                workspace: self.id.clone(),
+                remote_url: self.remote_url.clone(),
             },
             DaemonControlPayloadShape::DaemonUpdate => NodeRequestPayload::DaemonUpdate {
-                source: self.update_source.as_deref(),
+                source: self.update_source.clone(),
             },
             DaemonControlPayloadShape::JobEvents => NodeRequestPayload::JobEvents {
-                id: self.id.as_deref(),
+                id: self.id.clone(),
             },
             DaemonControlPayloadShape::Unknown => NodeRequestPayload::Unknown,
         }
     }
 
-    pub(crate) fn typed_view(&self) -> NodeRequestView {
+    pub(crate) fn typed_intent(&self) -> NodeRequestIntent {
         let command = self.command_kind();
-        let canonical = command.canonical_name().to_string();
-        NodeRequestView {
-            kind: NodeRequestKind::from_command(&canonical),
-            command: canonical,
-            api_version: self.api_version,
-            id: self.id.clone(),
-            alias: self.alias.clone().or_else(|| self.node.clone()),
-        }
+        NodeRequestIntent::new(
+            command.canonical_name(),
+            self.api_version,
+            self.id.clone(),
+            self.alias.clone().or_else(|| self.node.clone()),
+            self.typed_payload(),
+        )
+    }
+
+    pub(crate) fn typed_view(&self) -> NodeRequestView {
+        self.typed_intent().view()
     }
 
     pub(crate) fn with_auth_token(mut self, token: Option<&str>) -> Self {
@@ -513,51 +518,6 @@ impl NodeRequest {
         }
         self
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum NodeRequestPayload<'a> {
-    Empty,
-    Profile {
-        profile: Option<&'a str>,
-    },
-    Id {
-        id: Option<&'a str>,
-    },
-    RouteStart {
-        id: Option<&'a str>,
-        direction: Option<&'a str>,
-        persist: Option<bool>,
-        has_proxy: bool,
-        has_reverse: bool,
-        connect_mode: Option<&'a str>,
-    },
-    RouteArgs {
-        has_route: bool,
-    },
-    PeerBootstrap {
-        has_bootstrap: bool,
-    },
-    Report {
-        node: Option<&'a str>,
-        has_status: bool,
-    },
-    ProxySession {
-        id: Option<&'a str>,
-        has_spec: bool,
-    },
-    RemoteSettings {
-        target: Option<&'a str>,
-        workspace: Option<&'a str>,
-        remote_url: Option<&'a str>,
-    },
-    DaemonUpdate {
-        source: Option<&'a str>,
-    },
-    JobEvents {
-        id: Option<&'a str>,
-    },
-    Unknown,
 }
 
 pub(crate) fn attach_auth_token(value: &mut Value, token: Option<&str>) {
@@ -627,8 +587,8 @@ mod tests {
         assert_eq!(
             request.typed_payload(),
             NodeRequestPayload::RouteStart {
-                id: Some("route-1"),
-                direction: Some("forward"),
+                id: Some("route-1".to_string()),
+                direction: Some("forward".to_string()),
                 persist: Some(true),
                 has_proxy: false,
                 has_reverse: false,
@@ -650,9 +610,9 @@ mod tests {
         assert_eq!(
             request.typed_payload(),
             NodeRequestPayload::RemoteSettings {
-                target: Some("target"),
-                workspace: Some("workspace"),
-                remote_url: Some("http://127.0.0.1:17890"),
+                target: Some("target".to_string()),
+                workspace: Some("workspace".to_string()),
+                remote_url: Some("http://127.0.0.1:17890".to_string()),
             }
         );
         assert_eq!(
@@ -665,5 +625,6 @@ mod tests {
                 alias: Some("target".to_string()),
             }
         );
+        assert_eq!(request.typed_intent().payload, request.typed_payload());
     }
 }
