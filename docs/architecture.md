@@ -87,7 +87,7 @@ Dependencies should flow upward only:
 ```text
 core
   <- protocol
-  <- lifecycle / config / control / ssh / transport
+  <- lifecycle / config / control / ssh / transport / route / deploy / service / daemon
   <- cli command contracts and app adapters in crates/ssh-proxy
   <- binary bootstrap
 ```
@@ -96,11 +96,14 @@ The first extraction pass keeps compatibility shims in `crates/ssh-proxy/src`
 so existing module paths can migrate gradually. New shared DTOs, codecs,
 lifecycle models, control socket helpers, SSH primitives, and CLI command
 contracts should live in the appropriate workspace crate rather than expanding
-the binary crate. `ssh-proxy-cli` is a command-contract crate; command dispatch
-still lives in the app crate until service/deploy/daemon become separate
-vertical crates. Lower crates must not depend on app, daemon, deploy, service,
-or dispatch-only code unless the dependency direction is explicitly promoted in
-a separate architecture change.
+the binary crate. `ssh-proxy-route` owns route decision and route status DTOs;
+`ssh-proxy-deploy` owns remote install and remote setup artifact intents;
+`ssh-proxy-service` owns service-management contracts; `ssh-proxy-daemon` owns
+command-neutral daemon/job/session/peer/state DTOs. `ssh-proxy-cli` is a
+command-contract crate; command dispatch still lives in the app crate until the
+remaining runtime orchestration is promoted. Lower crates must not depend on
+app, CLI dispatch, SSH executors, or platform service runtimes unless the
+dependency direction is explicitly promoted in a separate architecture change.
 
 ## Symmetric Peer Lifecycle
 
@@ -194,8 +197,10 @@ execution to shared modules.
 - `node_daemon::remote_setup` owns VS Code and shell environment artifacts. Rust
   renders payloads and uses `SshExecutor.write_artifact`; shell remains limited
   to stdin file writes, optional Git config, cleanup, and platform commands.
-  `RemoteArtifactPlan` is the single place that names the server directory,
-  relative path, artifact kind, backup policy, and read/write command shape.
+  `ssh-proxy-deploy::RemoteArtifactIntent` is the command-neutral place that
+  names the server directory, relative path, artifact kind, backup policy, and
+  read/write command shape. The app crate adapts those intents to `SshExecutor`,
+  so deploy models do not depend on SSH runtime code.
 - `quic_native::runtime` owns listener orchestration and data-flow accounting.
   Connection establishment lives in `runtime::connection`; status rendering
   lives in `runtime::status` with `snapshot`, `profile`, and `render`
@@ -207,12 +212,11 @@ execution to shared modules.
 - `node_daemon::management` owns daemon update transactions and the preview node
   control surface. User/report JSON for nodes, jobs, job events, and peer
   ensure/update wrappers lives in `management::report`; staged self-update
-  helpers remain in the parent module until the update workflow is split.
-- `node_daemon::state` owns the daemon state schema. The parent module keeps the
-  serialized record types and compatibility helpers, while `daemon_store`,
-  `session_store`, `peer_store`, and `file_store` own persistence methods for
-  each state file. Store files keep the existing JSON schema and corrupt-file
-  quarantine behavior.
+  orchestration and switch-script helpers live in `management::update`.
+- `node_daemon::state` owns daemon state file orchestration. The serialized job,
+  session, peer, remote setup, and daemon records live in `ssh-proxy-daemon`;
+  app-side store modules keep file I/O, async locking, schema compatibility, and
+  corrupt-file quarantine behavior.
 - `route` owns user-visible route plans and preflight probes. Transport names,
   direct-policy labels, SSH-mode labels, and data-plane reasons come from
   `peer_lifecycle::connection` so status, doctor, daemon, and route output use

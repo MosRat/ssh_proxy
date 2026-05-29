@@ -44,6 +44,14 @@ Current horizontal crates:
   direct-tcpip streams.
 - `crates/ssh-proxy-transport/`: peer transport contracts, TLS/QUIC helpers,
   and QUIC stream adapters.
+- `crates/ssh-proxy-route/`: route runtime decision reports, preflight
+  metadata, route task status records, and route status JSON contracts.
+- `crates/ssh-proxy-deploy/`: remote install result DTOs and command-neutral
+  remote setup artifact intents.
+- `crates/ssh-proxy-service/`: local service-management contracts and provider
+  report DTOs.
+- `crates/ssh-proxy-daemon/`: command-neutral daemon job, session, peer,
+  update, state, and request-view DTOs.
 - `crates/ssh-proxy-cli/`: Clap command and argument contracts. The binary
   crate converts these intents into daemon, lifecycle, deploy, or route calls.
 
@@ -52,14 +60,14 @@ Current horizontal crates:
 and thin shim modules for compatibility with existing internal paths. Remaining
 large vertical subsystems are still split by semantic module:
 
-- `deploy/`: remote bootstrap entrypoints, descriptor/token helpers,
-  compatibility helpers, and transport opening.
-- `node_daemon/`: node service control protocol, route supervision, peer
-  management, and peer transport listeners.
+- `deploy/`: app adapters for remote bootstrap entrypoints, descriptor/token
+  helpers, compatibility helpers, and transport opening.
+- `node_daemon/`: daemon runtime orchestration, control protocol adapters,
+  route supervision, peer management, and peer transport listeners.
 - `node_daemon/proxy_session/`: reusable state-machine helpers for session
   reuse, route readiness, handoff, and setup sequencing.
-- `node_daemon/remote_setup/`: payload rendering and artifact read/write
-  helpers for VS Code settings, server-env setup, and status files.
+- `node_daemon/remote_setup/`: payload rendering and SSH execution adapters for
+  deploy-owned VS Code settings, server-env setup, and status-file intents.
 - `quic_native/`: QUIC-native control and per-flow stream runtime.
 - `service/`: local service planning and platform execution.
 - `socks/`: SOCKS5H, HTTP proxy parsing, and relay helpers.
