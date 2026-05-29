@@ -181,7 +181,7 @@ fn workspace_crate_boundaries_remain_layered() {
 
     assert_manifest_avoids(
         "crates/ssh-proxy/Cargo.toml",
-        &["russh", "tokio-rustls", "service-manager"],
+        &["russh", "quinn", "tokio-rustls", "service-manager"],
     );
     assert_manifest_avoids(
         "crates/ssh-proxy-core/Cargo.toml",
