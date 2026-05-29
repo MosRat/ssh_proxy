@@ -1152,8 +1152,9 @@ async fn apply_remote_auto_defaults(
             service_manager: "pending".to_string(),
             updated_at_unix: now_unix(),
         });
+    let store_bundle = peer_lifecycle::store::PeerStoreBundle::from_config_files(files)?;
     let executor = peer_lifecycle::executor::SshExecutor::new(client);
-    for artifact in peer_lifecycle::artifacts::materialized_peer_artifacts(files) {
+    for artifact in store_bundle.into_artifacts() {
         executor
             .write_artifact(
                 peer_lifecycle::commands::remote_write_peer_artifact_command(

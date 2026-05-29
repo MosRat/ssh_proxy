@@ -10,4 +10,5 @@ pub(crate) mod provider;
 pub(crate) mod report;
 pub(crate) mod service_provider;
 pub(crate) mod spec;
+pub(crate) mod store;
 pub(crate) mod workflow;
