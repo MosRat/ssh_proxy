@@ -98,6 +98,7 @@ try {
             Invoke-CargoChecked "cargo test -p ssh-proxy-protocol" @("test", "-p", "ssh-proxy-protocol")
             Invoke-CargoChecked "cargo test -p ssh-proxy-lifecycle" @("test", "-p", "ssh-proxy-lifecycle")
             Invoke-CargoChecked "cargo test -p ssh-proxy-config" @("test", "-p", "ssh-proxy-config")
+            Invoke-CargoChecked "cargo test -p ssh-proxy-ssh" @("test", "-p", "ssh-proxy-ssh")
             Invoke-CargoChecked "cargo test -p ssh-proxy-transport" @("test", "-p", "ssh-proxy-transport")
             Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy deploy" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "deploy")
             Invoke-CargoChecked "cargo test -p ssh_proxy --bin ssh_proxy remote peer config" @("test", "-p", "ssh_proxy", "--bin", "ssh_proxy", "remote_config_write")
