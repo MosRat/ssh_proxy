@@ -63,6 +63,8 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
 - SPX runtime report and proxy tunnel adapter changes:
   `cargo test -p ssh_proxy --bin ssh_proxy controller socks`;
 - repair/report schema: `cargo test -p ssh_proxy --bin ssh_proxy repair diagnostics`;
+- workspace dependency, runtime boundary, and external execution contracts:
+  `cargo test -p ssh_proxy --test build_contract`;
 - extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
 
 Prefer the pure lifecycle/provider tests while editing service managers. They use

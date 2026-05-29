@@ -75,6 +75,8 @@ large vertical subsystems are still split by semantic module:
   helpers, compatibility helpers, and transport opening.
 - `node_daemon/`: daemon runtime orchestration, control protocol adapters,
   route supervision, peer management, and peer transport listeners.
+- `node_daemon/control_protocol/`: legacy JSON-line response rendering and
+  typed payload adapters for command-neutral daemon intents.
 - `node_daemon/proxy_session/`: reusable state-machine helpers for session
   reuse, route readiness, handoff, and setup sequencing.
 - `node_daemon/remote_setup/`: payload rendering and SSH execution adapters for
@@ -99,7 +101,9 @@ Intent/runtime layering rules:
   compatibility paths are not interchangeable.
 - Boundary tests enforce production dependency direction for core/config/route/
   deploy/lifecycle/transport/daemon crates, prevent runtime imports from
-  crossing layers, and keep `service-manager` out of production dependencies.
+  crossing layers, keep `service-manager` out of production dependencies,
+  require internal crate dependencies to use workspace declarations, and keep
+  production `Command::new` calls inside platform or lifecycle executor crates.
 
 See `docs/architecture.md` for the deeper runtime model.
 

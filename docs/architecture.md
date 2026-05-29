@@ -153,14 +153,15 @@ Command-neutral intent models sit below CLI parsing and above runtime adapters:
   subprocesses.
 
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
-behavior in the app crate but separates control listening and session
-scheduling into focused submodules. `controller` keeps SPX behavior stable while
-splitting command dispatch, control-client requests, and SOCKS listener
-orchestration from shared state and status accounting. SPX worker status is
-materialized through `ssh-proxy-transport::spx::SpxBridgeWorkerSnapshot`, so
-status renderers classify connected/degraded/reconnecting state from a typed
-transport DTO. `socks::tunnel` centralizes app-side backend selection for SPX,
-ssh-native, and QUIC-native tunnels while protocol parsing remains in
+behavior in the app crate but separates control listening, listener
+orchestration, session scheduling, and active-channel counter guards into
+focused submodules. `controller` keeps SPX behavior stable while splitting
+command dispatch, control-client requests, and SOCKS listener orchestration
+from shared state and status accounting. SPX worker status is materialized
+through `ssh-proxy-transport::spx::SpxBridgeWorkerSnapshot`, so status
+renderers classify connected/degraded/reconnecting state from a typed transport
+DTO. `socks::tunnel` centralizes app-side backend selection for SPX, ssh-native,
+and QUIC-native tunnels while protocol parsing remains in
 `ssh-proxy-transport`.
 
 ## Symmetric Peer Lifecycle
@@ -239,6 +240,11 @@ execution to shared modules.
   `remote_peer::job_runner` sequences descriptor adoption, install fallback,
   and terminal failure recording; `remote_peer::report` and `phase_mapping`
   own status DTOs and lifecycle/job phase conversion.
+- `node_daemon::control_protocol` owns legacy JSON-line wire DTOs only.
+  `control_protocol::payload_adapter` maps wide legacy fields into
+  `ssh-proxy-daemon::control::NodeRequestIntent`, while
+  `control_protocol::response` renders shared control envelopes back into the
+  additive public JSON shape.
 - `node_daemon::peers` owns peer command dispatch and peer registry operations.
   Route intent orchestration lives in `peers::route_intent`, which builds route
   plans, ensures peer prerequisites, and preserves the daemon route response
@@ -258,13 +264,16 @@ execution to shared modules.
   `ssh-proxy-deploy::RemoteArtifactIntent` is the command-neutral place that
   names the server directory, relative path, artifact kind, backup policy, and
   read/write command shape. The app crate adapts those intents to `SshExecutor`,
-  so deploy models do not depend on SSH runtime code.
+  so deploy models do not depend on SSH runtime code. `remote_setup::executor`
+  is the only app-side module that opens SSH for this flow; payload and artifact
+  helpers stay pure.
 - `ssh-proxy-deploy::RemoteSetupExecutionPlan` groups remote setup payloads,
   artifact intents, and optional script intents. It is the planning boundary for
   VS Code settings, server-env, and remote status updates; app modules execute
   the plan and map outcomes back into the legacy session/status JSON.
-- `quic_native::runtime` owns listener orchestration and data-flow accounting.
-  Connection establishment lives in `runtime::connection`; status rendering
+- `quic_native::runtime` owns connection-pool state and data-flow accounting.
+  Listener and local control-port orchestration live in `runtime::listener`;
+  connection establishment lives in `runtime::connection`; status rendering
   lives in `runtime::status` with `snapshot`, `profile`, and `render`
   submodules; worker metric mutation lives in `runtime::worker_metrics`, while
   status-only worker snapshots live in `runtime::metrics_snapshot`. Control
