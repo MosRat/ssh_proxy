@@ -1,210 +1,20 @@
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+pub(super) use ssh_proxy_daemon::job::{
+    DaemonJobEvent as JobEvent, DaemonJobPhase as JobPhase, DaemonJobRecord as JobRecord,
+    DaemonJobState as JobState, now_unix,
+};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-use crate::{config, repair};
+use crate::config;
 
 const JOB_STORE_VERSION: u32 = 1;
 const MAX_EVENTS: usize = 256;
 const MAX_TERMINAL_JOBS: usize = 64;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum JobState {
-    Queued,
-    Running,
-    WaitingRetry,
-    Healthy,
-    Failed,
-    Cancelled,
-}
-
-impl JobState {
-    fn is_terminal(self) -> bool {
-        matches!(self, Self::Healthy | Self::Failed | Self::Cancelled)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum JobPhase {
-    Queued,
-    Reconciling,
-    ResolveTarget,
-    ValidateLocalProxy,
-    SelectRemotePort,
-    EnsureLocalProxy,
-    EnsurePeer,
-    InspectPeerDescriptor,
-    DependencyCheck,
-    StageRemotePeer,
-    WritePeerConfig,
-    InstallPeerService,
-    StartPeerService,
-    PeerHealthProbe,
-    RecordPeer,
-    EnsureTransport,
-    PlanRoute,
-    StartRoute,
-    WaitRouteReady,
-    VerifyRemotePort,
-    ApplyRemoteSettings,
-    HealthMonitoring,
-    StageUpdate,
-    VerifyUpdate,
-    SwitchBinary,
-    RestartDaemon,
-    Rollback,
-    Healthy,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct JobRecord {
-    pub(super) id: String,
-    pub(super) kind: String,
-    pub(super) state: JobState,
-    pub(super) phase: JobPhase,
-    pub(super) progress: u8,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) blocker: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) next_action: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) repair_action: Option<repair::RepairAction>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) last_error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) retry_after_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub(super) recovery_attempts: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) workspace_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) route_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) remote_url: Option<String>,
-    pub(super) created_at_unix: u64,
-    pub(super) updated_at_unix: u64,
-}
-
-impl JobRecord {
-    pub(super) fn new(id: impl Into<String>, kind: impl Into<String>) -> Self {
-        let now = now_unix();
-        Self {
-            id: id.into(),
-            kind: kind.into(),
-            state: JobState::Queued,
-            phase: JobPhase::Queued,
-            progress: 0,
-            blocker: None,
-            next_action: None,
-            repair_action: None,
-            last_error: None,
-            retry_after_ms: None,
-            recovery_attempts: 0,
-            target: None,
-            workspace_id: None,
-            route_id: None,
-            remote_url: None,
-            created_at_unix: now,
-            updated_at_unix: now,
-        }
-    }
-
-    pub(super) fn transition(mut self, state: JobState, phase: JobPhase, progress: u8) -> Self {
-        self.state = state;
-        self.phase = phase;
-        self.progress = progress.min(100);
-        self.updated_at_unix = now_unix();
-        if !matches!(state, JobState::Failed) {
-            self.last_error = None;
-        }
-        if !matches!(state, JobState::WaitingRetry) {
-            self.retry_after_ms = None;
-        }
-        self
-    }
-
-    pub(super) fn with_target(mut self, target: impl Into<String>) -> Self {
-        self.target = Some(target.into());
-        self
-    }
-
-    pub(super) fn with_workspace(mut self, workspace_id: Option<String>) -> Self {
-        self.workspace_id = workspace_id;
-        self
-    }
-
-    pub(super) fn with_route(mut self, route_id: impl Into<String>) -> Self {
-        self.route_id = Some(route_id.into());
-        self
-    }
-
-    pub(super) fn with_remote_url(mut self, remote_url: Option<String>) -> Self {
-        self.remote_url = remote_url;
-        self
-    }
-
-    pub(super) fn with_next_action(mut self, next_action: impl Into<String>) -> Self {
-        self.next_action = Some(next_action.into());
-        self
-    }
-
-    pub(super) fn with_retry_after_ms(mut self, retry_after_ms: u64) -> Self {
-        self.retry_after_ms = Some(retry_after_ms);
-        self
-    }
-
-    pub(super) fn with_recovery_attempts(mut self, recovery_attempts: u32) -> Self {
-        self.recovery_attempts = recovery_attempts;
-        self
-    }
-
-    pub(super) fn failed(mut self, error: impl Into<String>, blocker: Option<String>) -> Self {
-        self.state = JobState::Failed;
-        self.phase = JobPhase::Failed;
-        self.progress = 100;
-        self.last_error = Some(error.into());
-        self.repair_action = blocker.as_deref().and_then(repair::action_for_blocker);
-        self.blocker = blocker;
-        self.retry_after_ms = None;
-        self.updated_at_unix = now_unix();
-        self
-    }
-
-    pub(super) fn to_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| {
-            json!({
-                "id": self.id,
-                "kind": self.kind,
-                "state": "failed",
-                "phase": "failed",
-                "last_error": "failed to encode job record",
-            })
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct JobEvent {
-    pub(super) job_id: String,
-    pub(super) state: JobState,
-    pub(super) phase: JobPhase,
-    pub(super) message: String,
-    pub(super) created_at_unix: u64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JobStore {
@@ -413,17 +223,6 @@ fn privilege_boundary() -> Value {
             "route_lifecycle"
         ],
     })
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn is_zero(value: &u32) -> bool {
-    *value == 0
 }
 
 #[cfg(test)]

@@ -2392,6 +2392,7 @@ dependencies = [
  "ssh-proxy-config",
  "ssh-proxy-control",
  "ssh-proxy-core",
+ "ssh-proxy-daemon",
  "ssh-proxy-deploy",
  "ssh-proxy-lifecycle",
  "ssh-proxy-protocol",
