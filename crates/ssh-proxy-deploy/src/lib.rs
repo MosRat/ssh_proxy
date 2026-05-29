@@ -14,7 +14,10 @@ pub use commands::{
     remote_stop_command, sh_quote,
 };
 pub use install::RemoteInstallPlan;
-pub use remote_setup::{RemoteArtifactIntent, RemoteArtifactKind, RemoteSetupPlan};
+pub use remote_setup::{
+    RemoteArtifactIntent, RemoteArtifactKind, RemoteSetupExecutionPlan, RemoteSetupPayloadInput,
+    RemoteSetupPlan, RemoteSetupScriptIntent, build_proxy_env, build_remote_setup_payload,
+};
 
 #[derive(Debug, Clone)]
 pub struct RemoteInstallResult {

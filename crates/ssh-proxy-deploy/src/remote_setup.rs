@@ -1,3 +1,8 @@
+use std::collections::BTreeMap;
+
+use serde_json::{Value, json};
+use ssh_proxy_core::external::ExternalActionClass;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteArtifactKind {
     VscodeMachineSettings,
@@ -63,6 +68,127 @@ impl RemoteSetupPlan {
     pub fn new(artifacts: Vec<RemoteArtifactIntent>) -> Self {
         Self { artifacts }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSetupPayloadInput {
+    pub target: String,
+    pub workspace_id: String,
+    pub workspace_paths: Vec<String>,
+    pub remote_url: String,
+    pub bind_host: String,
+    pub port: u16,
+    pub connect_mode: String,
+    pub route_id: String,
+    pub job_id: String,
+    pub route_owner: Option<String>,
+    pub selected_transport: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub local_proxy: String,
+    pub server_dir: String,
+    pub no_proxy: String,
+    pub proxy_support: String,
+    pub terminal_env: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSetupScriptIntent {
+    pub command: String,
+    pub label: String,
+    pub class: ExternalActionClass,
+}
+
+impl RemoteSetupScriptIntent {
+    pub fn new(
+        command: impl Into<String>,
+        label: impl Into<String>,
+        class: ExternalActionClass,
+    ) -> Self {
+        Self {
+            command: command.into(),
+            label: label.into(),
+            class,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSetupExecutionPlan {
+    pub payload: Value,
+    pub artifacts: Vec<RemoteArtifactIntent>,
+    pub scripts: Vec<RemoteSetupScriptIntent>,
+}
+
+impl RemoteSetupExecutionPlan {
+    pub fn new(payload: Value) -> Self {
+        Self {
+            payload,
+            artifacts: Vec::new(),
+            scripts: Vec::new(),
+        }
+    }
+
+    pub fn with_artifact(mut self, artifact: RemoteArtifactIntent) -> Self {
+        self.artifacts.push(artifact);
+        self
+    }
+
+    pub fn with_script(mut self, script: RemoteSetupScriptIntent) -> Self {
+        self.scripts.push(script);
+        self
+    }
+}
+
+pub fn build_remote_setup_payload(input: RemoteSetupPayloadInput) -> Value {
+    let env = build_proxy_env(&input.remote_url, &input.no_proxy);
+    let mut values = serde_json::Map::new();
+    values.insert("http.proxy".to_string(), json!(&input.remote_url));
+    values.insert("http.proxySupport".to_string(), json!(&input.proxy_support));
+    if input.terminal_env {
+        values.insert(
+            "terminal.integrated.env.linux".to_string(),
+            json!(env.clone()),
+        );
+        values.insert(
+            "terminal.integrated.env.osx".to_string(),
+            json!(env.clone()),
+        );
+        values.insert("terminal.integrated.env.windows".to_string(), json!(env));
+    }
+    json!({
+        "target": input.target,
+        "workspaceId": input.workspace_id,
+        "workspacePaths": input.workspace_paths,
+        "proxyUrl": input.remote_url,
+        "bindHost": input.bind_host,
+        "port": input.port,
+        "connectMode": input.connect_mode,
+        "routeId": input.route_id,
+        "jobId": input.job_id,
+        "routeOwner": input.route_owner,
+        "selectedTransport": input.selected_transport,
+        "fallbackReason": input.fallback_reason,
+        "localProxySource": "daemon",
+        "localProxyUrl": input.local_proxy,
+        "backend": "ssh_proxy",
+        "server_dir": input.server_dir,
+        "no_proxy": input.no_proxy,
+        "proxy_support": input.proxy_support,
+        "values": values,
+    })
+}
+
+pub fn build_proxy_env(proxy_url: &str, no_proxy: &str) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    env.insert("HTTP_PROXY".to_string(), proxy_url.to_string());
+    env.insert("HTTPS_PROXY".to_string(), proxy_url.to_string());
+    env.insert("ALL_PROXY".to_string(), proxy_url.to_string());
+    env.insert("NO_PROXY".to_string(), no_proxy.to_string());
+    env.insert("http_proxy".to_string(), proxy_url.to_string());
+    env.insert("https_proxy".to_string(), proxy_url.to_string());
+    env.insert("all_proxy".to_string(), proxy_url.to_string());
+    env.insert("no_proxy".to_string(), no_proxy.to_string());
+    env
 }
 
 fn build_remote_setup_read_command(server_dir: &str, relative_path: &str) -> String {
@@ -134,6 +260,36 @@ mod tests {
         assert_eq!(
             plan.artifacts[0].artifact.file_name(),
             "remote-proxy-status.json"
+        );
+    }
+
+    #[test]
+    fn remote_setup_payload_preserves_vscode_fields() {
+        let payload = build_remote_setup_payload(RemoteSetupPayloadInput {
+            target: "box".to_string(),
+            workspace_id: "workspace".to_string(),
+            workspace_paths: vec!["/repo".to_string()],
+            remote_url: "http://127.0.0.1:18080".to_string(),
+            bind_host: "127.0.0.1".to_string(),
+            port: 18080,
+            connect_mode: "reverse-link".to_string(),
+            route_id: "route-a".to_string(),
+            job_id: "job-a".to_string(),
+            route_owner: Some("daemon".to_string()),
+            selected_transport: Some("ssh-native".to_string()),
+            fallback_reason: None,
+            local_proxy: "socks5h://127.0.0.1:1080".to_string(),
+            server_dir: ".vscode-server".to_string(),
+            no_proxy: "localhost,127.0.0.1".to_string(),
+            proxy_support: "override".to_string(),
+            terminal_env: true,
+        });
+
+        assert_eq!(payload["target"], "box");
+        assert_eq!(payload["values"]["http.proxy"], "http://127.0.0.1:18080");
+        assert_eq!(
+            payload["values"]["terminal.integrated.env.linux"]["HTTP_PROXY"],
+            "http://127.0.0.1:18080"
         );
     }
 }

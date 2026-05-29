@@ -1,9 +1,13 @@
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use ssh_proxy_deploy::{
+    RemoteSetupPayloadInput, build_proxy_env as deploy_build_proxy_env, build_remote_setup_payload,
+};
 
 use super::super::proxy_session::ProxySessionSpec;
+use crate::cli;
 
 pub(super) fn setup_hash(payload: &Value) -> String {
     let mut hasher = Sha256::new();
@@ -20,56 +24,44 @@ pub(super) fn setup_payload(
     remote_url: &str,
     route: Option<&Value>,
 ) -> Value {
-    let env = build_proxy_env(remote_url, &spec.apply_policy.no_proxy);
-    let mut values = serde_json::Map::new();
-    values.insert("http.proxy".to_string(), json!(remote_url));
-    values.insert(
-        "http.proxySupport".to_string(),
-        json!(&spec.apply_policy.proxy_support),
-    );
-    if spec.apply_policy.terminal_env {
-        values.insert(
-            "terminal.integrated.env.linux".to_string(),
-            json!(env.clone()),
-        );
-        values.insert(
-            "terminal.integrated.env.osx".to_string(),
-            json!(env.clone()),
-        );
-        values.insert("terminal.integrated.env.windows".to_string(), json!(env));
-    }
-    json!({
-        "target": &spec.target,
-        "workspaceId": &spec.workspace_id,
-        "workspacePaths": &spec.workspace_paths,
-        "proxyUrl": remote_url,
-        "bindHost": spec.remote_bind.to_string(),
-        "port": spec.remote_port_policy.preferred,
-        "connectMode": &spec.connect_mode,
-        "routeId": spec.route_id(),
-        "jobId": spec.job_id(),
-        "routeOwner": route.and_then(|route| route.get("owner")).and_then(Value::as_str),
-        "selectedTransport": route.and_then(|route| route.get("selected_transport")).and_then(Value::as_str),
-        "fallbackReason": route.and_then(|route| route.get("fallback_reason")).and_then(Value::as_str),
-        "localProxySource": "daemon",
-        "localProxyUrl": &spec.local_proxy,
-        "backend": "ssh_proxy",
-        "server_dir": &spec.apply_policy.server_dir,
-        "no_proxy": &spec.apply_policy.no_proxy,
-        "proxy_support": &spec.apply_policy.proxy_support,
-        "values": values,
+    build_remote_setup_payload(RemoteSetupPayloadInput {
+        target: spec.target.clone(),
+        workspace_id: spec.key().to_string(),
+        workspace_paths: spec.workspace_paths.clone(),
+        remote_url: remote_url.to_string(),
+        bind_host: spec.remote_bind.to_string(),
+        port: spec.remote_port_policy.preferred,
+        connect_mode: connect_mode_name(spec.connect_mode).to_string(),
+        route_id: spec.route_id(),
+        job_id: spec.job_id(),
+        route_owner: route
+            .and_then(|route| route.get("owner"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        selected_transport: route
+            .and_then(|route| route.get("selected_transport"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        fallback_reason: route
+            .and_then(|route| route.get("fallback_reason"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        local_proxy: spec.local_proxy.clone(),
+        server_dir: spec.apply_policy.server_dir.clone(),
+        no_proxy: spec.apply_policy.no_proxy.clone(),
+        proxy_support: spec.apply_policy.proxy_support.clone(),
+        terminal_env: spec.apply_policy.terminal_env,
     })
 }
 
 pub(super) fn build_proxy_env(proxy_url: &str, no_proxy: &str) -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    env.insert("HTTP_PROXY".to_string(), proxy_url.to_string());
-    env.insert("HTTPS_PROXY".to_string(), proxy_url.to_string());
-    env.insert("ALL_PROXY".to_string(), proxy_url.to_string());
-    env.insert("NO_PROXY".to_string(), no_proxy.to_string());
-    env.insert("http_proxy".to_string(), proxy_url.to_string());
-    env.insert("https_proxy".to_string(), proxy_url.to_string());
-    env.insert("all_proxy".to_string(), proxy_url.to_string());
-    env.insert("no_proxy".to_string(), no_proxy.to_string());
-    env
+    deploy_build_proxy_env(proxy_url, no_proxy)
+}
+
+fn connect_mode_name(mode: cli::RouteConnectMode) -> &'static str {
+    match mode {
+        cli::RouteConnectMode::Auto => "auto",
+        cli::RouteConnectMode::Direct => "direct",
+        cli::RouteConnectMode::ReverseLink => "reverse-link",
+    }
 }

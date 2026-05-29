@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use serde_json::Value;
+use ssh_proxy_deploy::RemoteSetupExecutionPlan;
 
 use crate::{config, peer_lifecycle::artifacts::PeerArtifact, ssh_client};
 
@@ -33,11 +34,12 @@ pub(super) async fn apply_remote_settings(
     let install_args = remote_ssh::install_args_from_spec(config, spec)
         .context("failed to build SSH target for remote setup")?;
     let client = ssh_client::Client::connect_install_args(&install_args).await?;
-    let payload = setup_payload(spec, remote_url, route);
-    let desired_hash = setup_hash(&payload);
+    let execution_plan = RemoteSetupExecutionPlan::new(setup_payload(spec, remote_url, route));
+    let payload = &execution_plan.payload;
+    let desired_hash = setup_hash(payload);
 
     if spec.apply_policy.vscode_settings {
-        apply_remote_machine_settings(&client, &payload).await?;
+        apply_remote_machine_settings(&client, payload).await?;
     }
 
     if spec.apply_policy.server_env {
@@ -67,7 +69,7 @@ pub(super) async fn apply_remote_settings(
     }
 
     if spec.apply_policy.remote_status_file {
-        write_remote_status_file(&client, &spec.apply_policy.server_dir, &payload).await?;
+        write_remote_status_file(&client, &spec.apply_policy.server_dir, payload).await?;
     }
 
     Ok(RemoteSetupOutcome {
