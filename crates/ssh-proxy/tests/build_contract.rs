@@ -1176,6 +1176,40 @@ fn collect_source_pattern_violations(
             }
         }
     }
+
+    let service_broker = read_repo_file("crates/ssh-proxy-service/src/broker.rs");
+    for symbol in [
+        "pub struct ServiceBrokerReportInput",
+        "pub fn service_broker_report",
+        "\"tcp_legacy\"",
+        "\"session_daemon\"",
+        "\"arbitrary_shell\": false",
+    ] {
+        assert_contains(
+            &service_broker,
+            symbol,
+            "service crate should own broker fallback report rendering",
+        );
+    }
+
+    let app_broker = read_repo_file("crates/ssh-proxy/src/service/broker.rs");
+    assert_contains(
+        &app_broker,
+        "ssh_proxy_service::service_broker_report",
+        "app service broker should delegate pure report rendering to service crate",
+    );
+    for local_logic in [
+        "fn broker_candidates",
+        "fn select_broker_candidate",
+        "fn permission_boundary",
+        "fn broker_next_action",
+    ] {
+        assert_not_contains(
+            &app_broker,
+            local_logic,
+            "app service broker should not retain moved broker summary logic",
+        );
+    }
 }
 
 fn collect_command_execution_violations(path: &Path, violations: &mut Vec<String>) {

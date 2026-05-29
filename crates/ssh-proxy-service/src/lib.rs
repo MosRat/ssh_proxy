@@ -3,8 +3,10 @@ use std::{fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod broker;
 mod status;
 
+pub use broker::{ServiceBrokerReportInput, service_broker_report};
 pub use status::{
     ServiceManagerSummaryInput, control_endpoint_kind_from_str, persistent_manager_kind,
     selected_control_summary, service_candidates_summary, service_manager_summary,
