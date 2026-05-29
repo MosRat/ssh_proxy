@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tracing::warn;
 
 use crate::{cli, deploy, peer_lifecycle, repair};
 
@@ -300,53 +301,40 @@ impl NodeManager {
         spec: Option<&ProxySessionSpec>,
         install_args: &cli::InstallRemoteArgs,
         phase: JobPhase,
-        progress: u8,
+        _progress: u8,
         message: &str,
     ) -> Result<JobRecord> {
-        let job = self
-            .jobs
-            .upsert(
-                remote_peer_job(alias, job_id, job_kind, spec, phase, progress)
-                    .with_next_action("wait_for_remote_peer"),
-                message,
-            )
-            .await?;
-        if let Some(spec) = spec {
-            self.state.upsert_session_from_job(spec, &job, None).await?;
-        }
-        self.state
-            .upsert_peer_status(PeerStatusRecord {
-                target: alias.to_string(),
-                state: "running".to_string(),
-                health: "starting".to_string(),
-                version: None,
-                control_endpoint: None,
-                transport: None,
-                transport_protocols: Vec::new(),
-                service_manager: Some("auto".to_string()),
-                descriptor_hash: None,
-                install: Some(remote_peer_lifecycle_report(
-                    alias,
-                    lifecycle_phase_from_job(phase),
-                    peer_lifecycle::workflow::LifecycleOperation::Ensure,
-                    Some(install_args),
-                    install_args.remote_path.as_deref(),
-                    "auto",
-                    None,
-                    None,
-                    0,
-                )),
-                dependency_report: Some(remote_dependency_report()),
-                update_required: false,
-                blocker: None,
-                repair_action: None,
-                last_error: None,
-                retry_after_ms: None,
-                recovery_attempts: 0,
-                updated_at_unix: now_unix(),
-            })
-            .await?;
-        Ok(job)
+        let report = remote_peer_lifecycle_report_record(
+            alias,
+            lifecycle_phase_from_job(phase),
+            peer_lifecycle::workflow::LifecycleOperation::Ensure,
+            Some(install_args),
+            install_args.remote_path.as_deref(),
+            "auto",
+            None,
+            None,
+            0,
+        );
+        let mut sink = RemotePeerLifecycleSink {
+            manager: self,
+            alias,
+            job_id,
+            job_kind,
+            spec,
+        };
+        peer_lifecycle::workflow::LifecycleEventSink::emit(
+            &mut sink,
+            peer_lifecycle::workflow::LifecycleEvent {
+                operation: peer_lifecycle::workflow::LifecycleOperation::Ensure,
+                report,
+                message: message.to_string(),
+            },
+        )
+        .await;
+        self.jobs
+            .get(job_id)
+            .await
+            .ok_or_else(|| anyhow!("remote peer lifecycle event did not record job {job_id}"))
     }
 
     async fn record_peer_waiting(
@@ -495,6 +483,98 @@ impl NodeManager {
             status.install = Some(install_report.clone());
         }
         self.state.upsert_peer_status(status).await?;
+        Ok(())
+    }
+}
+
+struct RemotePeerLifecycleSink<'a> {
+    manager: &'a NodeManager,
+    alias: &'a str,
+    job_id: &'a str,
+    job_kind: &'a str,
+    spec: Option<&'a ProxySessionSpec>,
+}
+
+impl peer_lifecycle::workflow::LifecycleEventSink for RemotePeerLifecycleSink<'_> {
+    fn emit<'a>(
+        &'a mut self,
+        event: peer_lifecycle::workflow::LifecycleEvent,
+    ) -> peer_lifecycle::workflow::BoxEventFuture<'a> {
+        Box::pin(async move {
+            if let Err(err) = self.record_event(event).await {
+                warn!(
+                    error = %err,
+                    job_id = %self.job_id,
+                    alias = %self.alias,
+                    "failed to record remote peer lifecycle event"
+                );
+            }
+        })
+    }
+}
+
+impl RemotePeerLifecycleSink<'_> {
+    async fn record_event(&self, event: peer_lifecycle::workflow::LifecycleEvent) -> Result<()> {
+        let phase = job_phase_from_lifecycle(event.report.phase);
+        let progress = event.report.phase.progress();
+        let mut job = remote_peer_job(
+            self.alias,
+            self.job_id,
+            self.job_kind,
+            self.spec,
+            phase,
+            progress,
+        )
+        .with_next_action("wait_for_remote_peer");
+        if event.report.phase == peer_lifecycle::workflow::PeerLifecyclePhase::Failed {
+            job = job.failed(
+                event
+                    .report
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "remote peer lifecycle failed".to_string()),
+                event.report.blocker.clone(),
+            );
+        }
+        let job = self.manager.jobs.upsert(job, &event.message).await?;
+        if let Some(spec) = self.spec {
+            self.manager
+                .state
+                .upsert_session_from_job(spec, &job, None)
+                .await?;
+        }
+        let failed = event.report.phase == peer_lifecycle::workflow::PeerLifecyclePhase::Failed;
+        self.manager
+            .state
+            .upsert_peer_status(PeerStatusRecord {
+                target: self.alias.to_string(),
+                state: if failed { "failed" } else { "running" }.to_string(),
+                health: if failed { "failed" } else { "starting" }.to_string(),
+                version: None,
+                control_endpoint: None,
+                transport: None,
+                transport_protocols: Vec::new(),
+                service_manager: event
+                    .report
+                    .service_manager
+                    .clone()
+                    .or_else(|| Some("auto".to_string())),
+                descriptor_hash: None,
+                install: Some(event.report.to_redacted_value()),
+                dependency_report: Some(remote_dependency_report()),
+                update_required: false,
+                blocker: event.report.blocker.clone(),
+                repair_action: event
+                    .report
+                    .blocker
+                    .as_deref()
+                    .and_then(repair::action_for_blocker),
+                last_error: event.report.last_error.clone(),
+                retry_after_ms: event.report.retry_after_ms,
+                recovery_attempts: event.report.recovery_attempts,
+                updated_at_unix: now_unix(),
+            })
+            .await?;
         Ok(())
     }
 }
@@ -681,6 +761,25 @@ fn lifecycle_phase_from_job(phase: JobPhase) -> peer_lifecycle::workflow::PeerLi
     }
 }
 
+fn job_phase_from_lifecycle(phase: peer_lifecycle::workflow::PeerLifecyclePhase) -> JobPhase {
+    match phase {
+        peer_lifecycle::workflow::PeerLifecyclePhase::InspectDescriptor => {
+            JobPhase::InspectPeerDescriptor
+        }
+        peer_lifecycle::workflow::PeerLifecyclePhase::DependencyCheck => JobPhase::DependencyCheck,
+        peer_lifecycle::workflow::PeerLifecyclePhase::StageBinary => JobPhase::StageRemotePeer,
+        peer_lifecycle::workflow::PeerLifecyclePhase::WriteConfig => JobPhase::WritePeerConfig,
+        peer_lifecycle::workflow::PeerLifecyclePhase::InstallService => {
+            JobPhase::InstallPeerService
+        }
+        peer_lifecycle::workflow::PeerLifecyclePhase::StartService => JobPhase::StartPeerService,
+        peer_lifecycle::workflow::PeerLifecyclePhase::HealthProbe => JobPhase::PeerHealthProbe,
+        peer_lifecycle::workflow::PeerLifecyclePhase::Record => JobPhase::RecordPeer,
+        peer_lifecycle::workflow::PeerLifecyclePhase::Failed => JobPhase::Failed,
+        _ => JobPhase::Queued,
+    }
+}
+
 fn lifecycle_phase_from_install_state(
     install_state: &str,
     install_phase: &str,
@@ -713,6 +812,31 @@ fn remote_peer_lifecycle_report(
     last_error: Option<&str>,
     recovery_attempts: u32,
 ) -> Value {
+    remote_peer_lifecycle_report_record(
+        alias,
+        phase,
+        operation,
+        install_args,
+        remote_path,
+        service_manager,
+        blocker,
+        last_error,
+        recovery_attempts,
+    )
+    .to_redacted_value()
+}
+
+fn remote_peer_lifecycle_report_record(
+    alias: &str,
+    phase: peer_lifecycle::workflow::PeerLifecyclePhase,
+    operation: peer_lifecycle::workflow::LifecycleOperation,
+    install_args: Option<&cli::InstallRemoteArgs>,
+    remote_path: Option<&str>,
+    service_manager: &str,
+    blocker: Option<&str>,
+    last_error: Option<&str>,
+    recovery_attempts: u32,
+) -> peer_lifecycle::report::PeerLifecycleReport {
     let mut report = if let Some(args) = install_args {
         let provider = peer_lifecycle::service_provider::provider_for_remote_report(
             service_manager,
@@ -745,7 +869,7 @@ fn remote_peer_lifecycle_report(
     report.recovery_attempts = recovery_attempts;
     report.blocker = blocker.map(ToOwned::to_owned);
     report.last_error = last_error.map(ToOwned::to_owned);
-    report.to_redacted_value()
+    report
 }
 
 fn sanitize_key(value: &str) -> String {
