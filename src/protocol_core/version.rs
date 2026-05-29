@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 pub(crate) const CONTROL_API_VERSION: u16 = 1;
 pub(crate) const PEER_PROTOCOL_VERSION: u16 = 1;
@@ -109,6 +109,131 @@ pub(crate) enum VersionCompatibility {
     Incompatible(String),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ProtocolCompatibilityReport {
+    pub(crate) checks: Vec<Value>,
+    pub(crate) compatible: bool,
+    pub(crate) missing_features: Vec<String>,
+    pub(crate) common_features: Vec<String>,
+}
+
+pub(crate) fn protocol_compatibility_report(
+    local_control: u16,
+    remote_control: Option<u16>,
+    local_peer: u16,
+    remote_peer: Option<u16>,
+    local_features: &[String],
+    remote_features: &[String],
+) -> ProtocolCompatibilityReport {
+    let local_feature_set = FeatureSet::new(local_features.iter().cloned());
+    let remote_feature_set = FeatureSet::new(remote_features.iter().cloned());
+    let missing_features = local_feature_set.missing_from(&remote_feature_set);
+    let common_features = local_feature_set.common_with(&remote_feature_set);
+    let checks = vec![
+        control_api_check(local_control, remote_control),
+        peer_protocol_check(local_peer, remote_peer),
+        feature_check(local_features, remote_features, &missing_features),
+    ];
+    let compatible = checks
+        .iter()
+        .all(|check| check.get("severity").and_then(Value::as_str) != Some("error"));
+    ProtocolCompatibilityReport {
+        checks,
+        compatible,
+        missing_features,
+        common_features,
+    }
+}
+
+fn control_api_check(local: u16, remote: Option<u16>) -> Value {
+    match remote {
+        Some(remote) if remote <= local => json!({
+            "name": "control_api_version",
+            "ok": true,
+            "local": local,
+            "remote": remote,
+            "severity": "info",
+            "message": "remote control API is supported"
+        }),
+        Some(remote) => json!({
+            "name": "control_api_version",
+            "ok": false,
+            "local": local,
+            "remote": remote,
+            "severity": "error",
+            "message": "remote control API is newer than this binary supports"
+        }),
+        None => json!({
+            "name": "control_api_version",
+            "ok": false,
+            "local": local,
+            "remote": Value::Null,
+            "severity": "error",
+            "message": "remote descriptor does not advertise a control API version"
+        }),
+    }
+}
+
+fn peer_protocol_check(local: u16, remote: Option<u16>) -> Value {
+    match remote {
+        Some(remote) if remote == local => json!({
+            "name": "peer_protocol_version",
+            "ok": true,
+            "local": local,
+            "remote": remote,
+            "severity": "info",
+            "message": "remote peer data protocol matches"
+        }),
+        Some(remote) if remote > local => json!({
+            "name": "peer_protocol_version",
+            "ok": false,
+            "local": local,
+            "remote": remote,
+            "severity": "error",
+            "message": "remote peer data protocol is newer than this binary supports"
+        }),
+        Some(remote) => json!({
+            "name": "peer_protocol_version",
+            "ok": false,
+            "local": local,
+            "remote": remote,
+            "severity": "error",
+            "message": "remote peer data protocol is older than this binary requires"
+        }),
+        None => json!({
+            "name": "peer_protocol_version",
+            "ok": false,
+            "local": local,
+            "remote": Value::Null,
+            "severity": "error",
+            "message": "remote descriptor does not advertise a peer data protocol version"
+        }),
+    }
+}
+
+fn feature_check(local: &[String], remote: &[String], missing: &[String]) -> Value {
+    if missing.is_empty() {
+        json!({
+            "name": "features",
+            "ok": true,
+            "local": local,
+            "remote": remote,
+            "severity": "info",
+            "message": "remote advertises all locally required data-plane features"
+        })
+    } else {
+        json!({
+            "name": "features",
+            "ok": false,
+            "local": local,
+            "remote": remote,
+            "severity": "error",
+            "message": "remote is missing required data-plane features",
+            "missing": missing,
+        })
+    }
+}
+
 pub(crate) fn classify_protocol_compatibility(
     local_control: ControlApiVersion,
     remote_control: Option<ControlApiVersion>,
@@ -137,6 +262,22 @@ pub(crate) fn classify_protocol_compatibility(
         ));
     }
     VersionCompatibility::Compatible
+}
+
+pub(crate) fn compare_dotted_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let left = parse_dotted_version(left)?;
+    let right = parse_dotted_version(right)?;
+    Some(left.cmp(&right))
+}
+
+fn parse_dotted_version(value: &str) -> Option<Vec<u64>> {
+    let core = value.split_once('-').map(|(core, _)| core).unwrap_or(value);
+    let parts = core
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (!parts.is_empty()).then_some(parts)
 }
 
 #[cfg(test)]
@@ -211,5 +352,18 @@ mod tests {
             ),
             VersionCompatibility::Incompatible(_)
         ));
+    }
+
+    #[test]
+    fn protocol_report_centralizes_checks_and_features() {
+        let local = vec!["frames-v1".to_string(), "tcp-connect".to_string()];
+        let remote = vec!["frames-v1".to_string()];
+        let report = protocol_compatibility_report(1, Some(1), 1, Some(1), &local, &remote);
+
+        assert!(!report.compatible);
+        assert_eq!(report.common_features, vec!["frames-v1".to_string()]);
+        assert_eq!(report.missing_features, vec!["tcp-connect".to_string()]);
+        assert_eq!(report.checks[2]["name"], "features");
+        assert_eq!(report.checks[2]["severity"], "error");
     }
 }
