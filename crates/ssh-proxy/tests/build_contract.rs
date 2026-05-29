@@ -316,10 +316,36 @@ fn assert_manifest_avoids(relative: &str, forbidden: &[&str]) {
     let manifest = read_repo_file(relative);
     for name in forbidden {
         assert!(
-            !manifest_has_direct_crate(&manifest, name),
-            "{relative} should not depend on `{name}`"
+            !manifest_has_production_crate(&manifest, name),
+            "{relative} should not have production dependency `{name}`"
         );
     }
+}
+
+fn manifest_has_production_crate(manifest: &str, name: &str) -> bool {
+    let mut in_production_dependencies = false;
+    manifest.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_production_dependencies = trimmed == "[dependencies]"
+                || (trimmed.starts_with("[target.")
+                    && trimmed.ends_with(".dependencies]")
+                    && !trimmed.ends_with(".dev-dependencies]"));
+            return false;
+        }
+        in_production_dependencies && dependency_line_matches(trimmed, name)
+    })
+}
+
+fn dependency_line_matches(trimmed: &str, name: &str) -> bool {
+    let simple = format!("{name} =");
+    let workspace = format!("{name}.workspace");
+    let quoted = format!("\"{name}\" =");
+    let quoted_workspace = format!("\"{name}\".workspace");
+    trimmed.starts_with(&simple)
+        || trimmed.starts_with(&workspace)
+        || trimmed.starts_with(&quoted)
+        || trimmed.starts_with(&quoted_workspace)
 }
 
 fn collect_workspace_source_ffi_violations(violations: &mut Vec<String>) {
