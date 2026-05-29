@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use ssh_proxy_core::report::RuntimeDecisionReport;
 
 mod decision;
+mod plan;
 mod policy;
 mod status;
 
@@ -12,6 +13,7 @@ pub use decision::{
     parse_transport_mode, persistent_peer_ready, remote_transport_name, ssh_data_plane_reason,
     ssh_mode_name, ssh_mode_reason, tls_peer_auth_mode, transport_selection_policy,
 };
+pub use plan::{RoutePlanReport, RouteRuntimePlanReport, refresh_route_decision_chain};
 pub use policy::{
     RoutePoolSizingInput, RouteSshSessionPoolPolicy, RouteTransportPoolPolicy,
     plan_ssh_session_pool, plan_transport_pool, pool_policy_name,
