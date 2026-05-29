@@ -318,7 +318,7 @@ mod tests {
             !command.contains("enable --now ssh-proxy-helper.service"),
             "{command}"
         );
-        assert!(command.contains("\"service_manager\":\"systemd_user\""));
+        assert!(!command.contains("\"service_manager\""));
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod tests {
         assert!(command.contains("com.ssh-proxy.helper.plist"), "{command}");
         assert!(command.contains("<key>KeepAlive</key><true/>"), "{command}");
         assert!(command.contains("launchctl bootstrap"), "{command}");
-        assert!(command.contains("\"service_manager\":\"launchd_user\""));
+        assert!(!command.contains("\"service_manager\""));
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod tests {
 
         assert!(command.contains("schtasks /Create"), "{command}");
         assert!(command.contains("/TN ssh_proxy_helper"), "{command}");
-        assert!(command.contains("\"service_manager"));
-        assert!(command.contains("windows_schtasks_user"));
+        assert!(!command.contains("\"service_manager"));
+        assert!(!command.contains("windows_schtasks_user"));
     }
 }

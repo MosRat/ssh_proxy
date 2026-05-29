@@ -8,10 +8,7 @@ use super::{
     defaults::apply_remote_auto_defaults, descriptor::wait_remote_peer_descriptor,
     helper::upload_helper, remote_commands::default_persistent_remote_path,
 };
-use peer_lifecycle::{
-    service_provider::PeerServiceProvider,
-    workflow::{LifecycleOperation, LifecyclePlan},
-};
+use peer_lifecycle::workflow::LifecyclePlan;
 
 pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteInstallResult> {
     let client = ssh_client::Client::connect_install_args(&args).await?;
@@ -71,7 +68,6 @@ async fn install_remote_service(
         plan.provider.kind,
     );
     let executor = peer_lifecycle::executor::SshExecutor::new(client);
-    let provider = plan.provider.clone();
     match args.persist {
         cli::PersistMode::None => {
             println!("installed helper at {remote_path}");
@@ -82,52 +78,32 @@ async fn install_remote_service(
             Ok((plan.reported_service_manager, None))
         }
         cli::PersistMode::Auto => {
-            let install_report = run_remote_install_plan(
-                &executor,
-                &spec,
-                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
-            )
-            .await?;
+            let install_report =
+                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
             println!("installed persistent helper on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Systemd => {
-            let install_report = run_remote_install_plan(
-                &executor,
-                &spec,
-                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
-            )
-            .await?;
+            let install_report =
+                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
             println!("installed user systemd service on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Nohup => {
-            let install_report = run_remote_install_plan(
-                &executor,
-                &spec,
-                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
-            )
-            .await?;
+            let install_report =
+                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
             println!("started nohup helper on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Launchd => {
-            let install_report = run_remote_install_plan(
-                &executor,
-                &spec,
-                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
-            )
-            .await?;
+            let install_report =
+                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
             println!("installed user launchd service on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Schtasks => {
-            let install_report = run_remote_install_plan(
-                &executor,
-                &spec,
-                provider.lifecycle_plan(&spec, LifecycleOperation::Install, Some(plan.command)),
-            )
-            .await?;
+            let install_report =
+                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
             println!("installed user scheduled task on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }

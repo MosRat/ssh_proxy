@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 
 use crate::cli;
+use ssh_proxy_core::{intent::RemoteInstallIntent, model::RemotePlatform};
+use ssh_proxy_lifecycle::service_provider::RemotePeerServiceSpec;
 
 use super::{artifacts::PeerArtifact, provider};
 
@@ -8,33 +10,41 @@ pub(crate) fn remote_write_peer_artifact_command(
     artifact: PeerArtifact,
     remote_os: cli::RemoteOs,
 ) -> String {
-    provider::remote_write_peer_artifact_command(artifact, remote_os)
+    let remote_platform: RemotePlatform = remote_os.into();
+    ssh_proxy_lifecycle::service_provider::remote_write_peer_artifact_command(
+        artifact,
+        remote_platform,
+    )
 }
 
 pub(crate) fn remote_auto_install_command(
     remote_path: &str,
     args: &cli::InstallRemoteArgs,
 ) -> String {
-    format!(
-        "set -eu; if [ \"$(uname -s 2>/dev/null || true)\" = Darwin ] && command -v launchctl >/dev/null 2>&1; then {launchd}; elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then {systemd}; else {nohup}; fi",
-        launchd = provider::remote_launchd_install_command(remote_path, args),
-        systemd = provider::remote_systemd_install_command(remote_path, args),
-        nohup = provider::remote_nohup_start_command(remote_path, args, true)
-    )
+    ssh_proxy_lifecycle::service_provider::remote_auto_install_command(&service_spec(
+        remote_path,
+        args,
+    ))
 }
 
 pub(crate) fn remote_systemd_install_command(
     remote_path: &str,
     args: &cli::InstallRemoteArgs,
 ) -> String {
-    provider::remote_systemd_install_command(remote_path, args)
+    ssh_proxy_lifecycle::service_provider::remote_systemd_install_command(&service_spec(
+        remote_path,
+        args,
+    ))
 }
 
 pub(crate) fn remote_launchd_install_command(
     remote_path: &str,
     args: &cli::InstallRemoteArgs,
 ) -> String {
-    provider::remote_launchd_install_command(remote_path, args)
+    ssh_proxy_lifecycle::service_provider::remote_launchd_install_command(&service_spec(
+        remote_path,
+        args,
+    ))
 }
 
 pub(crate) fn remote_nohup_start_command(
@@ -42,26 +52,32 @@ pub(crate) fn remote_nohup_start_command(
     args: &cli::InstallRemoteArgs,
     stop_existing: bool,
 ) -> String {
-    provider::remote_nohup_start_command(remote_path, args, stop_existing)
+    ssh_proxy_lifecycle::service_provider::remote_nohup_start_command(
+        &service_spec(remote_path, args),
+        stop_existing,
+    )
 }
 
 pub(crate) fn remote_schtasks_install_command(
     remote_path: &str,
     args: &cli::InstallRemoteArgs,
 ) -> String {
-    provider::remote_schtasks_install_command(remote_path, args)
+    ssh_proxy_lifecycle::service_provider::remote_schtasks_install_command(&service_spec(
+        remote_path,
+        args,
+    ))
 }
 
 pub(crate) fn remote_nohup_status_snippet(remote_tcp: SocketAddr) -> String {
-    provider::remote_nohup_status_snippet(remote_tcp)
+    ssh_proxy_lifecycle::service_provider::remote_nohup_status_snippet(remote_tcp)
 }
 
 pub(crate) fn remote_nohup_stop_snippet(remote_tcp: SocketAddr) -> String {
-    provider::remote_nohup_stop_snippet(remote_tcp)
+    ssh_proxy_lifecycle::service_provider::remote_nohup_stop_snippet(remote_tcp)
 }
 
 pub(crate) fn remote_nohup_files(remote_tcp: SocketAddr) -> (String, String, String, String) {
-    provider::remote_nohup_files(remote_tcp)
+    ssh_proxy_lifecycle::service_provider::remote_nohup_files(remote_tcp)
 }
 
 pub(crate) fn token_arg(token: Option<&str>) -> String {
@@ -74,6 +90,11 @@ pub(crate) fn node_daemon_extra_args(args: &cli::InstallRemoteArgs) -> String {
 
 pub(crate) fn sh_quote(value: &str) -> String {
     provider::sh_quote(value)
+}
+
+fn service_spec(remote_path: &str, args: &cli::InstallRemoteArgs) -> RemotePeerServiceSpec {
+    let intent: RemoteInstallIntent = args.into();
+    RemotePeerServiceSpec::from_intent(remote_path, &intent)
 }
 
 #[cfg(test)]
@@ -131,9 +152,12 @@ mod tests {
         let launchd = remote_launchd_install_command("/Users/me/bin/ssh_proxy", &args);
         let nohup = remote_nohup_start_command("/home/me/bin/ssh_proxy", &args, true);
 
-        assert!(systemd.contains("\"service_manager\":\"systemd_user\""));
-        assert!(launchd.contains("\"service_manager\":\"launchd_user\""));
-        assert!(nohup.contains("\"service_manager\":\"nohup_supervisor\""));
+        assert!(systemd.contains("systemctl --user daemon-reload"));
+        assert!(launchd.contains("launchctl bootstrap"));
+        assert!(nohup.contains("nohup /bin/sh"));
+        assert!(!systemd.contains("\"service_manager\""));
+        assert!(!launchd.contains("\"service_manager\""));
+        assert!(!nohup.contains("\"service_manager\""));
     }
 
     #[test]
@@ -144,6 +168,6 @@ mod tests {
             remote_schtasks_install_command(r"%LOCALAPPDATA%\ssh_proxy\bin\ssh_proxy.exe", &args);
 
         assert!(command.contains("schtasks /Create"));
-        assert!(command.contains("windows_schtasks_user"));
+        assert!(!command.contains("windows_schtasks_user"));
     }
 }

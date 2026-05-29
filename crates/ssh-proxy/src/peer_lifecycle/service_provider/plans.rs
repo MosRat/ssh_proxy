@@ -1,17 +1,20 @@
-use crate::{cli, peer_lifecycle::commands};
+use crate::cli;
 use ssh_proxy_core::{
     intent::RemoteInstallIntent,
     model::{PersistenceMode, RemotePlatform},
 };
+use ssh_proxy_lifecycle::service_provider::{RemotePeerServiceSpec, remote_service_action_plan};
 
 use super::{
     contract::ServiceProviderPlan, kind::ServiceProviderKind, selection::provider_for_platform,
 };
+use crate::peer_lifecycle::workflow::{LifecycleOperation, LifecyclePlan};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RemoteServiceInstallPlan {
     pub(crate) provider: ServiceProviderPlan,
     pub(crate) command: String,
+    pub(crate) action_plan: LifecyclePlan,
     pub(crate) reported_service_manager: String,
 }
 
@@ -25,24 +28,13 @@ pub(crate) fn remote_service_install_plan(
 
 pub(crate) fn remote_service_install_plan_for_intent(
     remote_path: &str,
-    args: &cli::InstallRemoteArgs,
+    _args: &cli::InstallRemoteArgs,
     intent: &RemoteInstallIntent,
 ) -> RemoteServiceInstallPlan {
     let kind = provider_for_platform(intent.remote_platform, intent.persistence);
-    let command = match intent.persistence {
-        PersistenceMode::None => String::new(),
-        PersistenceMode::Auto => {
-            if intent.remote_platform == RemotePlatform::Windows {
-                commands::remote_schtasks_install_command(remote_path, args)
-            } else {
-                commands::remote_auto_install_command(remote_path, args)
-            }
-        }
-        PersistenceMode::Systemd => commands::remote_systemd_install_command(remote_path, args),
-        PersistenceMode::Nohup => commands::remote_nohup_start_command(remote_path, args, true),
-        PersistenceMode::Launchd => commands::remote_launchd_install_command(remote_path, args),
-        PersistenceMode::Schtasks => commands::remote_schtasks_install_command(remote_path, args),
-    };
+    let service_spec = RemotePeerServiceSpec::from_intent(remote_path, intent);
+    let action_plan = remote_service_action_plan(&service_spec, LifecycleOperation::Install);
+    let command = action_plan.command.clone();
     let reported_service_manager = match intent.persistence {
         PersistenceMode::None => "none",
         PersistenceMode::Auto if intent.remote_platform == RemotePlatform::Windows => {
@@ -55,6 +47,7 @@ pub(crate) fn remote_service_install_plan_for_intent(
     RemoteServiceInstallPlan {
         provider: ServiceProviderPlan::new(kind, "ssh-proxy-helper"),
         command,
+        action_plan: action_plan.lifecycle_plan,
         reported_service_manager,
     }
 }
