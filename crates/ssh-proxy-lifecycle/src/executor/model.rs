@@ -1,7 +1,6 @@
 use std::{future::Future, net::SocketAddr, pin::Pin};
 
-use anyhow::{Context, Result, bail};
-use tokio::net::TcpStream;
+use anyhow::{Result, bail};
 
 use crate::artifacts::PeerArtifact;
 use ssh_proxy_core::command::ExecOutput;
@@ -61,12 +60,7 @@ pub trait PeerExecutor {
     }
 
     fn probe_tcp<'a>(&'a self, addr: SocketAddr) -> BoxExecutorFuture<'a, ()> {
-        Box::pin(async move {
-            TcpStream::connect(addr)
-                .await
-                .with_context(|| format!("failed to probe TCP endpoint {addr}"))?;
-            Ok(())
-        })
+        Box::pin(async move { bail!("TCP probing for {addr} is not supported by this executor") })
     }
 
     fn service_control<'a>(
