@@ -2299,6 +2299,7 @@ dependencies = [
  "serde_json",
  "ssh-proxy-config",
  "ssh-proxy-core",
+ "ssh-proxy-lifecycle",
 ]
 
 [[package]]

@@ -3,9 +3,16 @@ use std::net::SocketAddr;
 use serde_json::Value;
 use ssh_proxy_config::TokenMetadata;
 
+mod commands;
 mod install;
 mod remote_setup;
 
+pub use commands::{
+    default_persistent_remote_path_command, remote_clean_command, remote_doctor_command,
+    remote_logs_command, remote_node_control_command, remote_node_control_json_command,
+    remote_resolve_peer_defaults_command, remote_restart_command, remote_status_command,
+    remote_stop_command, sh_quote,
+};
 pub use install::RemoteInstallPlan;
 pub use remote_setup::{RemoteArtifactIntent, RemoteArtifactKind, RemoteSetupPlan};
 
