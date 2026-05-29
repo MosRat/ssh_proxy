@@ -138,6 +138,8 @@ pub struct RouteEndpointIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen: Option<SocketAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_listen: Option<SocketAddr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_listen: Option<SocketAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_peer: Option<SocketAddr>,
@@ -341,6 +343,7 @@ mod tests {
             RouteDirection::RemoteUsesLocal,
         );
         intent.endpoint.remote_listen = Some("127.0.0.1:18080".parse().unwrap());
+        intent.endpoint.control_listen = Some("127.0.0.1:18081".parse().unwrap());
         intent.endpoint.tcp_target = Some(TcpTarget {
             host: "db.internal".to_string(),
             port: 5432,
@@ -354,6 +357,7 @@ mod tests {
         assert_eq!(value["direction"], "remote-uses-local");
         assert_eq!(value["transport"], "ssh-native");
         assert_eq!(value["endpoint"]["remote_listen"], "127.0.0.1:18080");
+        assert_eq!(value["endpoint"]["control_listen"], "127.0.0.1:18081");
         assert_eq!(value["endpoint"]["tcp_target"]["host"], "db.internal");
         assert_eq!(value["runtime"]["transport_pool_size"], 4);
         assert_eq!(value["persist"], false);
