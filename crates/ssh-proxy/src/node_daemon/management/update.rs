@@ -1,34 +1,19 @@
-use std::{
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
+use std::{fs, io::Read, path::Path};
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use ssh_proxy_core::external::ExternalActionClass;
+use ssh_proxy_daemon::{
+    DaemonStagedUpdate as StagedUpdate, DaemonUpdatePlan,
+    DaemonUpdateSwitchPlan as UpdateSwitchPlan,
+};
+use ssh_proxy_platform::{PlatformCommandPlan, PlatformScriptPlan};
 
 use crate::{
     node_daemon::{NodeManager, NodeRequest, jobs, response_line},
     paths,
 };
-
-#[derive(Debug, Clone)]
-struct StagedUpdate {
-    source: PathBuf,
-    staged_path: PathBuf,
-    hash: String,
-    version: String,
-}
-
-#[derive(Debug, Clone)]
-struct UpdateSwitchPlan {
-    service_name: String,
-    current_exe: PathBuf,
-    backup_path: PathBuf,
-    script_path: PathBuf,
-}
 
 impl NodeManager {
     pub(in crate::node_daemon) async fn reconcile_daemon_update_job(&self) -> Result<()> {
@@ -215,7 +200,9 @@ impl NodeManager {
                 "daemon self-update switch script prepared",
             )
             .await?;
-        if let Err(err) = launch_update_switch(&switch_plan) {
+        let update_plan = DaemonUpdatePlan::new(staged.clone()).with_switch(switch_plan.clone());
+        let switch_script_plan = platform_switch_script_plan(&switch_plan);
+        if let Err(err) = launch_update_switch(&switch_script_plan) {
             let error = err.to_string();
             let update_state = self
                 .state
@@ -246,6 +233,8 @@ impl NodeManager {
                 "daemon_api": "v0.3",
                 "job": job.to_value(),
                 "update_state": update_state,
+                "update_plan": update_plan.to_json(),
+                "external_action": switch_script_plan.command_plan(),
                 "requires_daemon": true,
             }));
         }
@@ -289,6 +278,8 @@ impl NodeManager {
                 "backup_path": switch_plan.backup_path,
                 "script_path": switch_plan.script_path,
             },
+            "update_plan": update_plan.to_json(),
+            "external_action": switch_script_plan.command_plan(),
             "requires_daemon": true,
         }))
     }
@@ -380,34 +371,41 @@ fn write_update_switch_script(plan: &UpdateSwitchPlan, staged_path: &Path) -> Re
     Ok(())
 }
 
-fn launch_update_switch(plan: &UpdateSwitchPlan) -> Result<()> {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("powershell");
-        command.args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            &plan.script_path.display().to_string(),
-        ]);
-        command
+fn platform_switch_script_plan(plan: &UpdateSwitchPlan) -> PlatformScriptPlan {
+    if cfg!(windows) {
+        PlatformScriptPlan::new(
+            "powershell",
+            [
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-File".to_string(),
+                plan.script_path.display().to_string(),
+            ],
+            plan.script_path.display().to_string(),
+            ExternalActionClass::SelfUpdate,
+            "launch daemon self-update switch script",
+        )
+        .with_repair_action("run ssh_proxy daemon install --scope system --elevate")
     } else {
-        let mut command = Command::new("sh");
-        command.arg(&plan.script_path);
-        command
-    };
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| {
-            format!(
-                "failed to launch daemon self-update script {}",
-                plan.script_path.display()
-            )
-        })?;
-    Ok(())
+        PlatformScriptPlan::new(
+            "sh",
+            [plan.script_path.display().to_string()],
+            plan.script_path.display().to_string(),
+            ExternalActionClass::SelfUpdate,
+            "launch daemon self-update switch script",
+        )
+        .with_repair_action("restart ssh_proxy service after verifying the staged binary")
+    }
+}
+
+fn launch_update_switch(plan: &PlatformScriptPlan) -> Result<()> {
+    ssh_proxy_platform::spawn_command(plan.command_plan().clone()).with_context(|| {
+        format!(
+            "failed to launch daemon self-update script {}",
+            plan.script_path
+        )
+    })
 }
 
 fn windows_update_script(plan: &UpdateSwitchPlan, staged_path: &Path) -> String {
@@ -521,19 +519,23 @@ fn file_sha256_hex(path: &Path) -> Result<String> {
 }
 
 fn binary_version(path: &Path) -> Result<String> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
+    let plan = PlatformCommandPlan::new(
+        path.display().to_string(),
+        ["--version"],
+        ExternalActionClass::SelfUpdate,
+        "verify staged daemon update candidate version",
+    )
+    .with_repair_action("pass a runnable ssh_proxy binary with --source");
+    let outcome = ssh_proxy_platform::capture_command(plan)
         .with_context(|| format!("failed to run staged update candidate {}", path.display()))?;
-    if !output.status.success() {
+    if !outcome.ok {
         anyhow::bail!(
             "staged update candidate --version failed with status {:?}: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr).trim()
+            outcome.status_code,
+            outcome.stderr.trim()
         );
     }
-    let text = String::from_utf8(output.stdout)
-        .context("staged update candidate --version output was not utf-8")?;
+    let text = outcome.stdout;
     let version = text
         .split_whitespace()
         .last()

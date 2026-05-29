@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,36 @@ pub struct PlatformCommandOutcome {
     pub stderr: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformScriptPlan {
+    pub command: PlatformCommandPlan,
+    pub script_path: String,
+}
+
+impl PlatformScriptPlan {
+    pub fn new(
+        program: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        script_path: impl Into<String>,
+        class: ExternalActionClass,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            command: PlatformCommandPlan::new(program, args, class, reason),
+            script_path: script_path.into(),
+        }
+    }
+
+    pub fn with_repair_action(mut self, repair_action: impl Into<String>) -> Self {
+        self.command = self.command.with_repair_action(repair_action);
+        self
+    }
+
+    pub fn command_plan(&self) -> &PlatformCommandPlan {
+        &self.command
+    }
+}
+
 impl PlatformCommandOutcome {
     pub fn to_json(&self) -> Value {
         json!({
@@ -88,6 +118,17 @@ pub fn capture_command(plan: PlatformCommandPlan) -> Result<PlatformCommandOutco
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
+}
+
+pub fn spawn_command(plan: PlatformCommandPlan) -> Result<()> {
+    Command::new(&plan.program)
+        .args(&plan.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", plan.command_line()))?;
+    Ok(())
 }
 
 pub fn command_available(program: &str) -> bool {
@@ -123,5 +164,19 @@ mod tests {
         assert_eq!(value["class"], "required_provider");
         assert_eq!(value["repair_action"], "rerun daemon install");
         assert_eq!(value["status_code"], 3);
+    }
+
+    #[test]
+    fn script_plan_carries_self_update_classification() {
+        let plan = PlatformScriptPlan::new(
+            "sh",
+            ["switch.sh"],
+            "switch.sh",
+            ExternalActionClass::SelfUpdate,
+            "launch daemon self-update switch script",
+        );
+
+        assert_eq!(plan.command_plan().class, ExternalActionClass::SelfUpdate);
+        assert_eq!(plan.script_path, "switch.sh");
     }
 }
