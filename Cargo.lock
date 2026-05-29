@@ -2367,6 +2367,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde_json",
+ "ssh-proxy-core",
  "ssh-proxy-protocol",
  "tokio",
  "tokio-rustls",
