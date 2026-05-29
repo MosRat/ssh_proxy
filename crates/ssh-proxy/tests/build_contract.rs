@@ -207,6 +207,43 @@ fn workspace_crate_boundaries_remain_layered() {
         "crates/ssh-proxy-ssh/Cargo.toml",
         &["clap", "windows-service", "ssh-proxy"],
     );
+    assert_manifest_avoids(
+        "crates/ssh-proxy-service/Cargo.toml",
+        &[
+            "clap",
+            "russh",
+            "tokio",
+            "windows-service",
+            "ssh-proxy",
+            "service-manager",
+        ],
+    );
+}
+
+#[test]
+fn workspace_members_do_not_depend_on_service_manager() {
+    let crates_dir = workspace_root().join("crates");
+    let entries = fs::read_dir(&crates_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", crates_dir.display()));
+
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                crates_dir.display()
+            )
+        });
+        let manifest_path = entry.path().join("Cargo.toml");
+        if manifest_path.is_file() {
+            let manifest = fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
+            assert!(
+                !manifest_has_direct_crate(&manifest, "service-manager"),
+                "{} should keep service-manager out of production dependencies",
+                manifest_path.display()
+            );
+        }
+    }
 }
 
 fn read_repo_file(relative: &str) -> String {

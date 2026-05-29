@@ -4,6 +4,7 @@ use std::{thread, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use sha2::Digest;
+pub(crate) use ssh_proxy_service::ServiceScope;
 
 use super::inventory::ServiceInventory;
 use crate::{cli, config, control_socket, peer_lifecycle};
@@ -30,12 +31,6 @@ pub(crate) struct ServicePlan {
     pub(crate) config_path: PathBuf,
     pub(crate) route_store_path: PathBuf,
     pub(crate) config_to_save: Option<config::AppConfig>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ServiceScope {
-    User,
-    System,
 }
 
 impl ServicePlan {

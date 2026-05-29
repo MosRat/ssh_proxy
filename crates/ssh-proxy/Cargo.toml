@@ -30,6 +30,7 @@ ssh-proxy-control.workspace = true
 ssh-proxy-core.workspace = true
 ssh-proxy-lifecycle.workspace = true
 ssh-proxy-protocol.workspace = true
+ssh-proxy-service = { version = "0.1.1", path = "../ssh-proxy-service" }
 ssh-proxy-ssh.workspace = true
 ssh-proxy-transport.workspace = true
 tokio.workspace = true
