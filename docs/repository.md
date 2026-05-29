@@ -47,7 +47,8 @@ Current horizontal crates:
   from app runtimes.
 - `crates/ssh-proxy-transport/`: peer transport contracts, TLS/QUIC helpers,
   QUIC stream adapters, remote helper opener runtime, peer listener runtime,
-  remote helper stream/error models, and SOCKS5/HTTP proxy parser primitives.
+  remote helper stream/error models, SPX worker status DTOs, and SOCKS5/HTTP
+  proxy parser primitives.
 - `crates/ssh-proxy-route/`: route runtime decision reports, route plan
   rendering, pool sizing policy, preflight metadata, route task status records,
   and route status JSON contracts.
@@ -56,9 +57,11 @@ Current horizontal crates:
 - `crates/ssh-proxy-service/`: local service-management contracts and provider
   report DTOs.
 - `crates/ssh-proxy-platform/`: local platform command plans, command outcomes,
-  and external execution classification for service adapters.
+  script plans, subprocess capture/spawn helpers, and external execution
+  classification for service adapters and self-update.
 - `crates/ssh-proxy-daemon/`: command-neutral daemon job, session, peer,
-  update, state, request-view DTOs, and daemon client fallback reports.
+  update, state, request intent/payload DTOs, and daemon client fallback
+  reports.
 - `crates/ssh-proxy-cli/`: Clap command and argument contracts plus adapters
   into core command-neutral intents. The binary crate converts those intents
   into daemon, lifecycle, deploy, or route calls.
@@ -76,6 +79,8 @@ large vertical subsystems are still split by semantic module:
   reuse, route readiness, handoff, and setup sequencing.
 - `node_daemon/remote_setup/`: payload rendering and SSH execution adapters for
   deploy-owned VS Code settings, server-env setup, and status-file intents.
+- `node_daemon/management/update.rs`: app-side self-update orchestration using
+  daemon update DTOs and platform command/script plans.
 - `quic_native/`: QUIC-native control and per-flow stream runtime.
 - `service/`: local service planning and platform execution.
 - `socks/`: app-side SOCKS5H/HTTP listener dispatch, relay helpers, and
@@ -89,6 +94,9 @@ Intent/runtime layering rules:
   planning logic should move to the appropriate workspace crate first.
 - Runtime adapters own external mechanisms: SSH exec/upload/direct-tcpip,
   Tokio listeners, local service FFI, and platform command execution.
+- External command execution must declare its class at the plan layer:
+  provider commands, diagnostic probes, self-update scripts, and emergency
+  compatibility paths are not interchangeable.
 - Boundary tests enforce production dependency direction for core/config/route/
   deploy/lifecycle/transport/daemon crates, prevent runtime imports from
   crossing layers, and keep `service-manager` out of production dependencies.

@@ -41,6 +41,10 @@ v0.3 keeps existing wire formats stable while sharing the protocol vocabulary:
 - `protocol_core::control` owns daemon command alias normalization and typed
   dispatch names. Legacy wide `NodeRequest` JSON still parses, but command
   matching does not live in the socket server.
+- `ssh-proxy-daemon::control` owns the command-neutral `NodeRequestIntent` and
+  payload summaries derived from legacy daemon JSON. The app control protocol
+  is responsible for backward-compatible deserialization only; daemon runtime
+  code should consume the typed view before dispatch.
 - `protocol_core::descriptor` owns the typed peer descriptor DTO used by config
   import/export, descriptor refresh, compatibility checks, remote install
   endpoint adoption, and doctor output. Subsystems should parse descriptors once
@@ -142,12 +146,22 @@ Command-neutral intent models sit below CLI parsing and above runtime adapters:
   external action classification for service-provider commands. Service
   adapters should route systemd, launchd, scheduled task, Windows SCM, and UAC
   execution through this layer before rendering reports.
+- Self-update and service-provider subprocesses must be represented as
+  `PlatformCommandPlan` or `PlatformScriptPlan` with an
+  `ExternalActionClass`. Daemon runtime modules should call platform
+  `capture_command`/`spawn_command` helpers instead of constructing raw
+  subprocesses.
 
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening and session
 scheduling into focused submodules. `controller` keeps SPX behavior stable while
 splitting command dispatch, control-client requests, and SOCKS listener
-orchestration from shared state and status accounting.
+orchestration from shared state and status accounting. SPX worker status is
+materialized through `ssh-proxy-transport::spx::SpxBridgeWorkerSnapshot`, so
+status renderers classify connected/degraded/reconnecting state from a typed
+transport DTO. `socks::tunnel` centralizes app-side backend selection for SPX,
+ssh-native, and QUIC-native tunnels while protocol parsing remains in
+`ssh-proxy-transport`.
 
 ## Symmetric Peer Lifecycle
 
@@ -245,6 +259,10 @@ execution to shared modules.
   names the server directory, relative path, artifact kind, backup policy, and
   read/write command shape. The app crate adapts those intents to `SshExecutor`,
   so deploy models do not depend on SSH runtime code.
+- `ssh-proxy-deploy::RemoteSetupExecutionPlan` groups remote setup payloads,
+  artifact intents, and optional script intents. It is the planning boundary for
+  VS Code settings, server-env, and remote status updates; app modules execute
+  the plan and map outcomes back into the legacy session/status JSON.
 - `quic_native::runtime` owns listener orchestration and data-flow accounting.
   Connection establishment lives in `runtime::connection`; status rendering
   lives in `runtime::status` with `snapshot`, `profile`, and `render`
@@ -256,7 +274,9 @@ execution to shared modules.
 - `node_daemon::management` owns daemon update transactions and the preview node
   control surface. User/report JSON for nodes, jobs, job events, and peer
   ensure/update wrappers lives in `management::report`; staged self-update
-  orchestration and switch-script helpers live in `management::update`.
+  orchestration lives in `management::update`. Pure update DTOs live in
+  `ssh-proxy-daemon::update`, while switch-script launch and version probing go
+  through `ssh-proxy-platform` plans classified as `self_update`.
 - `node_daemon::state` owns daemon state file orchestration. The serialized job,
   session, peer, remote setup, and daemon records live in `ssh-proxy-daemon`;
   app-side store modules keep file I/O, async locking, schema compatibility, and

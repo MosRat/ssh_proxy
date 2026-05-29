@@ -41,6 +41,10 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
 - path and atomic file store helpers: `cargo test -p ssh-proxy-config`;
 - control socket endpoints, JSON-line request limits, Unix socket and named
   pipe helpers: `cargo test -p ssh-proxy-control`;
+- daemon command-neutral job/session/update/control DTOs:
+  `cargo test -p ssh-proxy-daemon`;
+- platform command/script plan classification:
+  `cargo test -p ssh-proxy-platform`;
 - Rust-native SSH config parsing, auth helpers, jump chains, exec/upload API:
   `cargo test -p ssh-proxy-ssh`;
 - data-plane frame compatibility: `cargo test -p ssh-proxy-protocol`;
@@ -49,11 +53,15 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
 - QUIC-native control framing: `cargo test -p ssh_proxy --bin ssh_proxy quic_native`;
 - remote install lifecycle execution: `cargo test -p ssh_proxy --bin ssh_proxy deploy`;
 - remote setup artifact writes: `cargo test -p ssh_proxy --bin ssh_proxy remote_setup`;
+- self-update plan/execution adapters:
+  `cargo test -p ssh_proxy --bin ssh_proxy update`;
 - proxy session spec/state-machine boundaries:
   `cargo test -p ssh_proxy --bin ssh_proxy proxy_session`;
 - remote peer file command rendering: `cargo test -p ssh_proxy --bin ssh_proxy remote_config_write`;
 - local service lifecycle reporting: `cargo test -p ssh_proxy --bin ssh_proxy service`;
 - route transport decisions and daemon route metadata: `cargo test -p ssh_proxy --bin ssh_proxy routes`;
+- SPX runtime report and proxy tunnel adapter changes:
+  `cargo test -p ssh_proxy --bin ssh_proxy controller socks`;
 - repair/report schema: `cargo test -p ssh_proxy --bin ssh_proxy repair diagnostics`;
 - extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
 
