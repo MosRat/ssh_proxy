@@ -405,7 +405,7 @@ mod tests {
                 preferred: 17890,
                 auto_pick: true,
             },
-            connect_mode: cli::RouteConnectMode::Auto,
+            connect_mode: cli::RouteConnectMode::Auto.into(),
             apply_policy: Default::default(),
         };
 

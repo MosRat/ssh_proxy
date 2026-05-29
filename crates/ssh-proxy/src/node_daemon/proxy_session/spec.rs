@@ -2,6 +2,7 @@ use std::{net::IpAddr, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ssh_proxy_core::model::RouteConnectMode;
 
 use crate::cli;
 
@@ -17,7 +18,7 @@ pub(crate) struct ProxySessionSpec {
     pub(crate) local_proxy: String,
     pub(crate) remote_bind: IpAddr,
     pub(crate) remote_port_policy: RemotePortPolicy,
-    pub(crate) connect_mode: cli::RouteConnectMode,
+    pub(crate) connect_mode: RouteConnectMode,
     pub(crate) apply_policy: ApplyPolicy,
 }
 
@@ -96,7 +97,7 @@ impl ProxySessionSpec {
                 preferred: args.remote_port,
                 auto_pick: true,
             },
-            connect_mode: args.connect_mode,
+            connect_mode: args.connect_mode.into(),
             apply_policy: ApplyPolicy {
                 vscode_settings: !args.no_remote_machine_settings,
                 terminal_env: !args.no_terminal_env,

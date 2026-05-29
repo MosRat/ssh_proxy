@@ -7,7 +7,6 @@ use ssh_proxy_deploy::{
 };
 
 use super::super::proxy_session::ProxySessionSpec;
-use crate::cli;
 
 pub(super) fn setup_hash(payload: &Value) -> String {
     let mut hasher = Sha256::new();
@@ -31,7 +30,7 @@ pub(super) fn setup_payload(
         remote_url: remote_url.to_string(),
         bind_host: spec.remote_bind.to_string(),
         port: spec.remote_port_policy.preferred,
-        connect_mode: connect_mode_name(spec.connect_mode).to_string(),
+        connect_mode: spec.connect_mode.to_string(),
         route_id: spec.route_id(),
         job_id: spec.job_id(),
         route_owner: route
@@ -56,12 +55,4 @@ pub(super) fn setup_payload(
 
 pub(super) fn build_proxy_env(proxy_url: &str, no_proxy: &str) -> BTreeMap<String, String> {
     deploy_build_proxy_env(proxy_url, no_proxy)
-}
-
-fn connect_mode_name(mode: cli::RouteConnectMode) -> &'static str {
-    match mode {
-        cli::RouteConnectMode::Auto => "auto",
-        cli::RouteConnectMode::Direct => "direct",
-        cli::RouteConnectMode::ReverseLink => "reverse-link",
-    }
 }

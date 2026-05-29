@@ -2,16 +2,14 @@ use std::{net::IpAddr, time::Duration};
 
 use anyhow::{Result, anyhow};
 use serde_json::json;
+use ssh_proxy_core::model::RouteConnectMode;
 
-use crate::{
-    cli,
-    node_daemon::{
-        NodeManager, NodeRequest,
-        handoff::{self, HandoffProbeStatus},
-        jobs::{JobPhase, JobRecord, JobState},
-        remote_setup, response_line,
-        state::{ProxySessionRecordExt, RemoteSetupStatus},
-    },
+use crate::node_daemon::{
+    NodeManager, NodeRequest,
+    handoff::{self, HandoffProbeStatus},
+    jobs::{JobPhase, JobRecord, JobState},
+    remote_setup, response_line,
+    state::{ProxySessionRecordExt, RemoteSetupStatus},
 };
 
 use super::{ApplyPolicy, ProxySessionSpec, RemotePortPolicy, error_chain, spec::sanitize_key};
@@ -258,7 +256,7 @@ pub(super) fn spec_from_apply_request(request: &NodeRequest) -> Result<ProxySess
             preferred: remote_port,
             auto_pick: true,
         },
-        connect_mode: cli::RouteConnectMode::ReverseLink,
+        connect_mode: RouteConnectMode::ReverseLink,
         apply_policy: ApplyPolicy::default(),
     })
 }

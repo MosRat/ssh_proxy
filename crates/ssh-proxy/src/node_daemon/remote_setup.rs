@@ -565,7 +565,7 @@ echo "remote-proxy: cleanup complete"
 mod tests {
     use std::net::IpAddr;
 
-    use crate::cli;
+    use ssh_proxy_core::model::RouteConnectMode;
 
     use super::*;
     use ssh_proxy_deploy::{RemoteArtifactIntent, RemoteArtifactKind};
@@ -582,7 +582,7 @@ mod tests {
                 preferred: 17890,
                 auto_pick: true,
             },
-            connect_mode: cli::RouteConnectMode::ReverseLink,
+            connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: super::super::proxy_session::ApplyPolicy::default(),
         }
     }

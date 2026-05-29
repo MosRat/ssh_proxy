@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-
-#[cfg(test)]
-use crate::cli;
+use ssh_proxy_core::model::RouteConnectMode;
 
 use super::{
     NodeManager, NodeRequest,
@@ -298,7 +296,7 @@ mod tests {
                 preferred: 17890,
                 auto_pick: true,
             },
-            connect_mode: cli::RouteConnectMode::ReverseLink,
+            connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         };
         assert_eq!(spec.route_id(), "v3-window-a");
@@ -354,7 +352,7 @@ mod tests {
                 preferred: 17890,
                 auto_pick: true,
             },
-            connect_mode: cli::RouteConnectMode::ReverseLink,
+            connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         };
 
@@ -403,7 +401,7 @@ mod tests {
                 preferred: 17890,
                 auto_pick: true,
             },
-            connect_mode: cli::RouteConnectMode::ReverseLink,
+            connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         };
         let mut enriched = existing.clone();
@@ -431,7 +429,7 @@ mod tests {
                 preferred: 17890,
                 auto_pick: true,
             },
-            connect_mode: cli::RouteConnectMode::ReverseLink,
+            connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         };
         validate_proxy_session_spec(&spec).unwrap();

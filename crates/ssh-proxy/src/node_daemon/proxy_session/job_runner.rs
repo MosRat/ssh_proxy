@@ -182,7 +182,7 @@ pub(in crate::node_daemon::proxy_session) fn route_request_from_spec(
     NodeRequest::route_intent(cli::RouteArgs {
         target: spec.target.clone(),
         direction: cli::RouteDirection::RemoteUsesLocal,
-        connect_mode: spec.connect_mode,
+        connect_mode: spec.connect_mode.into(),
         port: spec.remote_port_policy.preferred,
         bind: spec.remote_bind,
         tcp_target: None,

@@ -6,6 +6,7 @@ use std::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use ssh_proxy_core::model::RouteConnectMode;
 use ssh_proxy_daemon::job::{enum_value, job_health};
 pub(super) use ssh_proxy_daemon::{
     DaemonStateRecord, PeerStatusRecord, ProxySessionRecord, RemoteSetupStatus,
@@ -46,7 +47,7 @@ impl ProxySessionRecordExt for ProxySessionRecord {
                 preferred: self.remote_port,
                 auto_pick: true,
             },
-            connect_mode: crate::cli::RouteConnectMode::ReverseLink,
+            connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: decode_or_default(&self.apply_policy)?,
         })
     }
@@ -227,8 +228,6 @@ mod tests {
 
     use super::super::jobs::{JobPhase, JobState};
     use super::*;
-    use crate::cli;
-
     fn spec() -> ProxySessionSpec {
         ProxySessionSpec {
             target: "126".to_string(),
@@ -241,7 +240,7 @@ mod tests {
                 preferred: 17890,
                 auto_pick: true,
             },
-            connect_mode: cli::RouteConnectMode::ReverseLink,
+            connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: super::super::proxy_session::ApplyPolicy::default(),
         }
     }

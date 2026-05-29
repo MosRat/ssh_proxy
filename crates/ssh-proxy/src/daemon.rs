@@ -671,7 +671,7 @@ mod tests {
         };
         let spec = ProxySessionSpec::from_up_args(&args);
         assert_eq!(spec.target, "edge");
-        assert_eq!(spec.connect_mode, cli::RouteConnectMode::ReverseLink);
+        assert_eq!(spec.connect_mode, cli::RouteConnectMode::ReverseLink.into());
         assert_eq!(spec.local_proxy, "http://127.0.0.1:10808/");
         assert_eq!(spec.route_id(), "v3-workspace-a");
     }
