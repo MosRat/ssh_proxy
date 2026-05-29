@@ -2,9 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ssh_proxy_core::report::RuntimeDecisionReport;
 
+mod decision;
 mod policy;
 mod status;
 
+pub use decision::{
+    ConnectionDecision, PeerReadinessInput, TransportSelection, TransportSelectionPolicyInput,
+    direct_endpoint_for_peer, direct_transport_policy, direct_transport_policy_reason,
+    parse_transport_mode, persistent_peer_ready, remote_transport_name, ssh_data_plane_reason,
+    ssh_mode_name, ssh_mode_reason, tls_peer_auth_mode, transport_selection_policy,
+};
 pub use policy::{
     RoutePoolSizingInput, RouteSshSessionPoolPolicy, RouteTransportPoolPolicy,
     plan_ssh_session_pool, plan_transport_pool, pool_policy_name,

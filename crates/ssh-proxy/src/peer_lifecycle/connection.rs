@@ -1,8 +1,8 @@
 use std::net::SocketAddr;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{cli, config};
 
@@ -30,28 +30,36 @@ impl ConnectionDecision {
         source: impl Into<String>,
         reason: impl Into<String>,
     ) -> Self {
-        Self {
-            selected_transport: remote_transport_name(transport).to_string(),
-            source: source.into(),
-            reason: reason.into(),
-            endpoint: None,
-            requires_external_ssh: matches!(transport, cli::RemoteTransport::Exec),
-        }
+        let decision =
+            ssh_proxy_route::ConnectionDecision::from_transport(transport.into(), source, reason);
+        Self::from_route_decision(decision)
     }
 
     pub(crate) fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
     }
+
+    fn from_route_decision(decision: ssh_proxy_route::ConnectionDecision) -> Self {
+        Self {
+            selected_transport: decision.selected_transport,
+            source: decision.source,
+            reason: decision.reason,
+            endpoint: decision.endpoint,
+            requires_external_ssh: decision.requires_external_ssh,
+        }
+    }
 }
 
 pub(crate) fn persistent_peer_ready(peer: Option<&config::PeerRecord>) -> bool {
     peer.is_some_and(|peer| {
-        peer.remote_path.is_some()
-            && peer.control_endpoint.is_some()
-            && (peer.transport.is_some()
-                || peer.tls_transport.is_some()
-                || peer.quic_transport.is_some())
+        ssh_proxy_route::persistent_peer_ready(ssh_proxy_route::PeerReadinessInput {
+            has_remote_path: peer.remote_path.is_some(),
+            has_control_endpoint: peer.control_endpoint.is_some(),
+            has_transport: peer.transport.is_some(),
+            has_tls_transport: peer.tls_transport.is_some(),
+            has_quic_transport: peer.quic_transport.is_some(),
+        })
     })
 }
 
@@ -65,146 +73,49 @@ pub(crate) fn transport_selection_policy(
     remote_side_listens: bool,
     persistent_peer_ready: bool,
 ) -> Result<TransportSelection> {
-    if args.remote_transport != cli::RemoteTransport::Auto {
-        return Ok(TransportSelection {
-            transport: args.remote_transport,
-            source: "cli".to_string(),
-            reason: format!(
-                "selected by --remote-transport {}",
-                remote_transport_name(args.remote_transport)
-            ),
-        });
-    }
-
-    if let Some(value) = profile.and_then(|profile| profile.remote_transport.as_deref()) {
-        let transport = parse_remote_transport(value)?;
-        if transport != cli::RemoteTransport::Auto {
-            return Ok(TransportSelection {
-                transport,
-                source: "profile".to_string(),
-                reason: "selected by target profile remote_transport".to_string(),
-            });
-        }
-    }
-
-    if let Some(addr) = remote_tls {
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::TlsTcp,
-            source: "topology".to_string(),
-            reason: format!(
-                "direct TLS/TCP peer endpoint {addr} is configured; TLS is the production direct default"
-            ),
-        });
-    }
-
-    if let Some(addr) = remote_quic {
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::Quic,
-            source: "topology".to_string(),
-            reason: format!(
-                "direct QUIC peer endpoint {addr} is configured; framed QUIC is selected while quic-native remains opt-in"
-            ),
-        });
-    }
-
-    if let Some(value) = defaults.remote_transport.as_deref() {
-        let transport = parse_remote_transport(value)?;
-        match transport {
-            cli::RemoteTransport::Auto => {}
-            cli::RemoteTransport::PlainTcp if allow_plain_tcp => {
-                let source = plain_tcp_auto_source(args, profile, defaults)
-                    .unwrap_or("benchmark-tuned default");
-                return Ok(TransportSelection {
-                    transport,
-                    source: source.to_string(),
-                    reason: plain_tcp_selection_reason(source),
-                });
-            }
-            cli::RemoteTransport::PlainTcp => {}
-            _ => {
-                return Ok(TransportSelection {
-                    transport,
-                    source: "defaults".to_string(),
-                    reason: "selected by [defaults].remote_transport".to_string(),
-                });
-            }
-        }
-    }
-
-    if allow_plain_tcp {
-        let source = plain_tcp_auto_source(args, profile, defaults).unwrap_or("cli");
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::PlainTcp,
-            source: source.to_string(),
-            reason: plain_tcp_selection_reason(source),
-        });
-    }
-
-    if persistent_peer_ready {
-        return Ok(TransportSelection {
-            transport: cli::RemoteTransport::Tcp,
-            source: "peer-default".to_string(),
-            reason: "persistent remote peer is recorded; using SPX over Rust SSH direct-tcpip to the peer transport".to_string(),
-        });
-    }
-
-    let workload = if args.tcp_target.is_some() {
-        "fixed --tcp-target route"
-    } else if remote_side_listens {
-        "remote-owned proxy route"
-    } else {
-        "SOCKS/HTTP proxy route"
-    };
+    let selected = ssh_proxy_route::transport_selection_policy(
+        &ssh_proxy_route::TransportSelectionPolicyInput {
+            requested_transport: args.remote_transport.into(),
+            profile_remote_transport: profile
+                .and_then(|profile| profile.remote_transport.as_deref()),
+            defaults_remote_transport: defaults.remote_transport.as_deref(),
+            remote_quic,
+            remote_tls,
+            allow_plain_tcp,
+            cli_allow_plain_tcp: args.allow_plain_tcp,
+            profile_allow_plain_tcp: profile.and_then(|profile| profile.allow_plain_tcp),
+            defaults_allow_plain_tcp: defaults.allow_plain_tcp,
+            tcp_target_present: args.tcp_target.is_some(),
+            remote_side_listens,
+            persistent_peer_ready,
+        },
+    )
+    .map_err(anyhow::Error::msg)?;
     Ok(TransportSelection {
-        transport: cli::RemoteTransport::SshNative,
-        source: "topology".to_string(),
-        reason: format!(
-            "no reachable direct peer transport is configured for this {workload}; using ssh-native direct-tcpip as the SSH-only simple egress default"
-        ),
+        transport: selected.transport.into(),
+        source: selected.source,
+        reason: selected.reason,
     })
 }
 
 pub(crate) fn direct_endpoint_for_peer(peer: &config::PeerRecord) -> Option<SocketAddr> {
-    peer.tls_transport
-        .or(peer.quic_transport)
-        .or(peer.transport)
+    ssh_proxy_route::direct_endpoint_for_peer(
+        peer.transport,
+        peer.tls_transport,
+        peer.quic_transport,
+    )
 }
 
 pub(crate) fn remote_transport_name(transport: cli::RemoteTransport) -> &'static str {
-    match transport {
-        cli::RemoteTransport::Auto => "auto",
-        cli::RemoteTransport::SshNative => "ssh-native",
-        cli::RemoteTransport::QuicNative => "quic-native",
-        cli::RemoteTransport::Quic => "quic",
-        cli::RemoteTransport::TlsTcp => "tls-tcp",
-        cli::RemoteTransport::PlainTcp => "plain-tcp",
-        cli::RemoteTransport::Exec => "ssh-exec",
-        cli::RemoteTransport::Tcp => "ssh-direct-tcpip",
-    }
+    ssh_proxy_route::remote_transport_name(transport.into())
 }
 
 pub(crate) fn direct_transport_policy(transport: cli::RemoteTransport) -> Value {
-    match transport {
-        cli::RemoteTransport::TlsTcp => json!("production_direct"),
-        cli::RemoteTransport::PlainTcp => json!("lab_baseline"),
-        cli::RemoteTransport::Quic | cli::RemoteTransport::QuicNative => json!("experimental"),
-        _ => Value::Null,
-    }
+    ssh_proxy_route::direct_transport_policy(transport.into())
 }
 
 pub(crate) fn direct_transport_policy_reason(transport: cli::RemoteTransport) -> Value {
-    match transport {
-        cli::RemoteTransport::TlsTcp => json!(
-            "TLS/TCP SPX is the production direct baseline because it keeps the stable SPX data plane while adding peer encryption and certificate identity"
-        ),
-        cli::RemoteTransport::PlainTcp => json!(
-            "Plain TCP SPX is a lab or explicitly trusted baseline only; it is not selected as the production default because the data path is not encrypted"
-        ),
-        cli::RemoteTransport::Quic | cli::RemoteTransport::QuicNative => json!(
-            "QUIC direct transport remains experimental until throughput and recovery behavior close the gap with TLS/TCP SPX"
-        ),
-        _ => Value::Null,
-    }
+    ssh_proxy_route::direct_transport_policy_reason(transport.into())
 }
 
 pub(crate) fn tls_peer_auth_mode<T, U>(
@@ -212,105 +123,38 @@ pub(crate) fn tls_peer_auth_mode<T, U>(
     client_cert: Option<T>,
     client_key: Option<U>,
 ) -> Value {
-    if !matches!(transport, cli::RemoteTransport::TlsTcp) {
-        return Value::Null;
-    }
-    match (client_cert.is_some(), client_key.is_some()) {
-        (true, true) => json!("mutual_tls"),
-        (false, false) => json!("server_auth"),
-        _ => json!("invalid_client_auth_config"),
-    }
+    ssh_proxy_route::tls_peer_auth_mode(
+        transport.into(),
+        client_cert.is_some(),
+        client_key.is_some(),
+    )
 }
 
 pub(crate) fn ssh_mode_name(transport: cli::RemoteTransport) -> Value {
-    match transport {
-        cli::RemoteTransport::SshNative => json!("native-direct-tcpip"),
-        cli::RemoteTransport::Tcp => json!("spx-over-ssh-direct"),
-        cli::RemoteTransport::Exec => json!("ssh-exec-helper"),
-        _ => Value::Null,
-    }
+    ssh_proxy_route::ssh_mode_name(transport.into())
 }
 
 pub(crate) fn ssh_mode_reason(transport: cli::RemoteTransport) -> Value {
-    match transport {
-        cli::RemoteTransport::SshNative => json!(
-            "ssh-native opens russh direct-tcpip channels to each requested target; use it for simple SSH-only local egress because it avoids remote daemon and SPX framed data-plane overhead"
-        ),
-        cli::RemoteTransport::Tcp => json!(
-            "spx-over-ssh-direct opens SSH direct-tcpip to the remote daemon transport and keeps SPX daemon semantics; use it when remote daemon policy, token auth, route restore, or SPX UDP behavior is required"
-        ),
-        cli::RemoteTransport::Exec => json!(
-            "ssh-exec-helper starts a temporary remote helper over SSH; keep it as a compatibility path when no persistent remote daemon transport is available"
-        ),
-        _ => Value::Null,
-    }
+    ssh_proxy_route::ssh_mode_reason(transport.into())
 }
 
 pub(crate) fn ssh_data_plane_reason(
     transport: cli::RemoteTransport,
     selection_source: Option<&str>,
 ) -> Value {
-    if matches!(selection_source, Some("cli" | "profile")) {
-        return match transport {
-            cli::RemoteTransport::SshNative
-            | cli::RemoteTransport::Tcp
-            | cli::RemoteTransport::Exec => json!("explicit_user_choice"),
-            _ => Value::Null,
-        };
-    }
-    match transport {
-        cli::RemoteTransport::SshNative => json!("simple_egress"),
-        cli::RemoteTransport::Tcp => json!("daemon_policy_required"),
-        cli::RemoteTransport::Exec => json!("ssh_exec_compatibility"),
-        _ => Value::Null,
-    }
+    ssh_proxy_route::ssh_data_plane_reason(transport.into(), selection_source)
 }
 
 pub(crate) fn parse_remote_transport(value: &str) -> Result<cli::RemoteTransport> {
-    match value.to_ascii_lowercase().as_str() {
-        "auto" => Ok(cli::RemoteTransport::Auto),
-        "quic-native" | "quic_native" | "native-quic" | "native_quic" => {
-            Ok(cli::RemoteTransport::QuicNative)
-        }
-        "ssh-native" | "ssh_native" | "native-ssh" | "native_ssh" => {
-            Ok(cli::RemoteTransport::SshNative)
-        }
-        "quic" => Ok(cli::RemoteTransport::Quic),
-        "tls-tcp" | "tls_tcp" | "tls" => Ok(cli::RemoteTransport::TlsTcp),
-        "plain-tcp" | "plain_tcp" | "tcp-plain" | "direct-tcp" | "direct_tcp" => {
-            Ok(cli::RemoteTransport::PlainTcp)
-        }
-        "exec" => Ok(cli::RemoteTransport::Exec),
-        "tcp" => Ok(cli::RemoteTransport::Tcp),
-        other => bail!("invalid remote transport value {other:?}"),
-    }
-}
-
-fn plain_tcp_auto_source(
-    args: &cli::RouteArgs,
-    profile: Option<&config::ProxyProfile>,
-    defaults: &config::ProxyProfile,
-) -> Option<&'static str> {
-    if args.allow_plain_tcp {
-        Some("cli")
-    } else if profile.and_then(|profile| profile.allow_plain_tcp) == Some(true) {
-        Some("profile")
-    } else if defaults.allow_plain_tcp == Some(true) {
-        Some("benchmark-tuned default")
-    } else {
-        None
-    }
-}
-
-fn plain_tcp_selection_reason(source: &str) -> String {
-    format!(
-        "plain TCP peer transport is enabled by {source}; use only for lab or private trusted links"
-    )
+    ssh_proxy_route::parse_transport_mode(value)
+        .map(Into::into)
+        .map_err(anyhow::Error::msg)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn route_args() -> cli::RouteArgs {
         cli::RouteArgs {
