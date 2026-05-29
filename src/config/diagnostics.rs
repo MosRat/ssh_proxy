@@ -1,9 +1,9 @@
 use std::{io::Read, net::SocketAddr};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::{cli, paths, peer_transport};
+use crate::{cli, paths, peer_transport, protocol_core::descriptor::PeerDescriptor};
 
 use super::{AppConfig, CONFIG_SCHEMA_VERSION, PeerRecord, TokenMetadata};
 
@@ -195,119 +195,22 @@ pub(super) fn import_peer_descriptor(
     config: &mut AppConfig,
     args: &cli::ConfigImportDescriptorArgs,
 ) -> Result<()> {
-    let descriptor = read_descriptor_json(&args.path)?;
-    if descriptor.get("ok").and_then(Value::as_bool) == Some(false) {
-        bail!("descriptor reports ok=false");
-    }
+    let descriptor = PeerDescriptor::from_value(read_descriptor_json(&args.path)?)?;
     let target = args
         .target
         .clone()
-        .or_else(|| {
-            descriptor
-                .get("target")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+        .or_else(|| descriptor.target.clone())
         .unwrap_or_else(|| args.alias.clone());
-    let control_endpoint = descriptor
-        .pointer("/endpoints/control")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            descriptor
-                .get("control_endpoint")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        });
-    let transport = descriptor
-        .pointer("/endpoints/transport")
-        .and_then(Value::as_str)
-        .and_then(parse_socket_or_tcp_endpoint);
-    let tls_transport = descriptor
-        .pointer("/endpoints/tls_transport")
-        .and_then(Value::as_str)
-        .and_then(parse_socket_or_tcp_endpoint);
-    let quic_transport = descriptor
-        .pointer("/endpoints/quic_transport")
-        .and_then(Value::as_str)
-        .and_then(parse_socket_or_tcp_endpoint);
-    let protocols = descriptor
-        .get("transport_protocols")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| {
-            let mut protocols = Vec::new();
-            if quic_transport.is_some() {
-                protocols.push("quic".to_string());
-            }
-            if tls_transport.is_some() {
-                protocols.push("tls-tcp".to_string());
-            }
-            if transport.is_some() {
-                protocols.push("plain-tcp".to_string());
-            }
-            protocols
-        });
+    let control_endpoint = descriptor.control_endpoint();
+    let transport = descriptor.transport_addr();
+    let tls_transport = descriptor.tls_transport_addr();
+    let quic_transport = descriptor.quic_transport_addr();
+    let protocols = descriptor.transport_protocols_or_infer();
     let token_metadata = descriptor
-        .pointer("/auth/token_metadata")
-        .and_then(|value| serde_json::from_value(value.clone()).ok());
-    let version = descriptor
-        .get("version")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let control_api_version = descriptor
-        .get("control_api_version")
-        .and_then(Value::as_u64)
-        .and_then(|value| u16::try_from(value).ok());
-    let peer_protocol_version = descriptor
-        .get("peer_protocol_version")
-        .and_then(Value::as_u64)
-        .and_then(|value| u16::try_from(value).ok());
-    let features = descriptor
-        .get("features")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let os = descriptor
-        .get("os")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let arch = descriptor
-        .get("arch")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let os_user = descriptor
-        .get("os_user")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let data_dir = descriptor
-        .get("data_dir")
-        .and_then(Value::as_str)
-        .map(Into::into);
-    let service_instance_id = descriptor
-        .get("service_instance_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let tls_server_cert_fingerprint = descriptor
-        .pointer("/auth/tls_server_cert_fingerprint")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let tls_client_ca_fingerprint = descriptor
-        .pointer("/auth/tls_client_ca_fingerprint")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+        .auth
+        .token_metadata
+        .clone()
+        .and_then(|value| serde_json::from_value(value).ok());
 
     let profile = config.profiles.entry(args.alias.clone()).or_default();
     if profile.target.is_none() {
@@ -328,23 +231,17 @@ pub(super) fn import_peer_descriptor(
     config.record_peer(
         &args.alias,
         PeerRecord {
-            node_id: descriptor
-                .get("node_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            node_name: descriptor
-                .get("node_name")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            service_instance_id,
-            version,
-            control_api_version,
-            peer_protocol_version,
-            features,
-            os,
-            arch,
-            os_user,
-            data_dir,
+            node_id: descriptor.node_id,
+            node_name: descriptor.node_name,
+            service_instance_id: descriptor.service_instance_id,
+            version: descriptor.version,
+            control_api_version: descriptor.control_api_version,
+            peer_protocol_version: descriptor.peer_protocol_version,
+            features: descriptor.features,
+            os: descriptor.os,
+            arch: descriptor.arch,
+            os_user: descriptor.os_user,
+            data_dir: descriptor.data_dir.map(Into::into),
             target: Some(target),
             trust: Some(args.trust.clone()),
             control_endpoint,
@@ -358,8 +255,8 @@ pub(super) fn import_peer_descriptor(
                     .as_ref()
                     .map(|_| TokenMetadata::new("peer-control-transport"))
             }),
-            tls_server_cert_fingerprint,
-            tls_client_ca_fingerprint,
+            tls_server_cert_fingerprint: descriptor.auth.tls_server_cert_fingerprint,
+            tls_client_ca_fingerprint: descriptor.auth.tls_client_ca_fingerprint,
             ..Default::default()
         },
     );
