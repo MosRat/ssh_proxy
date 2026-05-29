@@ -42,12 +42,18 @@ v0.3 keeps existing wire formats stable while sharing the protocol vocabulary:
   dispatch names. Legacy wide `NodeRequest` JSON still parses, but command
   matching does not live in the socket server.
 - `protocol_core::descriptor` owns the typed peer descriptor DTO used by config
-  import/export, descriptor refresh, compatibility checks, and doctor output.
+  import/export, descriptor refresh, compatibility checks, remote install
+  endpoint adoption, and doctor output. Subsystems should parse descriptors once
+  into `PeerDescriptor` instead of re-reading endpoint and protocol fields from
+  raw JSON.
 - `protocol_core::codec` wraps the SPX data frame codec and the generic
   `magic + version + length + JSON` control-frame shell used by QUIC-native
   control. The SPX 9-byte header and the `QNC1` outer frame remain unchanged.
 - `protocol_core::report` owns shared health state, dependency
   classification, repair-action references, and runtime decision DTOs.
+  Daemon-owned reports such as peer descriptors, route status, and route
+  readiness should materialize typed report structs first, then serialize to the
+  legacy-compatible public JSON shape.
 - `protocol_core::redaction` delegates to the lifecycle redaction rules so
   token, credential, identity path, and `known_hosts` handling stays consistent
   across status, doctor, daemon events, and VS Code diagnose.
@@ -64,6 +70,9 @@ The protocol boundary is intentionally split by layer:
 - Reports: status, doctor, events, and VS Code diagnose should render shared
   DTOs instead of rebuilding health, dependency, connection, and redaction
   fields in each subsystem.
+  Route runtime output keeps the legacy transport fields and `decision_chain`,
+  but also publishes the shared `connection_decision` DTO so daemon status,
+  doctor reports, and UI rendering can consume one decision surface.
 
 OpenSSH subprocess compatibility and remote shell TCP probes are not part of
 the normal protocol stack. They remain explicit compatibility or diagnostic
@@ -142,7 +151,9 @@ execution to shared modules.
   remote peer ensure, route creation, Rust-native handoff, remote setup, and
   health monitoring. `ProxySessionSpec`, SSH target details, apply policy, and
   URL/key helpers live in the `spec` submodule so the runner consumes a stable
-  intent model.
+  intent model. Status rendering helpers live in the `status` submodule; the
+  async runner should call those helpers instead of assembling proxy-session
+  response JSON inline.
 - `node_daemon::remote_setup` owns VS Code and shell environment artifacts. Rust
   renders payloads and uses `SshExecutor.write_artifact`; shell remains limited
   to stdin file writes, optional Git config, cleanup, and platform commands.
@@ -152,7 +163,9 @@ execution to shared modules.
   direct-policy labels, SSH-mode labels, and data-plane reasons come from
   `peer_lifecycle::connection` so status, doctor, daemon, and route output use
   one vocabulary. Daemon route status consumes `RouteRuntimeDecision` instead of
-  rebuilding selected transport, preflight, and SSH-mode metadata.
+  rebuilding selected transport, preflight, and SSH-mode metadata. New consumers
+  should prefer `connection_decision` for typed transport selection and read the
+  older route metadata only for compatibility or detailed diagnostics.
 
 ## Public CLI Surface
 
