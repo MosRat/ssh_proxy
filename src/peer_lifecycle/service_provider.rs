@@ -4,6 +4,7 @@ mod plans;
 mod selection;
 mod status;
 
+#[allow(unused_imports)]
 pub(crate) use contract::{PeerServiceProvider, ServiceProviderPlan};
 pub(crate) use kind::ServiceProviderKind;
 #[allow(unused_imports)]

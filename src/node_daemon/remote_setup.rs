@@ -12,10 +12,7 @@ mod artifacts;
 mod payload;
 mod shell;
 
-use artifacts::{
-    build_remote_setup_read_command, build_remote_setup_write_command, read_remote_setup_artifact,
-    write_remote_setup_artifact,
-};
+use artifacts::{read_remote_setup_artifact, write_remote_setup_artifact};
 use payload::{build_proxy_env, setup_hash, setup_payload};
 use shell::shell_quote;
 
@@ -568,6 +565,7 @@ mod tests {
 
     use crate::cli;
 
+    use super::artifacts::{build_remote_setup_read_command, build_remote_setup_write_command};
     use super::*;
 
     fn spec() -> ProxySessionSpec {

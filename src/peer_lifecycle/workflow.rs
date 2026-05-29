@@ -6,6 +6,7 @@ mod runner;
 pub(crate) use events::{
     BoxEventFuture, LifecycleEvent, LifecycleEventSink, VecLifecycleEventSink,
 };
+#[allow(unused_imports)]
 pub(crate) use model::{
     LifecycleAction, LifecycleCommand, LifecycleCommandPlan, LifecycleOperation, LifecyclePlan,
     LifecycleStep, PeerLifecyclePhase,
