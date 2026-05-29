@@ -1,8 +1,11 @@
 use std::{collections::HashMap, net::SocketAddr};
 
 use anyhow::{Context, Result, bail};
-
-use crate::cli;
+use serde_json::Value;
+use ssh_proxy_route::{
+    RouteConflictDecision, RouteConflictInput, RouteConflictRoute, decide_route_conflict,
+    route_matches,
+};
 
 use super::{RouteSpec, RouteTask};
 
@@ -13,7 +16,15 @@ pub(super) fn ensure_new_route_can_start(
     peer: Option<&str>,
     spec: &RouteSpec,
 ) -> Result<()> {
-    ensure_listener_not_reserved(routes, direction, listen, peer)?;
+    let candidate = route_conflict_input(None, direction, listen, peer, spec)?;
+    match decide_route_conflict(&route_conflict_routes(routes)?, &candidate) {
+        RouteConflictDecision::Available => {}
+        RouteConflictDecision::ListenerReserved { route_id } => {
+            bail!("route {route_id:?} already owns {direction} listener {listen}");
+        }
+        RouteConflictDecision::ReuseExisting { .. }
+        | RouteConflictDecision::DifferentSpec { .. } => {}
+    }
     if matches!(spec, RouteSpec::Forward { .. }) {
         ensure_port_available(listen)?;
     }
@@ -27,21 +38,20 @@ pub(super) fn route_task_matches(
     peer: Option<&str>,
     spec: &RouteSpec,
 ) -> bool {
-    task.direction == direction
-        && task.listen == Some(listen)
-        && match peer {
-            Some(peer) => task.peer.as_deref() == Some(peer),
-            None => true,
-        }
-        && route_specs_match(&task.spec, spec)
+    let Ok(route) = route_conflict_route("_candidate", task) else {
+        return false;
+    };
+    let Ok(candidate) = route_conflict_input(None, direction, listen, peer, spec) else {
+        return false;
+    };
+    route_matches(&route, &candidate)
 }
 
+#[cfg(test)]
 pub(super) fn route_specs_match(left: &RouteSpec, right: &RouteSpec) -> bool {
-    match (left, right) {
-        (RouteSpec::Reverse { reverse: left }, RouteSpec::Reverse { reverse: right }) => {
-            reverse_route_specs_match(left, right)
-        }
-        _ => serde_json::to_value(left).ok() == serde_json::to_value(right).ok(),
+    match (route_spec_value(left), route_spec_value(right)) {
+        (Ok(left), Ok(right)) => ssh_proxy_route::route_specs_match_values(&left, &right),
+        _ => false,
     }
 }
 
@@ -52,27 +62,39 @@ fn ensure_port_available(addr: SocketAddr) -> Result<()> {
     Ok(())
 }
 
-fn ensure_listener_not_reserved(
-    routes: &HashMap<String, RouteTask>,
+fn route_conflict_routes(routes: &HashMap<String, RouteTask>) -> Result<Vec<RouteConflictRoute>> {
+    routes
+        .iter()
+        .map(|(id, task)| route_conflict_route(id, task))
+        .collect()
+}
+
+fn route_conflict_route(id: &str, task: &RouteTask) -> Result<RouteConflictRoute> {
+    Ok(RouteConflictRoute {
+        id: id.to_string(),
+        direction: task.direction.clone(),
+        listen: task.listen.map(|addr| addr.to_string()),
+        peer: task.peer.clone(),
+        spec: route_spec_value(&task.spec)?,
+    })
+}
+
+fn route_conflict_input(
+    id: Option<&str>,
     direction: &str,
     listen: SocketAddr,
     peer: Option<&str>,
-) -> Result<()> {
-    for (id, task) in routes {
-        if task.direction != direction || task.listen != Some(listen) {
-            continue;
-        }
-        if direction == "forward" || peer.is_some_and(|peer| task.peer.as_deref() == Some(peer)) {
-            bail!("route {id:?} already owns {direction} listener {listen}");
-        }
-    }
-    Ok(())
+    spec: &RouteSpec,
+) -> Result<RouteConflictInput> {
+    Ok(RouteConflictInput {
+        id: id.map(ToOwned::to_owned),
+        direction: direction.to_string(),
+        listen: listen.to_string(),
+        peer: peer.map(ToOwned::to_owned),
+        spec: route_spec_value(spec)?,
+    })
 }
 
-fn reverse_route_specs_match(left: &cli::ReverseTaskArgs, right: &cli::ReverseTaskArgs) -> bool {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    left.identity.clear();
-    right.identity.clear();
-    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+fn route_spec_value(spec: &RouteSpec) -> Result<Value> {
+    serde_json::to_value(spec).context("failed to serialize route spec for conflict policy")
 }

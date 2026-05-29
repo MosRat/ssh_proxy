@@ -2,11 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ssh_proxy_core::report::RuntimeDecisionReport;
 
+mod conflict;
 mod decision;
 mod plan;
 mod policy;
 mod status;
 
+pub use conflict::{
+    RouteConflictDecision, RouteConflictInput, RouteConflictRoute, decide_route_conflict,
+    route_matches, route_reserves_listener, route_specs_match_values,
+};
 pub use decision::{
     ConnectionDecision, PeerReadinessInput, TransportSelection, TransportSelectionPolicyInput,
     direct_endpoint_for_peer, direct_transport_policy, direct_transport_policy_reason,
