@@ -25,12 +25,18 @@ pub enum RemoteAdminIntent {
         remote_path: Option<String>,
     },
     GitApply {
-        config_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<String>,
         http_proxy: Option<String>,
         https_proxy: Option<String>,
     },
     GitCleanup {
-        config_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<String>,
     },
 }
 

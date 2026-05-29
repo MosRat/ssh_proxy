@@ -60,17 +60,21 @@ fn handle_intent(intent: RemoteAdminIntent) -> Result<Value> {
         } => Ok(doctor(remote_tcp, remote_path)),
         RemoteAdminIntent::GitApply {
             config_path,
+            workspace_path,
             http_proxy,
             https_proxy,
         } => {
-            let path = expand_remote_path(&config_path);
+            let path = resolve_git_config_path(config_path, workspace_path)?;
             let report =
                 apply_git_proxy_config(&path, http_proxy.as_deref(), https_proxy.as_deref())
                     .map_err(anyhow::Error::msg)?;
             serde_json::to_value(report).context("failed to render git apply report")
         }
-        RemoteAdminIntent::GitCleanup { config_path } => {
-            let path = expand_remote_path(&config_path);
+        RemoteAdminIntent::GitCleanup {
+            config_path,
+            workspace_path,
+        } => {
+            let path = resolve_git_config_path(config_path, workspace_path)?;
             let report = cleanup_git_proxy_config(&path).map_err(anyhow::Error::msg)?;
             serde_json::to_value(report).context("failed to render git cleanup report")
         }
@@ -179,6 +183,55 @@ fn expand_remote_path(value: &str) -> PathBuf {
         PathBuf::from(expand_percent_env(&home_expanded))
     } else {
         PathBuf::from(home_expanded)
+    }
+}
+
+fn resolve_git_config_path(
+    config_path: Option<String>,
+    workspace_path: Option<String>,
+) -> Result<PathBuf> {
+    if let Some(config_path) = config_path {
+        return Ok(expand_remote_path(&config_path));
+    }
+    if let Some(workspace_path) = workspace_path {
+        return workspace_git_config_path(&expand_remote_path(&workspace_path));
+    }
+    anyhow::bail!("git admin intent requires config_path or workspace_path")
+}
+
+fn workspace_git_config_path(workspace_path: &Path) -> Result<PathBuf> {
+    let mut dir = if workspace_path.is_file() {
+        workspace_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| workspace_path.to_path_buf())
+    } else {
+        workspace_path.to_path_buf()
+    };
+    loop {
+        let dot_git = dir.join(".git");
+        if dot_git.is_dir() {
+            return Ok(dot_git.join("config"));
+        }
+        if dot_git.is_file() {
+            let text = std::fs::read_to_string(&dot_git)
+                .with_context(|| format!("failed to read {}", dot_git.display()))?;
+            if let Some(rest) = text.trim().strip_prefix("gitdir:") {
+                let git_dir = PathBuf::from(rest.trim());
+                let git_dir = if git_dir.is_absolute() {
+                    git_dir
+                } else {
+                    dir.join(git_dir)
+                };
+                return Ok(git_dir.join("config"));
+            }
+        }
+        if !dir.pop() {
+            anyhow::bail!(
+                "workspace path is not inside a Git worktree: {}",
+                workspace_path.display()
+            );
+        }
     }
 }
 

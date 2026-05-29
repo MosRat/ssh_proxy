@@ -376,17 +376,24 @@ async fn write_remote_status_file(
     .await
 }
 
+#[cfg(test)]
 fn build_cleanup_script(server_dir: &str, workspace_paths: &[String]) -> String {
+    build_cleanup_script_with_git(server_dir, workspace_paths, true)
+}
+
+fn build_cleanup_script_with_git(
+    server_dir: &str,
+    workspace_paths: &[String],
+    include_git: bool,
+) -> String {
     let workspace_lines = workspace_paths
         .iter()
         .map(|workspace_path| format!("cleanup_workspace_git {}", shell_quote(workspace_path)))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        r#"
-set -eu
-server_dir={shell_server_dir}
-
+    let git_cleanup = if include_git {
+        format!(
+            r#"
 if command -v git >/dev/null 2>&1; then
   git config --global --unset-all http.proxy >/dev/null 2>&1 || true
   git config --global --unset-all https.proxy >/dev/null 2>&1 || true
@@ -416,6 +423,23 @@ if command -v git >/dev/null 2>&1; then
 else
   echo "remote-proxy: git not found on remote; skipped Git proxy cleanup"
 fi
+"#,
+            workspace_count = workspace_paths.len(),
+            workspace_lines = if workspace_lines.is_empty() {
+                "    :".to_string()
+            } else {
+                workspace_lines
+            },
+        )
+    } else {
+        r#"echo "remote-proxy: Git proxy cleanup handled by ssh_proxy remote admin""#.to_string()
+    };
+    format!(
+        r#"
+set -eu
+server_dir={shell_server_dir}
+
+{git_cleanup}
 
 status_file="$HOME/$server_dir/remote-proxy-status.json"
 rm -f "$status_file"
@@ -435,12 +459,7 @@ fi
 echo "remote-proxy: cleanup complete"
 "#,
         shell_server_dir = shell_quote(server_dir),
-        workspace_count = workspace_paths.len(),
-        workspace_lines = if workspace_lines.is_empty() {
-            "    :".to_string()
-        } else {
-            workspace_lines
-        },
+        git_cleanup = git_cleanup,
     )
 }
 
