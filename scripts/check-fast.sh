@@ -99,6 +99,8 @@ if [ "$SKIP_RUST" != "1" ]; then
     fi
   else
     # shellcheck disable=SC2086
+    cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy protocol_core
+    # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy peer_lifecycle
     # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test --bin ssh_proxy deploy

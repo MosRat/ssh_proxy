@@ -14,6 +14,7 @@ pwsh -NoProfile -File scripts/check-fast.ps1 -SkipVscode
 This runs:
 
 - `cargo check --tests`
+- protocol/control/data/report DTO contract tests
 - peer lifecycle/config/provider contract tests
 - deploy/remote install lifecycle tests
 - handoff unit tests
@@ -30,8 +31,12 @@ context. Avoid jumping straight to the release gate during normal edit loops.
 
 Add targeted Rust tests instead of the full suite when only one subsystem moved:
 
+- protocol envelopes, command aliases, descriptor DTOs, SPX/QNC1 framing, and
+  shared report DTOs: `cargo test --bin ssh_proxy protocol_core`;
 - peer lifecycle schema/provider/config/connection metadata:
   `cargo test --bin ssh_proxy peer_lifecycle`;
+- data-plane frame compatibility: `cargo test --bin ssh_proxy protocol`;
+- QUIC-native control framing: `cargo test --bin ssh_proxy quic_native`;
 - remote install lifecycle execution: `cargo test --bin ssh_proxy deploy`;
 - remote setup artifact writes: `cargo test --bin ssh_proxy remote_setup`;
 - proxy session spec/state-machine boundaries:

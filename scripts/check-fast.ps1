@@ -95,6 +95,7 @@ try {
                 Invoke-CargoChecked "cargo test --tests" @("test", "--tests", "--", "--test-threads=1")
             }
         } else {
+            Invoke-CargoChecked "cargo test --bin ssh_proxy protocol_core" @("test", "--bin", "ssh_proxy", "protocol_core")
             Invoke-CargoChecked "cargo test --bin ssh_proxy peer_lifecycle" @("test", "--bin", "ssh_proxy", "peer_lifecycle")
             Invoke-CargoChecked "cargo test --bin ssh_proxy deploy" @("test", "--bin", "ssh_proxy", "deploy")
             Invoke-CargoChecked "cargo test --bin ssh_proxy remote peer config" @("test", "--bin", "ssh_proxy", "remote_config_write")
