@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use serde::Serialize;
+use ssh_proxy_transport::spx::SpxBridgeWorkerSnapshot;
 
 use crate::{bridge, peer_transport, protocol};
 
@@ -35,30 +35,6 @@ pub(super) struct BridgeWorkerState {
     pub(super) last_connected_at: Option<Instant>,
     pub(super) last_disconnected_at: Option<Instant>,
     pub(super) last_failed_at: Option<Instant>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct BridgeWorkerSnapshot {
-    slot: usize,
-    pub(super) state: String,
-    connected: bool,
-    generation: u32,
-    connect_attempts: u64,
-    successful_connects: u64,
-    failed_connects: u64,
-    disconnects: u64,
-    retry_count: u64,
-    active_streams: u64,
-    bytes_client_to_remote: u64,
-    bytes_remote_to_client: u64,
-    last_error: Option<String>,
-    degraded_reason: Option<String>,
-    selected_protocol: Option<String>,
-    last_successful_protocol: Option<String>,
-    last_event: Option<String>,
-    last_connected_ago_secs: Option<u64>,
-    last_disconnected_ago_secs: Option<u64>,
-    last_failure_ago_secs: Option<u64>,
 }
 
 impl BridgeWorkerState {
@@ -115,7 +91,7 @@ impl BridgeWorkerState {
         &self,
         now: Instant,
         counters: Option<&BridgeWorkerCounters>,
-    ) -> BridgeWorkerSnapshot {
+    ) -> SpxBridgeWorkerSnapshot {
         let state = self.health_state();
         let active_streams = counters
             .map(|counters| counters.active_streams.load(Ordering::Relaxed))
@@ -126,7 +102,7 @@ impl BridgeWorkerState {
         let bytes_remote_to_client = counters
             .map(|counters| counters.bytes_remote_to_client.load(Ordering::Relaxed))
             .unwrap_or(0);
-        BridgeWorkerSnapshot {
+        SpxBridgeWorkerSnapshot {
             slot: self.slot,
             state,
             connected: self.connected,
@@ -187,7 +163,7 @@ pub(super) fn ensure_worker_slot(workers: &mut Vec<BridgeWorkerState>, slot: usi
 }
 
 impl SharedState {
-    async fn worker_snapshots(&self) -> Vec<BridgeWorkerSnapshot> {
+    async fn worker_snapshots(&self) -> Vec<SpxBridgeWorkerSnapshot> {
         let now = Instant::now();
         self.bridge_workers
             .read()
@@ -241,15 +217,12 @@ impl SharedState {
         let bridge_metrics = self.bridge_metrics_snapshot().await;
         let healthy_workers = workers
             .iter()
-            .filter(|worker| worker.state == "connected")
+            .filter(|worker| worker.is_connected())
             .count();
-        let degraded_workers = workers
-            .iter()
-            .filter(|worker| worker.state == "degraded")
-            .count();
+        let degraded_workers = workers.iter().filter(|worker| worker.is_degraded()).count();
         let reconnecting_workers = workers
             .iter()
-            .filter(|worker| worker.state == "reconnecting")
+            .filter(|worker| worker.is_reconnecting())
             .count();
         let pool_degraded_reason =
             if healthy_workers == 0 && (degraded_workers > 0 || reconnecting_workers > 0) {
