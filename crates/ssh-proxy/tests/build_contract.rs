@@ -901,6 +901,46 @@ fn production_command_execution_stays_in_execution_crates() {
 }
 
 #[test]
+fn production_service_paths_report_operability_errors_without_panics() {
+    let windows_runner =
+        read_repo_file("crates/ssh-proxy/src/node_daemon/windows_service_runner.rs");
+    for forbidden in [
+        "expect(\"service context mutex poisoned\")",
+        "expect(\"stop sender mutex poisoned\")",
+    ] {
+        assert_not_contains(
+            &windows_runner,
+            forbidden,
+            "Windows service runtime should map mutex poisoning to errors or logs",
+        );
+    }
+    for required in [
+        "fn lock_service_context",
+        "Windows service context mutex poisoned",
+        "Windows service stop sender mutex poisoned",
+        "ServiceControlHandlerResult::Other(ERROR_GEN_FAILURE)",
+    ] {
+        assert_contains(
+            &windows_runner,
+            required,
+            "Windows service runtime should expose structured operability failures",
+        );
+    }
+
+    let service_plan = read_repo_file("crates/ssh-proxy/src/service/plan.rs");
+    assert_not_contains(
+        &service_plan,
+        "last_error.expect(\"copy loop should record an error\")",
+        "Windows binary copy retry should return an explicit error instead of panicking",
+    );
+    assert_contains(
+        &service_plan,
+        "copy retry loop did not run",
+        "Windows binary copy retry should preserve a diagnosable impossible-state error",
+    );
+}
+
+#[test]
 fn native_provider_success_paths_are_preferred() {
     let core_external = read_repo_file("crates/ssh-proxy-core/src/external.rs");
     for symbol in [

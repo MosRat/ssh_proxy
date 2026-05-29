@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use ssh_proxy_platform::windows_service::{
     Error as WindowsServiceError, define_windows_service,
     service::{
@@ -15,10 +15,12 @@ use ssh_proxy_platform::windows_service::{
     service_dispatcher,
 };
 use tokio::sync::oneshot;
+use tracing::error;
 
 use crate::{cli, config};
 
 const SERVICE_NAME: &str = "ssh_proxy";
+const ERROR_GEN_FAILURE: u32 = 31;
 
 static SERVICE_CONTEXT: OnceLock<Mutex<Option<ServiceContext>>> = OnceLock::new();
 
@@ -33,16 +35,15 @@ pub(crate) fn run_if_started_by_scm(
     args: cli::NodeDaemonArgs,
     config: config::AppConfig,
 ) -> Result<bool> {
-    let context = SERVICE_CONTEXT.get_or_init(|| Mutex::new(None));
     {
-        let mut guard = context.lock().expect("service context mutex poisoned");
+        let mut guard = lock_service_context()?;
         *guard = Some(ServiceContext { args, config });
     }
 
     match service_dispatcher::start(SERVICE_NAME, ffi_service_main) {
         Ok(()) => Ok(true),
         Err(err) if windows_service_error_code(&err) == Some(1063) => {
-            let mut guard = context.lock().expect("service context mutex poisoned");
+            let mut guard = lock_service_context()?;
             let _ = guard.take();
             Ok(false)
         }
@@ -57,28 +58,35 @@ fn service_main(_arguments: Vec<OsString>) {
 }
 
 fn run_service() -> Result<()> {
-    let context = SERVICE_CONTEXT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .expect("service context mutex poisoned")
+    let context = lock_service_context()?
         .take()
         .context("missing ssh_proxy Windows service context")?;
 
     let stop_sender = Arc::new(Mutex::new(None));
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    *stop_sender.lock().expect("stop sender mutex poisoned") = Some(shutdown_tx);
+    *stop_sender
+        .lock()
+        .map_err(|err| anyhow!("Windows service stop sender mutex poisoned: {err}"))? =
+        Some(shutdown_tx);
     let handler_sender = stop_sender.clone();
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
             ServiceControl::Stop | ServiceControl::Shutdown => {
-                if let Some(sender) = handler_sender
-                    .lock()
-                    .expect("stop sender mutex poisoned")
-                    .take()
-                {
-                    let _ = sender.send(());
+                match handler_sender.lock() {
+                    Ok(mut guard) => {
+                        if let Some(sender) = guard.take() {
+                            let _ = sender.send(());
+                        }
+                    }
+                    Err(err) => {
+                        error!(
+                            error = %err,
+                            "Windows service stop sender mutex poisoned"
+                        );
+                        return ServiceControlHandlerResult::Other(ERROR_GEN_FAILURE);
+                    }
                 }
                 ServiceControlHandlerResult::NoError
             }
@@ -141,6 +149,13 @@ fn run_service() -> Result<()> {
         .ok();
 
     run_result
+}
+
+fn lock_service_context() -> Result<std::sync::MutexGuard<'static, Option<ServiceContext>>> {
+    SERVICE_CONTEXT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|err| anyhow!("Windows service context mutex poisoned: {err}"))
 }
 
 fn service_status(

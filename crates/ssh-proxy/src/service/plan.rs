@@ -367,7 +367,13 @@ fn copy_binary(source: &PathBuf, target: &PathBuf) -> Result<()> {
                 }
             }
         }
-        let err = last_error.expect("copy loop should record an error");
+        let Some(err) = last_error else {
+            bail!(
+                "failed to copy {} to {}: copy retry loop did not run",
+                source.display(),
+                target.display()
+            );
+        };
         return Err(err).with_context(|| {
             format!(
                 "failed to copy {} to {}",
