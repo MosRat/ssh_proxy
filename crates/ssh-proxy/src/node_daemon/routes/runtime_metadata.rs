@@ -33,6 +33,22 @@ impl RouteSpec {
         }
     }
 
+    pub(super) fn execution_backend(&self) -> &'static str {
+        match self {
+            Self::Forward { proxy } => match proxy.remote_transport {
+                crate::cli::RemoteTransport::Auto => "auto",
+                crate::cli::RemoteTransport::SshNative => "ssh_native",
+                crate::cli::RemoteTransport::QuicNative => "quic_native",
+                crate::cli::RemoteTransport::Quic => "quic",
+                crate::cli::RemoteTransport::TlsTcp => "tls_tcp",
+                crate::cli::RemoteTransport::PlainTcp => "plain_tcp",
+                crate::cli::RemoteTransport::Exec => "ssh_exec",
+                crate::cli::RemoteTransport::Tcp => "ssh_tcp",
+            },
+            Self::Reverse { .. } => "ssh_reverse_link",
+        }
+    }
+
     pub(in crate::node_daemon) fn runtime_metadata(&self) -> serde_json::Value {
         match self {
             Self::Forward { proxy } => RouteRuntimeDecision::from_forward_task(proxy).into_value(),

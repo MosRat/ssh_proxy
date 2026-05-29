@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 #[cfg(test)]
 use ssh_proxy_core::model::RouteConnectMode;
+use tracing::{error, info};
 
 use super::{
     NodeManager, NodeRequest,
@@ -35,6 +36,8 @@ impl NodeManager {
             .proxy_session
             .ok_or_else(|| anyhow!("ensure_proxy_session requires proxy_session spec"))?;
         let job_id = spec.job_id();
+        let session_id = spec.session_id();
+        let route_id = spec.route_id();
         if let Some(existing) = self.jobs.get(&job_id).await {
             if state_machine::reusable_proxy_session_job(
                 &existing,
@@ -45,14 +48,21 @@ impl NodeManager {
                     .state
                     .upsert_session_from_job(&spec, &existing, None)
                     .await?;
+                info!(
+                    job_id = %job_id,
+                    session_id = %session_id,
+                    route_id = %route_id,
+                    peer = %spec.target,
+                    "proxy session already active; reusing existing job"
+                );
                 return status::accepted_response(&spec, &existing, session.to_value(), true);
             }
         }
 
-        let job = JobRecord::new(job_id, "ensure_proxy_session")
+        let job = JobRecord::new(job_id.clone(), "ensure_proxy_session")
             .with_target(spec.target.clone())
             .with_workspace(spec.workspace_id.clone())
-            .with_route(spec.route_id())
+            .with_route(route_id.clone())
             .with_remote_url(Some(spec.remote_url()))
             .transition(JobState::Queued, JobPhase::Queued, 0);
         let job = self.jobs.upsert(job, "proxy session accepted").await?;
@@ -60,6 +70,13 @@ impl NodeManager {
             .state
             .upsert_session_from_job(&spec, &job, None)
             .await?;
+        info!(
+            job_id = %job_id,
+            session_id = %session_id,
+            route_id = %route_id,
+            peer = %spec.target,
+            "proxy session accepted"
+        );
         let manager = self.clone();
         let task_spec = spec.clone();
         let job_id = job.id.clone();
@@ -69,6 +86,14 @@ impl NodeManager {
                 .run_proxy_session_job(task_spec.clone(), job_id.clone())
                 .await
             {
+                error!(
+                    job_id = %job_id,
+                    session_id = %task_spec.session_id(),
+                    route_id = %task_spec.route_id(),
+                    peer = %task_spec.target,
+                    error = %err,
+                    "proxy session job task failed"
+                );
                 let failed = job_for_phase(&task_spec, &job_id, JobPhase::Failed, 100)
                     .failed(err.to_string(), Some("job_task_failed".to_string()));
                 let _ = manager

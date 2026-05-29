@@ -55,18 +55,11 @@ pub(in crate::node_daemon) async fn apply_remote_settings(
 
     if spec.apply_policy.git
         && (spec.apply_policy.git_global || spec.apply_policy.git_workspace)
-        && !try_apply_git_config_with_helper(
-            &client,
-            remote_url,
-            &spec.workspace_paths,
-            spec.apply_policy.git_global,
-            spec.apply_policy.git_workspace,
-            spec.apply_policy.git_force_override,
-        )
-        .await?
+        && !try_apply_git_config_with_helper(&client, spec, remote_url).await?
     {
         run_script(
             &client,
+            spec,
             &RemoteSetupScriptIntent::fallback_shell("apply remote Git proxy config"),
             &build_git_config_script(
                 remote_url,
@@ -117,18 +110,13 @@ pub(in crate::node_daemon) async fn cleanup_remote_settings(
     let git_cleanup_done = if spec.apply_policy.git
         && (spec.apply_policy.git_global || spec.apply_policy.git_workspace)
     {
-        try_cleanup_git_config_with_helper(
-            &client,
-            &spec.workspace_paths,
-            spec.apply_policy.git_global,
-            spec.apply_policy.git_workspace,
-        )
-        .await?
+        try_cleanup_git_config_with_helper(&client, spec).await?
     } else {
         false
     };
     run_script(
         &client,
+        spec,
         &RemoteSetupScriptIntent::fallback_shell("cleanup remote proxy settings"),
         &build_cleanup_script_with_git(
             &spec.apply_policy.server_dir,
@@ -143,17 +131,14 @@ pub(in crate::node_daemon) async fn cleanup_remote_settings(
 
 async fn try_apply_git_config_with_helper(
     client: &ssh_client::Client,
+    spec: &ProxySessionSpec,
     proxy_url: &str,
-    workspace_paths: &[String],
-    apply_global: bool,
-    apply_workspace: bool,
-    force_override: bool,
 ) -> Result<bool> {
-    if !force_override {
+    if !spec.apply_policy.git_force_override {
         return Ok(false);
     }
     let mut intents = Vec::new();
-    if apply_global {
+    if spec.apply_policy.git_global {
         intents.push(RemoteAdminIntent::GitApply {
             config_path: Some("~/.gitconfig".to_string()),
             workspace_path: None,
@@ -161,8 +146,8 @@ async fn try_apply_git_config_with_helper(
             https_proxy: Some(proxy_url.to_string()),
         });
     }
-    if apply_workspace {
-        for workspace_path in workspace_paths {
+    if spec.apply_policy.git_workspace {
+        for workspace_path in &spec.workspace_paths {
             intents.push(RemoteAdminIntent::GitApply {
                 config_path: None,
                 workspace_path: Some(workspace_path.clone()),
@@ -171,35 +156,34 @@ async fn try_apply_git_config_with_helper(
             });
         }
     }
-    run_remote_admin_intents(client, intents, "apply remote Git proxy config").await
+    run_remote_admin_intents(client, spec, intents, "apply remote Git proxy config").await
 }
 
 async fn try_cleanup_git_config_with_helper(
     client: &ssh_client::Client,
-    workspace_paths: &[String],
-    cleanup_global: bool,
-    cleanup_workspace: bool,
+    spec: &ProxySessionSpec,
 ) -> Result<bool> {
     let mut intents = Vec::new();
-    if cleanup_global {
+    if spec.apply_policy.git_global {
         intents.push(RemoteAdminIntent::GitCleanup {
             config_path: Some("~/.gitconfig".to_string()),
             workspace_path: None,
         });
     }
-    if cleanup_workspace {
-        for workspace_path in workspace_paths {
+    if spec.apply_policy.git_workspace {
+        for workspace_path in &spec.workspace_paths {
             intents.push(RemoteAdminIntent::GitCleanup {
                 config_path: None,
                 workspace_path: Some(workspace_path.clone()),
             });
         }
     }
-    run_remote_admin_intents(client, intents, "cleanup remote Git proxy config").await
+    run_remote_admin_intents(client, spec, intents, "cleanup remote Git proxy config").await
 }
 
 async fn run_remote_admin_intents(
     client: &ssh_client::Client,
+    spec: &ProxySessionSpec,
     intents: Vec<RemoteAdminIntent>,
     label: &str,
 ) -> Result<bool> {
@@ -214,12 +198,27 @@ async fn run_remote_admin_intents(
         let output = match output {
             Ok(output) => output,
             Err(err) => {
-                info!(error = %err, "{label} helper unavailable; falling back to script");
+                info!(
+                    job_id = %spec.job_id(),
+                    session_id = %spec.session_id(),
+                    route_id = %spec.route_id(),
+                    peer = %spec.target,
+                    execution_backend = "remote_shell_bootstrap",
+                    fallback_used = true,
+                    error = %err,
+                    "{label} helper unavailable; falling back to script"
+                );
                 return Ok(false);
             }
         };
         if output.exit_status != 0 {
             info!(
+                job_id = %spec.job_id(),
+                session_id = %spec.session_id(),
+                route_id = %spec.route_id(),
+                peer = %spec.target,
+                execution_backend = "remote_shell_bootstrap",
+                fallback_used = true,
                 status = output.exit_status,
                 stderr = %output.stderr.trim(),
                 "{label} helper failed; falling back to script"
@@ -229,12 +228,27 @@ async fn run_remote_admin_intents(
         let response: Value = match serde_json::from_str(&output.stdout) {
             Ok(response) => response,
             Err(err) => {
-                info!(error = %err, "{label} helper returned invalid JSON; falling back to script");
+                info!(
+                    job_id = %spec.job_id(),
+                    session_id = %spec.session_id(),
+                    route_id = %spec.route_id(),
+                    peer = %spec.target,
+                    execution_backend = "remote_shell_bootstrap",
+                    fallback_used = true,
+                    error = %err,
+                    "{label} helper returned invalid JSON; falling back to script"
+                );
                 return Ok(false);
             }
         };
         if !response["ok"].as_bool().unwrap_or(false) {
             info!(
+                job_id = %spec.job_id(),
+                session_id = %spec.session_id(),
+                route_id = %spec.route_id(),
+                peer = %spec.target,
+                execution_backend = "remote_shell_bootstrap",
+                fallback_used = true,
                 error = response["error"].as_str().unwrap_or("unknown error"),
                 "{label} helper reported failure; falling back to script"
             );
@@ -246,6 +260,7 @@ async fn run_remote_admin_intents(
 
 async fn run_script(
     client: &ssh_client::Client,
+    spec: &ProxySessionSpec,
     intent: &RemoteSetupScriptIntent,
     script: &str,
 ) -> Result<()> {
@@ -273,6 +288,10 @@ async fn run_script(
         ));
     }
     info!(
+        job_id = %spec.job_id(),
+        session_id = %spec.session_id(),
+        route_id = %spec.route_id(),
+        peer = %spec.target,
         label = %intent.label,
         class = %intent.class.as_str(),
         execution_backend = %external_action.execution_backend,

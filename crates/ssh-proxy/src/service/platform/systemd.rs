@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use ssh_proxy_platform::systemd::{
     SystemdDbusPlan, SystemdOperation, SystemdScope, run_systemd_plan,
 };
+use tracing::warn;
 
 use crate::service::{
     inventory::{ServiceProbeState, ServiceProbeSummary},
@@ -257,6 +258,15 @@ fn run_dbus_or_command(
     match run_systemd_plan(&dbus_plan) {
         Ok(outcome) if outcome.ok => Ok(()),
         Ok(outcome) => {
+            warn!(
+                execution_backend = "provider_command",
+                fallback_used = true,
+                provider = "systemd",
+                native_backend = "systemd_dbus",
+                status = outcome.status.as_deref().unwrap_or("operation"),
+                fallback_program,
+                "systemd D-Bus provider was not successful; falling back to provider command"
+            );
             eprintln!(
                 "warning: systemd D-Bus {} was not successful; falling back to {}",
                 outcome.status.as_deref().unwrap_or("operation"),
@@ -265,6 +275,15 @@ fn run_dbus_or_command(
             run_command(fallback_program, fallback_args)
         }
         Err(err) => {
+            warn!(
+                execution_backend = "provider_command",
+                fallback_used = true,
+                provider = "systemd",
+                native_backend = "systemd_dbus",
+                error = %err,
+                fallback_program,
+                "systemd D-Bus provider failed; falling back to provider command"
+            );
             eprintln!(
                 "warning: systemd D-Bus {} failed: {err}; falling back to {}",
                 dbus_plan.method_name(),

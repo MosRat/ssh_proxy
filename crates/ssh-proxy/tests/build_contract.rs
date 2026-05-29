@@ -941,6 +941,65 @@ fn production_service_paths_report_operability_errors_without_panics() {
 }
 
 #[test]
+fn runtime_operability_logs_keep_correlation_fields() {
+    let routes = read_repo_file("crates/ssh-proxy/src/node_daemon/routes.rs");
+    for field in [
+        "route_id = %id",
+        "peer = %peer",
+        "execution_backend = %execution_backend",
+        "fallback_used",
+    ] {
+        assert_contains(
+            &routes,
+            field,
+            "route runtime logs should expose route correlation and fallback fields",
+        );
+    }
+
+    let proxy_session = read_repo_file("crates/ssh-proxy/src/node_daemon/proxy_session.rs");
+    for field in [
+        "job_id = %job_id",
+        "session_id = %session_id",
+        "route_id = %route_id",
+        "peer = %spec.target",
+    ] {
+        assert_contains(
+            &proxy_session,
+            field,
+            "proxy session logs should expose daemon job/session/route correlation fields",
+        );
+    }
+
+    let remote_setup = read_repo_file("crates/ssh-proxy/src/node_daemon/remote_setup/executor.rs");
+    for field in [
+        "job_id = %spec.job_id()",
+        "session_id = %spec.session_id()",
+        "route_id = %spec.route_id()",
+        "execution_backend = \"remote_shell_bootstrap\"",
+        "fallback_used = true",
+    ] {
+        assert_contains(
+            &remote_setup,
+            field,
+            "remote setup fallback logs should expose correlation and fallback fields",
+        );
+    }
+
+    let systemd = read_repo_file("crates/ssh-proxy/src/service/platform/systemd.rs");
+    for field in [
+        "execution_backend = \"provider_command\"",
+        "fallback_used = true",
+        "native_backend = \"systemd_dbus\"",
+    ] {
+        assert_contains(
+            &systemd,
+            field,
+            "local service provider fallback logs should expose backend semantics",
+        );
+    }
+}
+
+#[test]
 fn native_provider_success_paths_are_preferred() {
     let core_external = read_repo_file("crates/ssh-proxy-core/src/external.rs");
     for symbol in [

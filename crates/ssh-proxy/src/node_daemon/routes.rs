@@ -229,6 +229,7 @@ impl NodeManager {
         let detail = spec.detail();
         let listen = spec.listen();
         let peer = spec.peer().to_string();
+        let execution_backend = spec.execution_backend();
         {
             let mut routes = self.routes.lock().await;
             routes.retain(|_, task| !task.handle.is_finished());
@@ -238,7 +239,17 @@ impl NodeManager {
                     if upgraded_persist {
                         task.persist = true;
                     }
-                    info!(route = %id, %direction, %listen, persist = task.persist, "route already registered; reusing existing task");
+                    info!(
+                        route = %id,
+                        route_id = %id,
+                        peer = %peer,
+                        %direction,
+                        %listen,
+                        persist = task.persist,
+                        execution_backend = %task.spec.execution_backend(),
+                        fallback_used = task.fallback_reason.is_some(),
+                        "route already registered; reusing existing task"
+                    );
                     return Ok(RouteStartOutcome::ReusedExisting {
                         persist: task.persist,
                         upgraded_persist,
@@ -273,7 +284,17 @@ impl NodeManager {
                 if upgraded_persist {
                     task.persist = true;
                 }
-                info!(route = %id, %direction, %listen, persist = task.persist, "route already registered during start race; reusing existing task");
+                info!(
+                    route = %id,
+                    route_id = %id,
+                    peer = %peer,
+                    %direction,
+                    %listen,
+                    persist = task.persist,
+                    execution_backend = %task.spec.execution_backend(),
+                    fallback_used = task.fallback_reason.is_some(),
+                    "route already registered during start race; reusing existing task"
+                );
                 return Ok(RouteStartOutcome::ReusedExisting {
                     persist: task.persist,
                     upgraded_persist,
@@ -289,6 +310,7 @@ impl NodeManager {
             stats.clone(),
             link_state.clone(),
         );
+        let fallback_used = fallback_reason.is_some();
         routes.insert(
             id.clone(),
             RouteTask {
@@ -296,7 +318,7 @@ impl NodeManager {
                 direction: direction.clone(),
                 detail,
                 listen: Some(listen),
-                peer: Some(peer),
+                peer: Some(peer.clone()),
                 persist,
                 created_at_unix,
                 fallback_reason,
@@ -305,7 +327,17 @@ impl NodeManager {
                 handle,
             },
         );
-        info!(route = %id, %direction, %listen, persist, "route registered");
+        info!(
+            route = %id,
+            route_id = %id,
+            peer = %peer,
+            %direction,
+            %listen,
+            persist,
+            execution_backend = %execution_backend,
+            fallback_used,
+            "route registered"
+        );
         Ok(RouteStartOutcome::Started)
     }
 }

@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 use tokio::time;
+use tracing::{info, warn};
 
 use crate::cli;
 use crate::node_daemon::{
@@ -18,6 +19,15 @@ impl NodeManager {
         spec: ProxySessionSpec,
         job_id: String,
     ) -> Result<()> {
+        let session_id = spec.session_id();
+        let route_id = spec.route_id();
+        info!(
+            job_id = %job_id,
+            session_id = %session_id,
+            route_id = %route_id,
+            peer = %spec.target,
+            "proxy session job started"
+        );
         let route_request = route_request_from_spec(&spec);
         let step = state_machine::resolve_target_step();
         self.proxy_job_phase(&spec, &job_id, step.phase, step.progress, step.message)
@@ -66,6 +76,14 @@ impl NodeManager {
                     .and_then(Value::as_str)
                     .map(str::to_string)
                     .or_else(|| Some(spec.remote_url()));
+                info!(
+                    job_id = %job_id,
+                    session_id = %session_id,
+                    route_id = %route_id,
+                    peer = %spec.target,
+                    remote_url = remote_url.as_deref().unwrap_or("unknown"),
+                    "proxy session route intent accepted"
+                );
                 self.jobs
                     .upsert(
                         job_for_phase(&spec, &job_id, JobPhase::StartRoute, 70)
@@ -84,6 +102,14 @@ impl NodeManager {
             Err(err) => {
                 let error = err.to_string();
                 if state_machine::route_start_conflict_is_repairable(&error) {
+                    warn!(
+                        job_id = %job_id,
+                        session_id = %session_id,
+                        route_id = %route_id,
+                        peer = %spec.target,
+                        error = %error,
+                        "proxy session route conflict detected; restarting daemon-owned route"
+                    );
                     let job = self
                         .jobs
                         .upsert(
@@ -111,6 +137,14 @@ impl NodeManager {
                                 .and_then(Value::as_str)
                                 .map(str::to_string)
                                 .or_else(|| Some(spec.remote_url()));
+                            info!(
+                                job_id = %job_id,
+                                session_id = %session_id,
+                                route_id = %route_id,
+                                peer = %spec.target,
+                                remote_url = remote_url.as_deref().unwrap_or("unknown"),
+                                "proxy session route intent accepted after restart"
+                            );
                             self.jobs
                                 .upsert(
                                     job_for_phase(&spec, &job_id, JobPhase::StartRoute, 70)
