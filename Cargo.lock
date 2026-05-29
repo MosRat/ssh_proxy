@@ -2279,6 +2279,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh-proxy-ssh"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "dirs",
+ "russh",
+ "ssh-proxy-core",
+ "tokio",
+ "tracing",
+ "whoami",
+]
+
+[[package]]
 name = "ssh-proxy-transport"
 version = "0.1.1"
 dependencies = [
@@ -2315,6 +2329,7 @@ dependencies = [
  "ssh-proxy-core",
  "ssh-proxy-lifecycle",
  "ssh-proxy-protocol",
+ "ssh-proxy-ssh",
  "ssh-proxy-transport",
  "tokio",
  "tokio-rustls",

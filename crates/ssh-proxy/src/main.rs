@@ -81,7 +81,6 @@ mod protocol;
 mod quic_native;
 mod quic_stream;
 mod route;
-mod ssh_auth;
 
 mod ssh_client;
 mod ssh_native;

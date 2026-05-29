@@ -195,6 +195,10 @@ fn workspace_crate_boundaries_remain_layered() {
         "crates/ssh-proxy-config/Cargo.toml",
         &["clap", "russh", "tokio", "windows-service", "ssh-proxy"],
     );
+    assert_manifest_avoids(
+        "crates/ssh-proxy-ssh/Cargo.toml",
+        &["clap", "windows-service", "ssh-proxy"],
+    );
 }
 
 fn read_repo_file(relative: &str) -> String {

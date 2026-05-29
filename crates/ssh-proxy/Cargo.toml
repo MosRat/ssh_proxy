@@ -28,6 +28,7 @@ ssh-proxy-config.workspace = true
 ssh-proxy-core.workspace = true
 ssh-proxy-lifecycle.workspace = true
 ssh-proxy-protocol.workspace = true
+ssh-proxy-ssh.workspace = true
 ssh-proxy-transport.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true

@@ -10,7 +10,7 @@ use russh::{
 };
 use tracing::{debug, info, warn};
 
-use crate::ssh_client::{ClientHandler, Target, openssh_default_identity_candidates};
+use crate::client::{ClientHandler, Target, openssh_default_identity_candidates};
 
 pub(crate) async fn authenticate(
     session: &mut client::Handle<ClientHandler>,
