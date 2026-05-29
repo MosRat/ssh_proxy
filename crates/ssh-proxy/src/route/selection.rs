@@ -65,6 +65,7 @@ pub(crate) fn remote_use_decision(
     Ok(decision)
 }
 
+#[cfg(test)]
 pub(crate) fn local_peer_addr(
     args: &cli::RouteArgs,
     config: &config::AppConfig,
