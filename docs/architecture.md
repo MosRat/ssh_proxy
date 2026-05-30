@@ -233,6 +233,17 @@ checksum/status checks. Private target aliases, jump topology, and upstream
 proxy values must come from local environment files; tracked docs and tests use
 only placeholder aliases.
 
+Protocol/transport matrix tests are the opt-in performance and stability layer
+above remote E2E. They use the same local-only target configuration, then write
+sanitized JSON/CSV artifacts that join connection strategy, selected transport,
+fallback classification, correctness, small throughput samples, first-byte
+latency, lost requests, reconnect count, and cleanup status. The matrix is
+report-first for speed numbers: correctness and classified cleanup are hard
+gates, while throughput and latency become thresholded only after repeated lab
+baselines. ProxyJump/no-login topology requires SSH/russh/SPX-over-SSH success;
+direct topology additionally attempts direct plain/TLS/QUIC/QUIC-native and
+classifies unreachable candidates as preflight skips or runtime failures.
+
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening, listener
 orchestration, session scheduling, and active-channel counter guards into

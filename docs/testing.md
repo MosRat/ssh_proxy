@@ -95,6 +95,8 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
   `rtk cargo test -p ssh_proxy --test node_daemon_routes -- --test-threads=1`;
 - transport runtime smoke:
   `rtk cargo test -p ssh_proxy --test transport_smoke -- --test-threads=1`;
+- protocol/transport matrix harness shape:
+  `rtk cargo test -p ssh_proxy --test transport_matrix`;
 - SPX runtime report and proxy tunnel adapter changes:
   `cargo test -p ssh_proxy --bin ssh_proxy controller socks`;
 - repair/report schema: `cargo test -p ssh_proxy --bin ssh_proxy repair diagnostics`;
@@ -153,6 +155,61 @@ Remote runs report only target alias, topology class, cleanup status, and
 failure classification. Each target gets a stamp, token, remote directory,
 daemon pidfile, control port, and transport port. Failed runs still clean up
 unless `SSH_PROXY_REMOTE_KEEP=1` is set for investigation.
+
+## Protocol/Transport Matrix Gate
+
+Use the matrix gate when protocol speed, stability, or connection selection
+policy changes. It is ignored and environment-gated like remote E2E, but it
+keeps strategy, data-plane correctness, and trend measurements in one artifact.
+Run it serially; do not start multiple ignored matrix or remote E2E cargo
+commands in parallel on Windows because the linker can contend for the same test
+binary.
+
+Layering:
+
+- `matrix_probe`: checks local release binary, Linux sidecar, `ssh`/`scp`/`curl`,
+  target topology, OpenSSH reachability, russh `host exec`, and remote `/tmp`
+  permissions.
+- `matrix_smoke`: starts an isolated remote daemon and verifies fixed-target
+  data-plane status through `ssh-native`, SPX over SSH, and direct
+  plain/TLS/QUIC/QUIC-native when the topology is direct.
+- `matrix_perf_smoke`: repeats the same correctness cases with low concurrency
+  and records bytes, duration, MiB/s, and first-byte latency as report-first
+  trend data.
+- `matrix_stability`: runs longer repeated status probes and records lost
+  requests and reconnect count; set a short duration for development.
+
+Common configuration:
+
+```powershell
+rtk cargo build -p ssh_proxy --release
+rtk cargo zigbuild -p ssh_proxy --target x86_64-unknown-linux-musl --release
+$env:SSH_PROXY_MATRIX = "1"
+$env:SSH_PROXY_MATRIX_LEVEL = "smoke" # probe, smoke, perf-smoke, or stability
+$env:SSH_PROXY_MATRIX_TARGETS = "proxyjump-alias,direct-alias"
+$env:SSH_PROXY_MATRIX_JUMP_TARGET = "proxyjump-alias"
+$env:SSH_PROXY_MATRIX_DIRECT_TARGET = "direct-alias"
+$env:SSH_PROXY_MATRIX_ACCEPT_NEW = "0"
+$env:SSH_PROXY_MATRIX_KEEP = "0"
+```
+
+Run layers explicitly:
+
+```powershell
+rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_probe --test-threads=1
+rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_smoke --test-threads=1
+rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_perf_smoke --test-threads=1
+$env:SSH_PROXY_MATRIX_DURATION_SECS = "300"
+rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_stability --test-threads=1
+```
+
+The matrix writes `transport-matrix.json` and `transport-matrix.csv` under a
+temporary artifact directory, or `SSH_PROXY_MATRIX_ARTIFACT_DIR` when set.
+Correctness, cleanup, and classified failures are hard failures. Throughput,
+latency, and reconnect observations are report-first until several lab runs
+establish stable thresholds. The legacy PowerShell benchmark scripts remain
+compatibility/lab wrappers; prefer the Rust matrix gate for release evidence
+because it uses `rcgen` in the test harness instead of an external `openssl.exe`.
 
 ## Full Local Gate
 
