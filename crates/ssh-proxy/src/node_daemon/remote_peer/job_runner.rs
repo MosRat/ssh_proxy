@@ -9,7 +9,8 @@ use crate::node_daemon::{
 use super::{
     job::remote_peer_job,
     report::{
-        now_unix, remote_dependency_report, remote_peer_blocker, remote_peer_lifecycle_report,
+        descriptor_install_required, descriptor_version_message, now_unix,
+        remote_dependency_report, remote_peer_blocker, remote_peer_lifecycle_report,
     },
 };
 
@@ -21,6 +22,7 @@ impl NodeManager {
         job_id: &str,
         job_kind: &str,
         spec: Option<&ProxySessionSpec>,
+        force_install: bool,
     ) -> Result<bool> {
         self.remote_peer_phase(
             alias,
@@ -35,9 +37,33 @@ impl NodeManager {
         .await?;
         match deploy::refresh_remote_peer_descriptor(install_args.clone()).await {
             Ok(result) => {
-                self.record_refreshed_peer(alias, &result, &install_args, job_id, job_kind, spec)
+                if !descriptor_install_required(&result.descriptor, force_install) {
+                    self.record_refreshed_peer(
+                        alias,
+                        &result,
+                        &install_args,
+                        job_id,
+                        job_kind,
+                        spec,
+                    )
                     .await?;
-                return Ok(true);
+                    return Ok(true);
+                }
+                let message = if force_install {
+                    "remote peer update forced by caller".to_string()
+                } else {
+                    descriptor_version_message(&result.descriptor)
+                };
+                self.record_peer_waiting(
+                    alias,
+                    job_id,
+                    job_kind,
+                    spec,
+                    &install_args,
+                    Some(message),
+                    "remote descriptor is stale; bootstrapping persistent peer",
+                )
+                .await?;
             }
             Err(err) => {
                 self.record_peer_waiting(

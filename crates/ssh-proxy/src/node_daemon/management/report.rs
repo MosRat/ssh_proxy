@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 
@@ -214,22 +216,32 @@ impl NodeManager {
         response_line(value)
     }
 
-    pub(in crate::node_daemon) async fn update_peer(&self, request: NodeRequest) -> Result<String> {
+    pub(in crate::node_daemon) async fn update_peer(
+        self: Arc<Self>,
+        request: NodeRequest,
+    ) -> Result<String> {
         let Some(args) = request.bootstrap else {
             return NodeResponse::error("bad_request", "peer_update requires bootstrap args")
                 .to_line();
         };
         let alias = args.alias.clone().unwrap_or_else(|| args.target.clone());
-        let response = self.refresh_peer_from_args(args).await?;
-        let mut value: serde_json::Value = serde_json::from_str(response.trim())?;
+        let mut response = NodeRequest::peer_update(args);
+        response.alias = Some(alias);
+        let mut line = self
+            .accept_remote_peer_job(
+                response,
+                "peer_update",
+                "remote_peer_update",
+                "peer update accepted",
+            )
+            .await?;
+        let mut value: serde_json::Value = serde_json::from_str(line.trim())?;
         if let Some(object) = value.as_object_mut() {
-            object.insert("kind".to_string(), json!("peer_update"));
             object.insert("broker_api".to_string(), json!("v0.2"));
-            object.insert("alias".to_string(), json!(alias));
-            object.insert("state".to_string(), json!("refreshed"));
             object.insert("requires_external_ssh".to_string(), json!(false));
         }
-        response_line(value)
+        line = response_line(value)?;
+        Ok(line)
     }
 }
 

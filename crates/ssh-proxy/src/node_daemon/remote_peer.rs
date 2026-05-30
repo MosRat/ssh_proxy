@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{cli, deploy, peer_lifecycle, repair};
 
@@ -25,7 +27,31 @@ use report::{
 };
 
 impl NodeManager {
-    pub(super) async fn remote_peer_ensure(&self, request: NodeRequest) -> Result<String> {
+    pub(super) async fn remote_peer_ensure(
+        self: Arc<Self>,
+        request: NodeRequest,
+    ) -> Result<String> {
+        self.accept_remote_peer_job(
+            request,
+            "remote_peer_ensure",
+            "ensure_remote_peer",
+            "remote peer ensure accepted",
+        )
+        .await
+    }
+
+    pub(in crate::node_daemon) async fn accept_remote_peer_job(
+        self: Arc<Self>,
+        request: NodeRequest,
+        response_kind: &'static str,
+        job_kind: &'static str,
+        accepted_message: &'static str,
+    ) -> Result<String> {
+        let force_install = request
+            .bootstrap
+            .as_ref()
+            .is_some_and(|bootstrap| bootstrap.force);
+        let proxy_session = request.proxy_session.clone();
         let (alias, install_args) = match request.proxy_session.as_ref() {
             Some(spec) => (
                 spec.target.clone(),
@@ -48,21 +74,49 @@ impl NodeManager {
         let job_id = format!("remote-peer:{}", sanitize_key(&alias));
         self.jobs
             .upsert(
-                JobRecord::new(job_id.clone(), "ensure_remote_peer")
+                JobRecord::new(job_id.clone(), job_kind)
                     .with_target(alias.clone())
                     .transition(JobState::Queued, JobPhase::Queued, 0),
-                "remote peer ensure accepted",
+                accepted_message,
             )
             .await?;
-        let ok = self
-            .run_remote_peer_ensure_job(
-                &alias,
-                install_args,
-                &job_id,
-                "ensure_remote_peer",
-                request.proxy_session.as_ref(),
-            )
-            .await?;
+        let manager = self.clone();
+        let task_alias = alias.clone();
+        let task_job_id = job_id.clone();
+        tokio::spawn(async move {
+            if let Err(err) = manager
+                .run_remote_peer_ensure_job(
+                    &task_alias,
+                    install_args,
+                    &task_job_id,
+                    job_kind,
+                    proxy_session.as_ref(),
+                    force_install,
+                )
+                .await
+            {
+                error!(
+                    job_id = %task_job_id,
+                    peer = %task_alias,
+                    error = %err,
+                    "remote peer job task failed"
+                );
+                let failed = remote_peer_job(
+                    &task_alias,
+                    &task_job_id,
+                    job_kind,
+                    proxy_session.as_ref(),
+                    JobPhase::Failed,
+                    100,
+                )
+                .failed(err.to_string(), Some("job_task_failed".to_string()))
+                .with_next_action("run ssh_proxy doctor --json --report");
+                let _ = manager
+                    .jobs
+                    .upsert(failed, "remote peer job task failed")
+                    .await;
+            }
+        });
         let job = self.jobs.get(&job_id).await.map(|job| job.to_value());
         let peer = self
             .state
@@ -70,10 +124,13 @@ impl NodeManager {
             .await
             .and_then(|peer| serde_json::to_value(peer).ok());
         response_line(json!({
-            "ok": ok,
-            "kind": "remote_peer_ensure",
+            "ok": true,
+            "kind": response_kind,
             "daemon_api": "v0.3",
-            "target": alias,
+            "target": alias.clone(),
+            "alias": alias,
+            "state": "accepted",
+            "job_id": job_id,
             "job": job,
             "peer": peer,
         }))
@@ -120,6 +177,7 @@ impl NodeManager {
             job_id,
             "ensure_proxy_session",
             Some(spec),
+            false,
         )
         .await
     }
@@ -306,6 +364,8 @@ impl NodeManager {
                 peer_lifecycle::workflow::LifecycleOperation::Ensure,
             ))
             .await?;
+        self.finish_direct_remote_peer_job(alias, job_id, job_kind, spec)
+            .await?;
         Ok(())
     }
 
@@ -360,6 +420,31 @@ impl NodeManager {
             status.install = Some(install_report.clone());
         }
         self.state.upsert_peer_status(status).await?;
+        self.finish_direct_remote_peer_job(alias, job_id, job_kind, spec)
+            .await?;
+        Ok(())
+    }
+
+    async fn finish_direct_remote_peer_job(
+        &self,
+        alias: &str,
+        job_id: &str,
+        job_kind: &str,
+        spec: Option<&ProxySessionSpec>,
+    ) -> Result<()> {
+        if spec.is_some() {
+            return Ok(());
+        }
+        self.jobs
+            .upsert(
+                remote_peer_job(alias, job_id, job_kind, None, JobPhase::Healthy, 100).transition(
+                    JobState::Healthy,
+                    JobPhase::Healthy,
+                    100,
+                ),
+                "remote peer ready",
+            )
+            .await?;
         Ok(())
     }
 }
@@ -531,6 +616,30 @@ mod tests {
         assert_eq!(install["operation"], "ensure");
         assert_eq!(install["provider"], "systemd_user");
         assert_eq!(install["service_name"], "ssh-proxy-helper");
+    }
+
+    #[test]
+    fn descriptor_update_required_detects_stale_or_missing_version() {
+        assert!(!report::descriptor_update_required(&json!({
+            "version": env!("CARGO_PKG_VERSION")
+        })));
+        assert!(report::descriptor_install_required(
+            &json!({
+                "version": env!("CARGO_PKG_VERSION")
+            }),
+            true
+        ));
+        assert!(!report::descriptor_install_required(
+            &json!({
+                "version": env!("CARGO_PKG_VERSION")
+            }),
+            false
+        ));
+        assert!(report::descriptor_update_required(&json!({
+            "version": "0.0.1"
+        })));
+        assert!(report::descriptor_update_required(&json!({})));
+        assert!(report::descriptor_version_message(&json!({"version": "0.0.1"})).contains("0.0.1"));
     }
 
     #[test]

@@ -63,10 +63,7 @@ pub(super) fn peer_status_from_descriptor(
             recovery_attempts,
         )),
         dependency_report: Some(remote_dependency_report()),
-        update_required: descriptor
-            .get("version")
-            .and_then(Value::as_str)
-            .is_some_and(|version| version != env!("CARGO_PKG_VERSION")),
+        update_required: descriptor_update_required(descriptor),
         blocker: None,
         repair_action: None,
         last_error: None,
@@ -74,6 +71,28 @@ pub(super) fn peer_status_from_descriptor(
         recovery_attempts,
         updated_at_unix: now_unix(),
     }
+}
+
+pub(super) fn descriptor_update_required(descriptor: &Value) -> bool {
+    descriptor
+        .get("version")
+        .and_then(Value::as_str)
+        .map_or(true, |version| version != env!("CARGO_PKG_VERSION"))
+}
+
+pub(super) fn descriptor_install_required(descriptor: &Value, force: bool) -> bool {
+    force || descriptor_update_required(descriptor)
+}
+
+pub(super) fn descriptor_version_message(descriptor: &Value) -> String {
+    let version = descriptor
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    format!(
+        "remote peer version {version} does not match local {}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 pub(super) fn remote_dependency_report() -> Value {

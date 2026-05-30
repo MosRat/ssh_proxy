@@ -161,8 +161,26 @@ async fn dispatch_request(manager: Arc<NodeManager>, request: NodeRequest) -> Re
         DaemonControlCommand::PeerList => manager.peers_json().await,
         DaemonControlCommand::RemotePeerEnsure => manager.remote_peer_ensure(request).await,
         DaemonControlCommand::RemotePeerStatus => manager.remote_peer_status(request).await,
-        DaemonControlCommand::RemotePeerRepair => manager.remote_peer_ensure(request).await,
-        DaemonControlCommand::RemotePeerUpdate => manager.remote_peer_ensure(request).await,
+        DaemonControlCommand::RemotePeerRepair => {
+            manager
+                .accept_remote_peer_job(
+                    request,
+                    "remote_peer_repair",
+                    "remote_peer_update",
+                    "remote peer repair accepted",
+                )
+                .await
+        }
+        DaemonControlCommand::RemotePeerUpdate => {
+            manager
+                .accept_remote_peer_job(
+                    request,
+                    "remote_peer_update",
+                    "remote_peer_update",
+                    "remote peer update accepted",
+                )
+                .await
+        }
         DaemonControlCommand::TokenRotate => manager.rotate_token().await,
         DaemonControlCommand::PeerBootstrap => manager.bootstrap_peer(request).await,
         DaemonControlCommand::PeerEnsure => manager.ensure_peer(request).await,
