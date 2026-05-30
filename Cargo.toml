@@ -4,7 +4,7 @@ default-members = ["crates/ssh-proxy"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "A peer-oriented SSH bootstrap and proxy routing daemon with SSH fallback, TLS/TCP, and QUIC transports."
 license = "MIT"

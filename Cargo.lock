@@ -3074,7 +3074,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "serde",
@@ -3086,7 +3086,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-config"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3101,7 +3101,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-control"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3112,7 +3112,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3120,7 +3120,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-daemon"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3130,7 +3130,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-deploy"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "gix-config",
  "serde",
@@ -3142,7 +3142,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-lifecycle"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-platform"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "planif",
@@ -3170,7 +3170,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-protocol"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3182,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-route"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3191,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-service"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3200,7 +3200,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-ssh"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3214,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "ssh-proxy-transport"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "quinn",
@@ -3230,7 +3230,7 @@ dependencies = [
 
 [[package]]
 name = "ssh_proxy"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "bytes",
