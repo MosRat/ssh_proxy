@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -10,6 +10,10 @@ use ssh_proxy_daemon::report as daemon_report;
 use crate::{
     cli, config, control_socket, diagnostics, install_report, node_daemon, repair, service,
 };
+
+const DAEMON_INSTALL_HEALTH_TIMEOUT: Duration = Duration::from_secs(90);
+const DAEMON_INSTALL_HEALTH_POLL: Duration = Duration::from_millis(500);
+const DAEMON_INSTALL_HEALTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn daemon(args: cli::DaemonArgs, config: config::AppConfig) -> Result<()> {
     match args.command {
@@ -124,9 +128,12 @@ async fn install_worker(
     json_output: bool,
     no_copy: bool,
     log: PathBuf,
-    config: config::AppConfig,
+    mut config: config::AppConfig,
 ) -> Result<()> {
     let install_id = format!("install-{}-{}", std::process::id(), now_unix());
+    let health_token = config
+        .ensure_daemon_token()
+        .context("failed to prepare daemon health auth token")?;
     install_report::append_install_event(
         &log,
         &install_id,
@@ -159,7 +166,7 @@ async fn install_worker(
         "waiting for daemon control endpoint health",
         None,
     )?;
-    match wait_for_daemon_health().await {
+    match wait_for_daemon_health(Some(&health_token)).await {
         Ok(()) => {
             install_report::append_install_event(
                 &log,
@@ -188,28 +195,134 @@ async fn install_worker(
     }
 }
 
-async fn wait_for_daemon_health() -> Result<()> {
+async fn wait_for_daemon_health(token: Option<&str>) -> Result<()> {
     let endpoint =
         control_socket::ControlEndpoint::parse(&control_socket::default_endpoint_string())?;
-    let request = node_daemon::NodeRequest::command("status")
-        .to_value()
-        .context("failed to encode daemon status request")?;
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(20);
+    let request = daemon_health_status_request(token)?;
+    let deadline = tokio::time::Instant::now() + DAEMON_INSTALL_HEALTH_TIMEOUT;
+    let mut last_observation = None;
     loop {
-        match control_socket::request(&endpoint, &format!("{request}\n")).await {
-            Ok(response) => {
-                let value = serde_json::from_str::<Value>(&response).unwrap_or(Value::Null);
-                if value.get("ok").and_then(Value::as_bool) == Some(true) {
+        if tokio::time::Instant::now() >= deadline {
+            bail!(
+                "{}",
+                daemon_health_timeout_message(last_observation.as_deref())
+            );
+        }
+        match tokio::time::timeout(
+            DAEMON_INSTALL_HEALTH_REQUEST_TIMEOUT,
+            control_socket::request(&endpoint, &format!("{request}\n")),
+        )
+        .await
+        {
+            Ok(Ok(response)) => {
+                if let Some(observation) = daemon_health_response_observation(&response) {
+                    last_observation = Some(observation);
+                } else {
                     return Ok(());
                 }
             }
-            Err(_) if tokio::time::Instant::now() < deadline => {}
-            Err(err) => return Err(err).context("daemon health check failed after install"),
+            Ok(Err(err)) => {
+                last_observation = Some(format!("daemon health check request failed: {err}"));
+            }
+            Err(_) => {
+                last_observation = Some(format!(
+                    "daemon status request exceeded {}s",
+                    DAEMON_INSTALL_HEALTH_REQUEST_TIMEOUT.as_secs()
+                ));
+            }
         }
-        if tokio::time::Instant::now() >= deadline {
-            bail!("daemon health check timed out after install");
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            bail!(
+                "{}",
+                daemon_health_timeout_message(last_observation.as_deref())
+            );
         }
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        tokio::time::sleep(DAEMON_INSTALL_HEALTH_POLL.min(remaining)).await;
+    }
+}
+
+fn daemon_health_status_request(token: Option<&str>) -> Result<Value> {
+    let mut request = node_daemon::NodeRequest::command("status")
+        .to_value()
+        .context("failed to encode daemon status request")?;
+    node_daemon::attach_auth_token(&mut request, token);
+    Ok(request)
+}
+
+fn daemon_health_response_observation(response: &str) -> Option<String> {
+    let value = match serde_json::from_str::<Value>(response) {
+        Ok(value) => value,
+        Err(err) => {
+            return Some(format!(
+                "invalid daemon status response: {err}; bytes={}",
+                response.len()
+            ));
+        }
+    };
+    if value.get("ok").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    if let Some(ok) = value.get("ok").and_then(Value::as_bool) {
+        parts.push(format!("ok={ok}"));
+    }
+    push_daemon_health_field(&mut parts, &value, "state");
+    push_daemon_health_field(&mut parts, &value, "health");
+    push_daemon_health_field(&mut parts, &value, "code");
+    push_daemon_health_field(&mut parts, &value, "blocker");
+    push_daemon_health_field(&mut parts, &value, "message");
+    push_daemon_health_field(&mut parts, &value, "error");
+
+    Some(if parts.is_empty() {
+        "daemon status response was not healthy".to_string()
+    } else {
+        format!(
+            "daemon status response was not healthy ({})",
+            parts.join(", ")
+        )
+    })
+}
+
+fn push_daemon_health_field(parts: &mut Vec<String>, value: &Value, field: &str) {
+    let Some(raw) = value.get(field) else {
+        return;
+    };
+    if let Some(text) = raw.as_str() {
+        if !text.is_empty() {
+            parts.push(format!("{field}={}", compact_health_detail(text)));
+        }
+    } else if raw.is_boolean() || raw.is_number() {
+        parts.push(format!("{field}={raw}"));
+    }
+}
+
+fn compact_health_detail(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate_health_detail(&compact, 160)
+}
+
+fn truncate_health_detail(value: &str, max_chars: usize) -> String {
+    let mut output = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if index == max_chars {
+            output.push_str("...");
+            return output;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+fn daemon_health_timeout_message(last_observation: Option<&str>) -> String {
+    match last_observation {
+        Some(observation) => {
+            format!("daemon health check timed out after install; last observation: {observation}")
+        }
+        None => {
+            "daemon health check timed out after install; no status response observed".to_string()
+        }
     }
 }
 
@@ -703,6 +816,54 @@ mod tests {
             cli::ServiceCommand::Start,
         );
         assert_eq!(args.control, None);
+    }
+
+    #[test]
+    fn daemon_health_observation_accepts_ok_status() {
+        assert_eq!(
+            super::daemon_health_response_observation(r#"{"ok":true,"health":"healthy"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn daemon_health_status_request_attaches_install_token() {
+        let request =
+            super::daemon_health_status_request(Some("install-secret")).expect("status request");
+
+        assert_eq!(request["cmd"], "status");
+        assert_eq!(request["auth_token"], "install-secret");
+    }
+
+    #[test]
+    fn daemon_health_observation_summarizes_unhealthy_status() {
+        let observation = super::daemon_health_response_observation(
+            r#"{"ok":false,"blocker":"daemon_unavailable","message":"starting slowly","token":"secret-token"}"#,
+        )
+        .expect("unhealthy status should produce observation");
+
+        assert!(observation.contains("ok=false"));
+        assert!(observation.contains("blocker=daemon_unavailable"));
+        assert!(observation.contains("message=starting slowly"));
+        assert!(!observation.contains("secret-token"));
+    }
+
+    #[test]
+    fn daemon_health_observation_summarizes_invalid_status_without_echoing_payload() {
+        let observation = super::daemon_health_response_observation("not-json-secret-token")
+            .expect("invalid status should produce observation");
+
+        assert!(observation.contains("invalid daemon status response"));
+        assert!(observation.contains("bytes="));
+        assert!(!observation.contains("secret-token"));
+    }
+
+    #[test]
+    fn daemon_health_timeout_message_preserves_last_observation() {
+        let message = super::daemon_health_timeout_message(Some("daemon still starting"));
+
+        assert!(message.contains("timed out after install"));
+        assert!(message.contains("last observation: daemon still starting"));
     }
 
     #[test]
