@@ -166,6 +166,84 @@ fn fast_check_scripts_keep_acceleration_contract() {
 }
 
 #[test]
+fn remote_e2e_harness_stays_opt_in_and_sanitized() {
+    let entry = read_repo_file("crates/ssh-proxy/tests/remote_e2e.rs");
+    let support = [
+        read_repo_file("crates/ssh-proxy/tests/support/remote_e2e/mod.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/remote_e2e/config.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/remote_e2e/command.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/remote_e2e/sandbox.rs"),
+    ]
+    .join("\n");
+    let example = read_repo_file("scripts/remote-e2e.local.example.ps1");
+
+    for test_name in ["remote_probe", "remote_smoke", "remote_full"] {
+        assert_contains(
+            &entry,
+            &format!("fn {test_name}()"),
+            "remote e2e harness should expose the documented ignored test entry",
+        );
+    }
+    assert!(
+        entry.matches("#[ignore]").count() >= 3,
+        "remote e2e tests should stay ignored and out of default gates"
+    );
+
+    for env_name in [
+        "SSH_PROXY_REMOTE_E2E",
+        "SSH_PROXY_REMOTE_LEVEL",
+        "SSH_PROXY_REMOTE_TARGETS",
+        "SSH_PROXY_REMOTE_JUMP_TARGET",
+        "SSH_PROXY_REMOTE_DIRECT_TARGET",
+        "SSH_PROXY_REMOTE_UPSTREAM_PROXY",
+        "SSH_PROXY_REMOTE_ACCEPT_NEW",
+        "SSH_PROXY_REMOTE_KEEP",
+    ] {
+        assert_contains(
+            &support,
+            env_name,
+            "remote e2e harness should be configured only by environment",
+        );
+        assert_contains(
+            &example,
+            env_name,
+            "remote e2e example should document every public environment knob",
+        );
+    }
+
+    assert_contains(
+        &support,
+        "remote_cleanup",
+        "remote e2e harness should clean up temporary daemon state by default",
+    );
+    assert_contains(
+        &support,
+        "/tmp/ssh_proxy-e2e-",
+        "remote e2e harness should isolate remote temporary files",
+    );
+    assert_not_contains(
+        &support,
+        "102",
+        "remote e2e harness should not bake private target aliases into code",
+    );
+    assert_not_contains(
+        &support,
+        "125",
+        "remote e2e harness should not bake private target aliases into code",
+    );
+    assert_not_contains(
+        &example,
+        "102",
+        "remote e2e example should use placeholder aliases",
+    );
+    assert_not_contains(
+        &example,
+        "125",
+        "remote e2e example should use placeholder aliases",
+    );
+}
+
+#[test]
 fn workspace_crate_boundaries_remain_layered() {
     let root = read_repo_file("Cargo.toml");
     assert_contains(
