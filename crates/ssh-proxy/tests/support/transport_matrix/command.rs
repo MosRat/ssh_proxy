@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
@@ -18,6 +18,7 @@ pub(super) struct TcpMeasurement {
     pub(super) bytes: u64,
     pub(super) duration_ms: u128,
     pub(super) first_byte_ms: u128,
+    pub(super) proxy_stderr: Option<String>,
 }
 
 impl ChildGuard {
@@ -190,9 +191,6 @@ pub(super) fn control_status_via_tcp(
     stream
         .write_all(format!("{request}\n").as_bytes())
         .map_err(|err| format!("write control request: {err}"))?;
-    stream
-        .shutdown(std::net::Shutdown::Write)
-        .map_err(|err| format!("shutdown write: {err}"))?;
 
     let mut response = Vec::new();
     let mut first_byte_ms = None;
@@ -205,6 +203,15 @@ pub(super) fn control_status_via_tcp(
                     first_byte_ms = Some(started.elapsed().as_millis());
                 }
                 response.extend_from_slice(&buf[..n]);
+                if serde_json::from_slice::<serde_json::Value>(&response).is_ok() {
+                    break;
+                }
+            }
+            Err(err) if matches!(err.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                if response.is_empty() {
+                    return Err(format!("read control response: {err}"));
+                }
+                break;
             }
             Err(err) => return Err(format!("read control response: {err}")),
         }
@@ -217,6 +224,7 @@ pub(super) fn control_status_via_tcp(
         response,
         duration_ms,
         first_byte_ms: first_byte_ms.unwrap_or(duration_ms),
+        proxy_stderr: None,
     })
 }
 

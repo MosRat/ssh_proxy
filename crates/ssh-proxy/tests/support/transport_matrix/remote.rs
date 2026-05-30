@@ -348,12 +348,9 @@ impl RemoteMatrixSandbox {
         for result in measurements {
             match result {
                 Ok(measurement) => {
-                    if !measurement.response.contains(r#""ok":true"#) {
+                    if !control_response_ok(&measurement.response) {
                         lost += 1;
-                        row.fail(
-                            "runtime",
-                            format!("unexpected control response: {}", measurement.response),
-                        );
+                        row.fail("runtime", unexpected_control_response(&measurement));
                     } else {
                         total_bytes += measurement.bytes;
                         total_duration += measurement.duration_ms;
@@ -385,6 +382,13 @@ impl RemoteMatrixSandbox {
     ) -> Vec<Result<super::command::TcpMeasurement, String>> {
         let listen = free_addr();
         let home = temp_dir("matrix-proxy-home");
+        let stderr_path = temp_path("matrix-proxy-stderr", "log");
+        let stderr = match fs::File::create(&stderr_path)
+            .map_err(|err| format!("create proxy stderr log {}: {err}", stderr_path.display()))
+        {
+            Ok(file) => file,
+            Err(err) => return vec![Err(err)],
+        };
         let mut command = Command::new(&config.local_bin);
         command
             .args([
@@ -407,7 +411,7 @@ impl RemoteMatrixSandbox {
             .env("SSH_PROXY_HOME", home)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(stderr));
         if config.accept_new {
             command.arg("--accept-new");
         }
@@ -421,15 +425,25 @@ impl RemoteMatrixSandbox {
             Err(err) => return vec![Err(err)],
         };
         if let Err(err) = wait_tcp(listen, &mut child) {
-            return vec![Err(err)];
+            return vec![Err(with_proxy_log(err, &stderr_path))];
         }
 
-        let results = match config.requested {
+        let mut results = match config.requested {
             MatrixLevel::Stability => self.run_stability_samples(config, listen),
             MatrixLevel::PerfSmoke => self.run_perf_samples(config, listen, spec.samples),
             _ => vec![control_status_via_tcp(listen, &self.token)],
         };
         child.kill_and_wait();
+        let proxy_log = read_proxy_log(&stderr_path);
+        for result in &mut results {
+            match result {
+                Ok(measurement) => measurement.proxy_stderr = proxy_log.clone(),
+                Err(err) => {
+                    let current = std::mem::take(err);
+                    *err = append_proxy_log(&current, proxy_log.as_deref());
+                }
+            }
+        }
         results
     }
 
@@ -689,6 +703,50 @@ fn classify_runtime_error(error: &str) -> &'static str {
         "auth"
     } else {
         "runtime"
+    }
+}
+
+fn control_response_ok(response: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(response)
+        .ok()
+        .and_then(|value| value.get("ok").and_then(|ok| ok.as_bool()))
+        .unwrap_or(false)
+}
+
+fn unexpected_control_response(measurement: &super::command::TcpMeasurement) -> String {
+    append_proxy_log(
+        &format!(
+            "unexpected control response: {}",
+            nonempty_or_placeholder(&measurement.response)
+        ),
+        measurement.proxy_stderr.as_deref(),
+    )
+}
+
+fn with_proxy_log(error: String, stderr_path: &PathBuf) -> String {
+    append_proxy_log(&error, read_proxy_log(stderr_path).as_deref())
+}
+
+fn append_proxy_log(error: &str, proxy_log: Option<&str>) -> String {
+    match proxy_log.map(str::trim).filter(|log| !log.is_empty()) {
+        Some(log) => format!("{error}; proxy_stderr={log}"),
+        None => error.to_string(),
+    }
+}
+
+fn read_proxy_log(path: &PathBuf) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|log| log.trim().to_string())
+        .filter(|log| !log.is_empty())
+}
+
+fn nonempty_or_placeholder(value: &str) -> &str {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "<empty>"
+    } else {
+        trimmed
     }
 }
 
