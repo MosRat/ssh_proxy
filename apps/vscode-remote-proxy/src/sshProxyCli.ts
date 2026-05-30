@@ -70,6 +70,8 @@ export class SshProxyCli {
     readonly localProxy: string;
     readonly remoteBind: string;
     readonly remotePort: number;
+    readonly remoteAutoPickPort?: boolean;
+    readonly remotePortRangeSize?: number;
     readonly connectMode: 'auto' | 'reverse-link' | 'direct';
     readonly sshTarget?: SshTargetConfig;
     readonly workspacePaths?: readonly string[];

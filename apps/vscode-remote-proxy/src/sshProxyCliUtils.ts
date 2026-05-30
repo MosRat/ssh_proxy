@@ -28,6 +28,8 @@ export function buildSshProxyVscodeUpArgs(options: {
   readonly localProxy: string;
   readonly remoteBind: string;
   readonly remotePort: number;
+  readonly remoteAutoPickPort?: boolean;
+  readonly remotePortRangeSize?: number;
   readonly connectMode: 'auto' | 'reverse-link' | 'direct';
   readonly sshTarget?: {
     readonly hostName?: string;
@@ -66,9 +68,14 @@ export function buildSshProxyVscodeUpArgs(options: {
     options.remoteBind,
     '--remote-port',
     String(options.remotePort),
-    '--connect-mode',
-    options.connectMode,
   ];
+  if (options.remoteAutoPickPort === false) {
+    args.push('--no-remote-auto-pick');
+  }
+  if (options.remotePortRangeSize && Number.isFinite(options.remotePortRangeSize)) {
+    args.push('--remote-port-range-size', String(Math.max(1, Math.trunc(options.remotePortRangeSize))));
+  }
+  args.push('--connect-mode', options.connectMode);
   if (options.sshTarget?.hostName) {
     args.push('--ssh-host-name', options.sshTarget.hostName);
   }

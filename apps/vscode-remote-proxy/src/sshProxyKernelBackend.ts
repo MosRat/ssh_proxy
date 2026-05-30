@@ -127,6 +127,8 @@ export class SshProxyKernelBackend implements ForwardingBackend {
         localProxy: proxy.local.url,
         remoteBind: proxy.remoteBindHost,
         remotePort: proxy.remotePort,
+        remoteAutoPickPort: config.remoteAutoPickPort,
+        remotePortRangeSize: config.remotePortRangeSize,
         connectMode: config.sshProxyConnectMode,
         sshTarget: proxy.sshTarget,
         workspacePaths: remoteWorkspacePaths(),
@@ -160,6 +162,10 @@ export class SshProxyKernelBackend implements ForwardingBackend {
       this.statusValue = 'running';
       this.lastErrorValue = undefined;
       this.changeEmitter.fire();
+      const active = this.currentProxy;
+      if (active && active.remotePort !== proxy.remotePort) {
+        this.output.appendLine(`ssh_proxy selected remote port: ${proxy.remotePort} -> ${active.remotePort}`);
+      }
       if (record?.health) {
         this.output.appendLine(`ssh_proxy route health: ${prettyJson(record.health)}`);
       }
@@ -272,13 +278,16 @@ export class SshProxyKernelBackend implements ForwardingBackend {
   }
 
   private applyRouteState(proxy: AppliedProxy, routeState: SshProxyRouteState): void {
+    const remoteUrl = routeState.remoteUrl ?? proxy.remoteUrl;
+    const remotePort = remotePortFromUrl(remoteUrl) ?? proxy.remotePort;
     this.childRouteId = routeState.routeId;
     this.currentSelectedTransport = routeState.selectedTransport;
     this.currentFallbackReason = routeState.fallbackReason;
     this.currentConnectMode = routeState.connectMode;
     this.currentProxy = {
       ...proxy,
-      remoteUrl: routeState.remoteUrl ?? proxy.remoteUrl,
+      remoteUrl,
+      remotePort,
       routeId: routeState.routeId,
       routeOwner: routeState.owner,
       selectedTransport: routeState.selectedTransport,
@@ -361,6 +370,19 @@ function asString(value: unknown): string | undefined {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function remotePortFromUrl(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    const port = Number(parsed.port);
+    return Number.isFinite(port) && port > 0 ? port : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function serverDirName(): string {
