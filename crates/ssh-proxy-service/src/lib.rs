@@ -4,9 +4,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 mod broker;
+mod health;
 mod status;
 
 pub use broker::{ServiceBrokerReportInput, service_broker_report};
+pub use health::{
+    BinaryHealthInput, ConfigFileHealthInput, ConfigFileHealthState, EndpointHealthInput,
+    PeerCompatibilityInput, PeerHealthInput, PeerRegistryHealthInput, PeerVersionCheckInput,
+    RouteStoreHealthInput, RouteStoreHealthState, ServiceHealthInput, binary_health_report,
+    config_file_health_report, endpoint_health_report, peer_compatibility_report,
+    peer_health_report, peer_registry_health_report, peer_version_check_report,
+    route_store_health_report, service_health_report, unrecorded_peer_version_check_report,
+};
 pub use status::{
     ServiceManagerSummaryInput, control_endpoint_kind_from_str, persistent_manager_kind,
     selected_control_summary, service_candidates_summary, service_manager_summary,

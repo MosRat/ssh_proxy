@@ -10,7 +10,6 @@ mod executor_adapter;
 mod health;
 mod inventory;
 mod labels;
-mod peer_health;
 mod plan;
 mod platform;
 mod report;

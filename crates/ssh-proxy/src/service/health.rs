@@ -1,41 +1,44 @@
 use std::{
-    collections::HashSet,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::Path,
 };
 
-use serde_json::{Value, json};
+use serde_json::Value;
+use ssh_proxy_service::{
+    BinaryHealthInput, ConfigFileHealthInput, ConfigFileHealthState, EndpointHealthInput,
+    PeerCompatibilityInput, PeerHealthInput, PeerRegistryHealthInput, RouteStoreHealthInput,
+    RouteStoreHealthState, ServiceHealthInput, binary_health_report, config_file_health_report,
+    endpoint_health_report, peer_compatibility_report, peer_health_report,
+    peer_registry_health_report, route_store_health_report, service_health_report,
+};
 use tokio::net::TcpStream;
 use tokio::time::{self, Duration};
 
 use crate::config;
 
-use super::{peer_health, plan::ServicePlan};
+use super::plan::ServicePlan;
 
 pub(super) async fn service_health(plan: &ServicePlan) -> Value {
     let (config_health, config_snapshot) = config_file_health_with_snapshot(&plan.config_path);
-    json!({
-        "config": config_health,
-        "route_store": route_store_health(&plan.route_store_path),
-        "binary": binary_health(plan),
-        "listeners": {
-            "control": control_endpoint_health(&plan.endpoint),
-            "plain_tcp": tcp_listener_health(plan.transport).await,
-            "tls_tcp": tcp_listener_health(plan.tls_transport).await,
-            "quic": quic_listener_health(plan.quic_transport),
-        },
-        "peers": peer_registry_health(config_snapshot.as_ref()).await,
+    service_health_report(ServiceHealthInput {
+        config: config_health,
+        route_store: route_store_health(&plan.route_store_path),
+        binary: binary_health(plan),
+        control: control_endpoint_health(&plan.endpoint),
+        plain_tcp: tcp_listener_health(plan.transport).await,
+        tls_tcp: tcp_listener_health(plan.tls_transport).await,
+        quic: quic_listener_health(plan.quic_transport),
+        peers: peer_registry_health(config_snapshot.as_ref()).await,
     })
 }
 
 pub(super) fn config_file_health_with_snapshot(path: &Path) -> (Value, Option<config::AppConfig>) {
     if !path.exists() {
         return (
-            json!({
-            "ok": false,
-            "exists": false,
-            "path": path,
-            "message": "config file does not exist; run `ssh_proxy config init` or `ssh_proxy service install`"
+            config_file_health_report(ConfigFileHealthInput {
+                path: path.display().to_string(),
+                current_schema_version: config::CONFIG_SCHEMA_VERSION,
+                state: ConfigFileHealthState::Missing,
             }),
             None,
         );
@@ -53,34 +56,35 @@ pub(super) fn config_file_health_with_snapshot(path: &Path) -> (Value, Option<co
                         .get("schema_version")
                         .and_then(|value| value.as_integer())
                 });
-                let health = json!({
-                        "ok": true,
-                        "exists": true,
-                        "path": path,
-                        "schema_version": config.schema_version,
-                        "current_schema_version": config::CONFIG_SCHEMA_VERSION,
-                        "schema_recorded": raw_schema.is_some(),
-                        "legacy_without_schema": raw_schema.is_none(),
+                let health = config_file_health_report(ConfigFileHealthInput {
+                    path: path.display().to_string(),
+                    current_schema_version: config::CONFIG_SCHEMA_VERSION,
+                    state: ConfigFileHealthState::Valid {
+                        schema_version: config.schema_version,
+                        schema_recorded: raw_schema.is_some(),
+                    },
                 });
                 (health, Some(config))
             }
             Err(err) => (
-                json!({
-                    "ok": false,
-                    "exists": true,
-                    "path": path,
-                    "current_schema_version": config::CONFIG_SCHEMA_VERSION,
-                    "error": err.to_string(),
+                config_file_health_report(ConfigFileHealthInput {
+                    path: path.display().to_string(),
+                    current_schema_version: config::CONFIG_SCHEMA_VERSION,
+                    state: ConfigFileHealthState::Invalid {
+                        error: err.to_string(),
+                    },
                 }),
                 None,
             ),
         },
         Err(err) => (
-            json!({
-                "ok": false,
-                "exists": path.exists(),
-                "path": path,
-                "error": err.to_string(),
+            config_file_health_report(ConfigFileHealthInput {
+                path: path.display().to_string(),
+                current_schema_version: config::CONFIG_SCHEMA_VERSION,
+                state: ConfigFileHealthState::ReadError {
+                    exists: path.exists(),
+                    error: err.to_string(),
+                },
             }),
             None,
         ),
@@ -89,65 +93,49 @@ pub(super) fn config_file_health_with_snapshot(path: &Path) -> (Value, Option<co
 
 pub(super) fn route_store_health(path: &Path) -> Value {
     if !path.exists() {
-        return json!({
-            "ok": true,
-            "exists": false,
-            "path": path,
-            "routes": 0,
-            "message": "route store does not exist yet"
+        return route_store_health_report(RouteStoreHealthInput {
+            path: path.display().to_string(),
+            current_version: 1,
+            state: RouteStoreHealthState::Missing,
         });
     }
     match std::fs::read_to_string(path)
         .map_err(anyhow::Error::from)
         .and_then(|text| serde_json::from_str::<Value>(&text).map_err(anyhow::Error::from))
     {
-        Ok(value) => {
-            let version = value.get("version").and_then(Value::as_u64);
-            let routes_array = value.get("routes").and_then(Value::as_array);
-            let routes = routes_array.map(Vec::len);
-            let duplicate_ids = duplicate_route_ids(routes_array);
-            let ok = version == Some(1) && routes.is_some() && duplicate_ids.is_empty();
-            json!({
-                "ok": ok,
-                "exists": true,
-                "path": path,
-                "version": version,
-                "current_version": 1,
-                "routes": routes,
-                "duplicate_ids": duplicate_ids,
-            })
-        }
-        Err(err) => json!({
-            "ok": false,
-            "exists": true,
-            "path": path,
-            "error": err.to_string(),
+        Ok(value) => route_store_health_report(RouteStoreHealthInput {
+            path: path.display().to_string(),
+            current_version: 1,
+            state: RouteStoreHealthState::Loaded(value),
+        }),
+        Err(err) => route_store_health_report(RouteStoreHealthInput {
+            path: path.display().to_string(),
+            current_version: 1,
+            state: RouteStoreHealthState::Error {
+                exists: true,
+                error: err.to_string(),
+            },
         }),
     }
 }
 
 pub(super) async fn peer_registry_health(config: Option<&config::AppConfig>) -> Value {
     let Some(config) = config else {
-        return json!({
-            "ok": false,
-            "count": 0,
-            "error": "config unavailable",
-            "peers": [],
+        return peer_registry_health_report(PeerRegistryHealthInput {
+            config_available: false,
+            peers: Vec::new(),
         });
     };
     let mut peers = config.peers.iter().collect::<Vec<_>>();
     peers.sort_by(|(left, _), (right, _)| left.cmp(right));
     let mut summaries = Vec::with_capacity(peers.len());
-    let mut ok = true;
     for (alias, peer) in peers {
         let summary = peer_health(alias, peer).await;
-        ok &= summary.get("ok").and_then(Value::as_bool).unwrap_or(false);
         summaries.push(summary);
     }
-    json!({
-        "ok": ok,
-        "count": summaries.len(),
-        "peers": summaries,
+    peer_registry_health_report(PeerRegistryHealthInput {
+        config_available: true,
+        peers: summaries,
     })
 }
 
@@ -161,29 +149,12 @@ pub(super) fn local_probe_addr(addr: SocketAddr) -> SocketAddr {
     }
 }
 
-fn duplicate_route_ids(routes: Option<&Vec<Value>>) -> Vec<String> {
-    let Some(routes) = routes else {
-        return Vec::new();
-    };
-    let mut seen = HashSet::new();
-    let mut duplicates = Vec::new();
-    for route in routes {
-        let Some(id) = route.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        if !seen.insert(id.to_string()) && !duplicates.iter().any(|duplicate| duplicate == id) {
-            duplicates.push(id.to_string());
-        }
-    }
-    duplicates
-}
-
 fn binary_health(plan: &ServicePlan) -> Value {
-    json!({
-        "source_exists": plan.source_exe.exists(),
-        "installed_exists": plan.exe.exists(),
-        "copy_exe": plan.copy_exe,
-        "same_path": plan.source_exe == plan.exe,
+    binary_health_report(BinaryHealthInput {
+        source_exists: plan.source_exe.exists(),
+        installed_exists: plan.exe.exists(),
+        copy_exe: plan.copy_exe,
+        same_path: plan.source_exe == plan.exe,
     })
 }
 
@@ -192,58 +163,53 @@ async fn peer_health(alias: &str, peer: &config::PeerRecord) -> Value {
     let plain_tcp = tcp_listener_health(peer.transport).await;
     let tls_tcp = tcp_listener_health(peer.tls_transport).await;
     let quic = quic_listener_health(peer.quic_transport);
-    let compatibility = peer_health::compatibility(peer);
-    let ok = control.get("ok").and_then(Value::as_bool).unwrap_or(false)
-        && plain_tcp
-            .get("ok")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        && tls_tcp.get("ok").and_then(Value::as_bool).unwrap_or(false)
-        && quic.get("ok").and_then(Value::as_bool).unwrap_or(false)
-        && compatibility
-            .get("ok")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-    json!({
-        "ok": ok,
-        "alias": alias,
-        "node_id": peer.node_id,
-        "node_name": peer.node_name,
-        "version": peer.version,
-        "control_api_version": peer.control_api_version,
-        "peer_protocol_version": peer.peer_protocol_version,
-        "features": peer.features,
-        "os": peer.os,
-        "arch": peer.arch,
-        "target": peer.target,
-        "trust": peer.trust,
-        "protocols": peer.known_transport_protocols(),
-        "auth": {
-            "token": peer.token.is_some(),
-            "token_metadata": peer.token_metadata,
-        },
-        "compatibility": compatibility,
-        "last_seen_unix": peer.last_seen_unix,
-        "endpoints": {
-            "control": control,
-            "plain_tcp": plain_tcp,
-            "tls_tcp": tls_tcp,
-            "quic": quic,
-        }
+    let compatibility = peer_compatibility_report(PeerCompatibilityInput {
+        local_version: env!("CARGO_PKG_VERSION").to_string(),
+        local_control_api_version: crate::node_daemon::control_api_version(),
+        local_peer_protocol_version: crate::node_daemon::peer_protocol_version(),
+        local_features: crate::node_daemon::peer_protocol_features(),
+        remote_version: peer.version.clone(),
+        remote_control_api_version: peer.control_api_version,
+        remote_peer_protocol_version: peer.peer_protocol_version,
+        remote_features: peer.features.clone(),
+        remote_os: peer.os.clone(),
+        remote_arch: peer.arch.clone(),
+    });
+    peer_health_report(PeerHealthInput {
+        alias: alias.to_string(),
+        node_id: peer.node_id.clone(),
+        node_name: peer.node_name.clone(),
+        version: peer.version.clone(),
+        control_api_version: peer.control_api_version,
+        peer_protocol_version: peer.peer_protocol_version,
+        features: peer.features.clone(),
+        os: peer.os.clone(),
+        arch: peer.arch.clone(),
+        target: peer.target.clone(),
+        trust: peer.trust.clone(),
+        protocols: peer.known_transport_protocols(),
+        token_present: peer.token.is_some(),
+        token_metadata: serde_json::to_value(&peer.token_metadata).unwrap_or(Value::Null),
+        compatibility,
+        last_seen_unix: peer.last_seen_unix,
+        control,
+        plain_tcp,
+        tls_tcp,
+        quic,
     })
 }
 
 fn control_endpoint_health(endpoint: &str) -> Value {
     match crate::control_socket::ControlEndpoint::parse(endpoint) {
-        Ok(parsed) => json!({
-            "ok": true,
-            "endpoint": endpoint,
-            "kind": control_endpoint_kind(&parsed),
+        Ok(parsed) => endpoint_health_report(EndpointHealthInput::Control {
+            endpoint: endpoint.to_string(),
+            kind: Some(control_endpoint_kind(&parsed).to_string()),
+            error: None,
         }),
-        Err(err) => json!({
-            "ok": false,
-            "endpoint": endpoint,
-            "error": err.to_string(),
+        Err(err) => endpoint_health_report(EndpointHealthInput::Control {
+            endpoint: endpoint.to_string(),
+            kind: None,
+            error: Some(err.to_string()),
         }),
     }
 }
@@ -251,12 +217,7 @@ fn control_endpoint_health(endpoint: &str) -> Value {
 fn optional_control_endpoint_health(endpoint: Option<&str>) -> Value {
     match endpoint {
         Some(endpoint) => control_endpoint_health(endpoint),
-        None => json!({
-            "ok": false,
-            "configured": false,
-            "reachable": Value::Null,
-            "message": "peer control endpoint is not recorded",
-        }),
+        None => endpoint_health_report(EndpointHealthInput::MissingPeerControl),
     }
 }
 
@@ -272,56 +233,41 @@ fn control_endpoint_kind(endpoint: &crate::control_socket::ControlEndpoint) -> &
 
 async fn tcp_listener_health(addr: Option<SocketAddr>) -> Value {
     let Some(addr) = addr else {
-        return json!({
-            "ok": true,
-            "configured": false,
-            "reachable": Value::Null,
+        return endpoint_health_report(EndpointHealthInput::Tcp {
+            addr: None,
+            probe_addr: None,
+            reachable: None,
+            error: None,
         });
     };
     let probe_addr = local_probe_addr(addr);
     match time::timeout(Duration::from_millis(500), TcpStream::connect(probe_addr)).await {
         Ok(Ok(stream)) => {
             drop(stream);
-            json!({
-                "ok": true,
-                "configured": true,
-                "addr": addr.to_string(),
-                "probe_addr": probe_addr.to_string(),
-                "reachable": true,
+            endpoint_health_report(EndpointHealthInput::Tcp {
+                addr: Some(addr.to_string()),
+                probe_addr: Some(probe_addr.to_string()),
+                reachable: Some(true),
+                error: None,
             })
         }
-        Ok(Err(err)) => json!({
-            "ok": false,
-            "configured": true,
-            "addr": addr.to_string(),
-            "probe_addr": probe_addr.to_string(),
-            "reachable": false,
-            "error": err.to_string(),
+        Ok(Err(err)) => endpoint_health_report(EndpointHealthInput::Tcp {
+            addr: Some(addr.to_string()),
+            probe_addr: Some(probe_addr.to_string()),
+            reachable: Some(false),
+            error: Some(err.to_string()),
         }),
-        Err(_) => json!({
-            "ok": false,
-            "configured": true,
-            "addr": addr.to_string(),
-            "probe_addr": probe_addr.to_string(),
-            "reachable": false,
-            "error": "TCP listener probe timed out after 500 ms",
+        Err(_) => endpoint_health_report(EndpointHealthInput::Tcp {
+            addr: Some(addr.to_string()),
+            probe_addr: Some(probe_addr.to_string()),
+            reachable: Some(false),
+            error: Some("TCP listener probe timed out after 500 ms".to_string()),
         }),
     }
 }
 
 fn quic_listener_health(addr: Option<SocketAddr>) -> Value {
-    match addr {
-        Some(addr) => json!({
-            "ok": true,
-            "configured": true,
-            "addr": addr.to_string(),
-            "reachable": Value::Null,
-            "message": "QUIC UDP listener reachability is not probed by service status yet",
-        }),
-        None => json!({
-            "ok": true,
-            "configured": false,
-            "reachable": Value::Null,
-        }),
-    }
+    endpoint_health_report(EndpointHealthInput::Quic {
+        addr: addr.map(|addr| addr.to_string()),
+    })
 }
