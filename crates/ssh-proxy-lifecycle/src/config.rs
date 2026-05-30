@@ -133,7 +133,13 @@ pub fn peer_health_json(
 }
 
 fn json_pretty_line(value: &Value) -> String {
-    let mut text = serde_json::to_string(value).expect("peer lifecycle JSON should serialize");
+    let mut text = serde_json::to_string(value).unwrap_or_else(|err| {
+        json!({
+            "schema": "ssh_proxy_json_error.v1",
+            "error": err.to_string(),
+        })
+        .to_string()
+    });
     text.push('\n');
     text
 }
