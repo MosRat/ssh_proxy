@@ -63,7 +63,7 @@ pub(super) fn probe_target(config: &MatrixConfig, report: &mut MatrixReport, tar
             openssh.status = "passed".to_string();
         }
         Ok(output) => openssh.fail(failure_class(&output), output_error(&output)),
-        Err(err) => openssh.fail("spawn_failed", err),
+        Err(err) => openssh.fail(classify_command_error(&err), err),
     }
     report.push(openssh);
 
@@ -81,7 +81,7 @@ pub(super) fn probe_target(config: &MatrixConfig, report: &mut MatrixReport, tar
             russh.status = "passed".to_string();
         }
         Ok(output) => russh.fail(failure_class(&output), output_error(&output)),
-        Err(err) => russh.fail("spawn_failed", err),
+        Err(err) => russh.fail(classify_command_error(&err), err),
     }
     report.push(russh);
 
@@ -103,7 +103,7 @@ pub(super) fn probe_target(config: &MatrixConfig, report: &mut MatrixReport, tar
     match run_output_retry(|| openssh_command(target, config.accept_new, &probe), 3) {
         Ok(output) if output.status.success() => tmp.status = "passed".to_string(),
         Ok(output) => tmp.fail(failure_class(&output), output_error(&output)),
-        Err(err) => tmp.fail("spawn_failed", err),
+        Err(err) => tmp.fail(classify_command_error(&err), err),
     }
     report.push(tmp);
 }
@@ -684,9 +684,17 @@ fn push_command_case(
     match output {
         Ok(output) if output.status.success() => row.status = "passed".to_string(),
         Ok(output) => row.fail(failure_class(&output), output_error(&output)),
-        Err(err) => row.fail("spawn_failed", err),
+        Err(err) => row.fail(classify_command_error(&err), err),
     }
     report.push(row);
+}
+
+fn classify_command_error(error: &str) -> &'static str {
+    if error.contains("failed to spawn") {
+        "spawn_failed"
+    } else {
+        classify_runtime_error(error)
+    }
 }
 
 fn classify_runtime_error(error: &str) -> &'static str {

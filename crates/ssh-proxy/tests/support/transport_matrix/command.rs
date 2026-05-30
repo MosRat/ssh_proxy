@@ -8,6 +8,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 pub(super) struct ChildGuard {
     child: Option<Child>,
 }
@@ -137,9 +140,64 @@ pub(super) fn russh_host_exec_command(
 }
 
 pub(super) fn run_output(mut command: Command) -> Result<Output, String> {
+    let description = format!("{command:?}");
     command
-        .output()
-        .map_err(|err| format!("failed to spawn command: {err}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = command
+        .spawn()
+        .map_err(|err| format!("failed to spawn command {description}: {err}"))?;
+    wait_with_timeout(child, COMMAND_TIMEOUT, &description)
+}
+
+fn wait_with_timeout(
+    mut child: Child,
+    timeout: Duration,
+    description: &str,
+) -> Result<Output, String> {
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child.wait_with_output().map_err(|err| {
+                    format!("failed to collect command output {description}: {err}")
+                });
+            }
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                return match child.wait_with_output() {
+                    Ok(output) => Err(format!(
+                        "command timed out after {}s: {}; stdout={} stderr={}",
+                        timeout.as_secs(),
+                        description,
+                        output_snippet(&output.stdout),
+                        output_snippet(&output.stderr),
+                    )),
+                    Err(err) => Err(format!(
+                        "command timed out after {}s and failed to collect output: {description}: {err}",
+                        timeout.as_secs(),
+                    )),
+                };
+            }
+            Ok(None) => thread::sleep(COMMAND_POLL_INTERVAL),
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("failed to poll command {description}: {err}"));
+            }
+        }
+    }
+}
+
+fn output_snippet(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let trimmed = text.trim();
+    let mut snippet: String = trimmed.chars().take(300).collect();
+    if trimmed.chars().count() > snippet.chars().count() {
+        snippet.push_str("...");
+    }
+    snippet
 }
 
 pub(super) fn run_output_retry(
@@ -148,31 +206,40 @@ pub(super) fn run_output_retry(
 ) -> Result<Output, String> {
     let attempts = attempts.max(1);
     for attempt in 0..attempts {
-        let output = run_output(make_command())?;
-        if output.status.success() || !output_looks_transient(&output) || attempt + 1 == attempts {
-            return Ok(output);
+        match run_output(make_command()) {
+            Ok(output)
+                if output.status.success()
+                    || !output_looks_transient(&output)
+                    || attempt + 1 == attempts =>
+            {
+                return Ok(output);
+            }
+            Ok(_) => thread::sleep(Duration::from_millis(250)),
+            Err(err) if error_looks_transient(&err) && attempt + 1 < attempts => {
+                thread::sleep(Duration::from_millis(250));
+            }
+            Err(err) => return Err(err),
         }
-        thread::sleep(Duration::from_millis(250));
     }
     unreachable!("attempts is clamped to at least one")
 }
 
 pub(super) fn run_with_stdin(mut command: Command, stdin: &str) -> Result<Output, String> {
+    let description = format!("{command:?}");
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| format!("failed to spawn command: {err}"))?;
-    child
+        .map_err(|err| format!("failed to spawn command {description}: {err}"))?;
+    let mut child_stdin = child
         .stdin
-        .as_mut()
-        .ok_or_else(|| "failed to open child stdin".to_string())?
+        .take()
+        .ok_or_else(|| "failed to open child stdin".to_string())?;
+    child_stdin
         .write_all(stdin.as_bytes())
         .map_err(|err| format!("failed to write child stdin: {err}"))?;
-    child
-        .wait_with_output()
-        .map_err(|err| format!("failed to wait for child: {err}"))
+    drop(child_stdin);
+    wait_with_timeout(child, COMMAND_TIMEOUT, &description)
 }
 
 pub(super) fn free_addr() -> SocketAddr {
@@ -292,6 +359,17 @@ fn output_looks_transient(output: &Output) -> bool {
         || text.contains("banner exchange")
         || text.contains("connection closed")
         || text.contains("broken pipe")
+        || text.contains("command timed out")
+}
+
+fn error_looks_transient(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("connection timed out")
+        || lower.contains("operation timed out")
+        || lower.contains("banner exchange")
+        || lower.contains("connection closed")
+        || lower.contains("broken pipe")
+        || lower.contains("command timed out")
 }
 
 pub(super) fn output_error(output: &Output) -> String {
