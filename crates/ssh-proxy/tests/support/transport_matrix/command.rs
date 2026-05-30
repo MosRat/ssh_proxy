@@ -142,6 +142,21 @@ pub(super) fn run_output(mut command: Command) -> Result<Output, String> {
         .map_err(|err| format!("failed to spawn command: {err}"))
 }
 
+pub(super) fn run_output_retry(
+    mut make_command: impl FnMut() -> Command,
+    attempts: usize,
+) -> Result<Output, String> {
+    let attempts = attempts.max(1);
+    for attempt in 0..attempts {
+        let output = run_output(make_command())?;
+        if output.status.success() || !output_looks_transient(&output) || attempt + 1 == attempts {
+            return Ok(output);
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    unreachable!("attempts is clamped to at least one")
+}
+
 pub(super) fn run_with_stdin(mut command: Command, stdin: &str) -> Result<Output, String> {
     let mut child = command
         .stdin(Stdio::piped())
@@ -263,6 +278,20 @@ pub(super) fn failure_class(output: &Output) -> &'static str {
     } else {
         "unknown"
     }
+}
+
+fn output_looks_transient(output: &Output) -> bool {
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    )
+    .to_ascii_lowercase();
+    text.contains("connection timed out")
+        || text.contains("operation timed out")
+        || text.contains("banner exchange")
+        || text.contains("connection closed")
+        || text.contains("broken pipe")
 }
 
 pub(super) fn output_error(output: &Output) -> String {

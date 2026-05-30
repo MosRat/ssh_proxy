@@ -10,8 +10,9 @@ use std::{
 use super::{
     command::{
         ChildGuard, control_status_via_tcp, direct_host_from_ssh_config, failure_class, free_addr,
-        openssh_command, openssh_command_for_target, output_error, run_output, run_with_stdin,
-        russh_host_exec_command, scp_command, sh_quote, temp_dir, temp_path, wait_tcp,
+        openssh_command, openssh_command_for_target, output_error, run_output, run_output_retry,
+        run_with_stdin, russh_host_exec_command, scp_command, sh_quote, temp_dir, temp_path,
+        wait_tcp,
     },
     config::{MatrixConfig, MatrixLevel, stamp},
     report::{MatrixCaseReport, MatrixReport},
@@ -54,11 +55,10 @@ pub(super) fn probe_target(config: &MatrixConfig, report: &mut MatrixReport, tar
         Some(topology),
         "openssh_probe",
     );
-    match run_output(openssh_command(
-        target,
-        config.accept_new,
-        "printf '%s\\n' openssh:ok",
-    )) {
+    match run_output_retry(
+        || openssh_command(target, config.accept_new, "printf '%s\\n' openssh:ok"),
+        3,
+    ) {
         Ok(output) if output.status.success() => {
             openssh.status = "passed".to_string();
         }
@@ -100,7 +100,7 @@ pub(super) fn probe_target(config: &MatrixConfig, report: &mut MatrixReport, tar
         Some(topology),
         "remote_tmp_probe",
     );
-    match run_output(openssh_command(target, config.accept_new, &probe)) {
+    match run_output_retry(|| openssh_command(target, config.accept_new, &probe), 3) {
         Ok(output) if output.status.success() => tmp.status = "passed".to_string(),
         Ok(output) => tmp.fail(failure_class(&output), output_error(&output)),
         Err(err) => tmp.fail("spawn_failed", err),
