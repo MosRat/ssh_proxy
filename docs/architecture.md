@@ -78,6 +78,14 @@ The protocol boundary is intentionally split by layer:
   but also publishes the shared `connection_decision` DTO so daemon status,
   doctor reports, and UI rendering can consume one decision surface.
 
+Peer compatibility has one production source. `ssh-proxy-service` consumes the
+protocol version helpers from `ssh-proxy-protocol` and renders service health,
+saved-peer compatibility, and fresh descriptor version-check reports. App
+modules pass local package/control/peer versions, recorded descriptor fields,
+and runtime probe results into those DTOs; they do not rebuild
+`protocol_compatibility_report`, binary-version checks, duplicate route IDs, or
+health JSON shapes themselves.
+
 OpenSSH subprocess compatibility and remote shell TCP probes are not part of
 the normal protocol stack. They remain explicit compatibility or diagnostic
 paths and must surface `requires_external_ssh`, dependency classification, and a
@@ -105,10 +113,12 @@ conflict policy, preflight classification/fallback policy, remote-use policy,
 route plan, route status, and `decision_chain` rendering DTOs.
 `ssh-proxy-deploy` owns remote install, remote admin intents, remote setup
 artifact intents, and remote setup script rendering. `ssh-proxy-service` owns
-service-management contracts, status summaries, selected-control summaries,
-candidate summaries, and fallback recommendations. `ssh-proxy-daemon` owns
-command-neutral daemon/job/session/peer/state DTOs, proxy session specs, and
-daemon-unavailable fallback response builders. `ssh-proxy-cli` is a
+service-management contracts, service health DTOs, endpoint/binary/route-store
+reports, peer compatibility reports, status summaries, selected-control
+summaries, candidate summaries, and fallback recommendations.
+`ssh-proxy-daemon` owns command-neutral daemon/job/session/peer/state DTOs,
+proxy session specs, and daemon-unavailable fallback response builders.
+`ssh-proxy-cli` is a
 command-contract crate; command dispatch still lives in the app crate until the
 remaining runtime orchestration is promoted.
 Lower crates must not depend on app, CLI dispatch, SSH executors, or platform
@@ -178,6 +188,31 @@ same public behavior:
   provider reports include `execution_backend`, `fallback_used`, and an
   `external_action` block; shell fallback scripts are classified as fallback
   providers rather than normal success paths.
+
+External dependencies are limited to explicit execution boundaries:
+
+- Linux local service fallback may use `systemctl` and `loginctl` after native
+  D-Bus planning fails or is unavailable.
+- macOS service management uses `launchctl` provider commands, but daemon
+  launch arguments stay tokenized in the plist and do not run through a shell.
+- Windows compatibility fallback may use `sc.exe`, `schtasks.exe`, or
+  `powershell.exe`; native SCM, scheduled-task COM, UAC, and ProgramData
+  behavior remain the preferred production path.
+- Remote bootstrap may use POSIX shell or PowerShell only as fallback around
+  stdin-backed artifact writes, Git cleanup/apply scripts, or service-provider
+  commands.
+- OpenSSH and `ssh-exec` are explicit emergency compatibility paths. They are
+  never part of the default route/session success chain.
+
+Operational reports and logs should make fallback behavior observable. Success
+and failure paths that touch native providers, own-binary helpers, provider
+commands, self-update scripts, or remote shell bootstrap must surface
+`execution_backend`, `fallback_used`, and `external_action` when rendered as
+JSON, and logs should include the relevant `job_id`, `session_id`, `route_id`,
+`peer`, `execution_backend`, and `fallback_used` fields. Production runtime
+paths return structured errors or compatibility reports instead of adding
+`unwrap`, `expect`, `panic`, `todo`, or `unimplemented`; test helpers and
+`#[cfg(test)]` modules are the exception.
 
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening, listener
@@ -253,14 +288,14 @@ execution to shared modules.
   `service.rs` is the thin command entrypoint; `service::report`,
   `service::status`, `service::health`, and `service::labels` adapt install
   reports, daemon status JSON, local health probes, and user-visible labels.
-  Pure manager summaries, candidate summaries, selected-control summaries,
-  service state names, and fallback recommendations live in
-  `ssh-proxy-service`. The app service modules build
-  `PeerLifecycleSpec(local_daemon)`, call the lifecycle runner, query runtime
-  daemon state, and execute platform adapters. Platform behavior is split behind
-  provider adapters for systemd, launchd, Windows SCM, and Windows user
-  scheduled tasks; Windows SCM FFI, UAC worker behavior, versioned ProgramData
-  binaries, and rollback stay in the Windows SCM adapter.
+  Pure health report shapes, peer compatibility reports, manager summaries,
+  candidate summaries, selected-control summaries, service state names, and
+  fallback recommendations live in `ssh-proxy-service`. The app service modules
+  build `PeerLifecycleSpec(local_daemon)`, call the lifecycle runner, query
+  runtime daemon state, and execute platform adapters. Platform behavior is
+  split behind provider adapters for systemd, launchd, Windows SCM, and Windows
+  user scheduled tasks; Windows SCM FFI, UAC worker behavior, versioned
+  ProgramData binaries, and rollback stay in the Windows SCM adapter.
 - `deploy` owns remote bootstrap inputs, descriptor refresh, token/config
   materialization, and compatibility helpers. Remote peer installation runs as
   `PeerLifecycleSpec(remote_peer)` through `SshExecutor`.

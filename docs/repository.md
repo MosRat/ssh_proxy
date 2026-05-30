@@ -57,7 +57,8 @@ Current horizontal crates:
   remote install plans, remote admin intents, remote setup artifact intents,
   and remote setup script rendering.
 - `crates/ssh-proxy-service/`: local service-management contracts, provider
-  report DTOs, service status summaries, candidate summaries,
+  report DTOs, service health reports, endpoint/binary/route-store summaries,
+  peer compatibility reports, service status summaries, candidate summaries,
   selected-control summaries, and fallback recommendations.
 - `crates/ssh-proxy-platform/`: local platform command plans, command outcomes,
   script plans, subprocess capture/spawn helpers, and external execution
@@ -106,6 +107,12 @@ Intent/runtime layering rules:
 - Native and own-binary success paths must expose `execution_backend`,
   `fallback_used`, and `external_action`; fallback shell scripts must be
   classified as fallback or compatibility paths.
+- Service health and peer compatibility JSON is rendered by
+  `ssh-proxy-service`; app modules only provide filesystem, TOML, endpoint, and
+  TCP probe inputs.
+- Production runtime modules should return structured errors or typed reports
+  rather than adding new `unwrap`, `expect`, `panic`, `todo`, or
+  `unimplemented` paths. Tests and explicit fake executors are exempt.
 - Boundary tests enforce production dependency direction for core/config/route/
   deploy/lifecycle/transport/daemon crates, prevent runtime imports from
   crossing layers, keep `service-manager` out of production dependencies,
