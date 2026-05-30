@@ -221,12 +221,12 @@ fn remote_e2e_harness_stays_opt_in_and_sanitized() {
         "/tmp/ssh_proxy-e2e-",
         "remote e2e harness should isolate remote temporary files",
     );
-    assert_not_contains(
+    assert_no_private_alias_token(
         &support,
         "102",
         "remote e2e harness should not bake private target aliases into code",
     );
-    assert_not_contains(
+    assert_no_private_alias_token(
         &support,
         "125",
         "remote e2e harness should not bake private target aliases into code",
@@ -240,6 +240,89 @@ fn remote_e2e_harness_stays_opt_in_and_sanitized() {
         &example,
         "125",
         "remote e2e example should use placeholder aliases",
+    );
+}
+
+#[test]
+fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
+    let entry = read_repo_file("crates/ssh-proxy/tests/transport_matrix.rs");
+    let support = [
+        read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/mod.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/config.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/command.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/remote.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/report.rs"),
+    ]
+    .join("\n");
+
+    for test_name in [
+        "matrix_probe",
+        "matrix_smoke",
+        "matrix_perf_smoke",
+        "matrix_stability",
+    ] {
+        assert_contains(
+            &entry,
+            &format!("fn {test_name}()"),
+            "transport matrix should expose the documented ignored test entry",
+        );
+    }
+    assert!(
+        entry.matches("#[ignore]").count() >= 4,
+        "transport matrix tests should stay ignored and out of default gates"
+    );
+
+    for env_name in [
+        "SSH_PROXY_MATRIX",
+        "SSH_PROXY_MATRIX_LEVEL",
+        "SSH_PROXY_MATRIX_TARGETS",
+        "SSH_PROXY_MATRIX_JUMP_TARGET",
+        "SSH_PROXY_MATRIX_DIRECT_TARGET",
+        "SSH_PROXY_MATRIX_ACCEPT_NEW",
+        "SSH_PROXY_MATRIX_KEEP",
+        "SSH_PROXY_MATRIX_ARTIFACT_DIR",
+        "SSH_PROXY_MATRIX_LOCAL_BIN",
+        "SSH_PROXY_MATRIX_SIDECAR",
+        "SSH_PROXY_MATRIX_DURATION_SECS",
+        "SSH_PROXY_MATRIX_SAMPLES",
+        "SSH_PROXY_MATRIX_CONCURRENCY",
+    ] {
+        assert_contains(
+            &support,
+            env_name,
+            "transport matrix should be configured only by environment",
+        );
+    }
+
+    for required in [
+        "transport-matrix.json",
+        "transport-matrix.csv",
+        "report-first",
+        "preflight_skip",
+        "rcgen::generate_simple_self_signed",
+        "remote_cleanup",
+        "/tmp/ssh_proxy-matrix-",
+    ] {
+        assert_contains(
+            &support,
+            required,
+            "transport matrix should keep report-first, cleanup, and Rust-native cert contracts",
+        );
+    }
+    assert_not_contains(
+        &support,
+        "openssl",
+        "transport matrix should not depend on an external openssl binary",
+    );
+    assert_no_private_alias_token(
+        &support,
+        "102",
+        "transport matrix should not bake private target aliases into code",
+    );
+    assert_no_private_alias_token(
+        &support,
+        "125",
+        "transport matrix should not bake private target aliases into code",
     );
 }
 
@@ -1421,6 +1504,30 @@ fn assert_not_contains(haystack: &str, needle: &str, message: &str) {
         !haystack.contains(needle),
         "{message}: unexpected `{needle}`"
     );
+}
+
+fn assert_no_private_alias_token(haystack: &str, alias: &str, message: &str) {
+    for line in haystack.lines() {
+        let mut start = 0;
+        while let Some(offset) = line[start..].find(alias) {
+            let absolute = start + offset;
+            let before = line[..absolute].chars().next_back();
+            let after = line[absolute + alias.len()..].chars().next();
+            let before_boundary = match before {
+                Some(ch) => !ch.is_ascii_alphanumeric(),
+                None => true,
+            };
+            let after_boundary = match after {
+                Some(ch) => !ch.is_ascii_alphanumeric(),
+                None => true,
+            };
+            assert!(
+                !(before_boundary && after_boundary),
+                "{message}: unexpected private alias `{alias}` in `{line}`"
+            );
+            start = absolute + alias.len();
+        }
+    }
 }
 
 fn manifest_has_direct_crate(manifest: &str, name: &str) -> bool {
