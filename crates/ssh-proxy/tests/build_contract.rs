@@ -643,6 +643,104 @@ fn service_status_summaries_live_in_service_crate() {
 }
 
 #[test]
+fn service_health_and_peer_compatibility_live_in_service_crate() {
+    let service_health = read_repo_file("crates/ssh-proxy-service/src/health.rs");
+    for symbol in [
+        "pub struct ConfigFileHealthInput",
+        "pub enum ConfigFileHealthState",
+        "pub struct RouteStoreHealthInput",
+        "pub enum RouteStoreHealthState",
+        "pub struct BinaryHealthInput",
+        "pub enum EndpointHealthInput",
+        "pub struct PeerHealthInput",
+        "pub struct PeerCompatibilityInput",
+        "pub struct PeerVersionCheckInput",
+        "pub fn service_health_report",
+        "pub fn config_file_health_report",
+        "pub fn route_store_health_report",
+        "pub fn binary_health_report",
+        "pub fn endpoint_health_report",
+        "pub fn peer_health_report",
+        "pub fn peer_compatibility_report",
+        "pub fn peer_version_check_report",
+        "protocol_compatibility_report",
+        "compare_dotted_versions",
+        "PEER_VERSION",
+        "default_features",
+    ] {
+        assert_contains(
+            &service_health,
+            symbol,
+            "service crate should own service health DTOs and peer compatibility semantics",
+        );
+    }
+
+    let app_health = read_repo_file("crates/ssh-proxy/src/service/health.rs");
+    for delegated in [
+        "ssh_proxy_service::{",
+        "service_health_report(ServiceHealthInput",
+        "config_file_health_report(ConfigFileHealthInput",
+        "route_store_health_report(RouteStoreHealthInput",
+        "binary_health_report(BinaryHealthInput",
+        "endpoint_health_report(EndpointHealthInput",
+        "peer_compatibility_report(PeerCompatibilityInput",
+        "peer_health_report(PeerHealthInput",
+        "peer_registry_health_report(PeerRegistryHealthInput",
+    ] {
+        assert_contains(
+            &app_health,
+            delegated,
+            "app service health should adapt runtime probes into service crate reports",
+        );
+    }
+    for local_logic in [
+        "json!",
+        "fn duplicate_route_ids",
+        "protocol_compatibility_report",
+        "compare_dotted_versions",
+    ] {
+        assert_not_contains(
+            &app_health,
+            local_logic,
+            "app service health should not retain moved health report logic",
+        );
+    }
+
+    let app_peer_health_path = workspace_root().join("crates/ssh-proxy/src/service/peer_health.rs");
+    assert!(
+        !app_peer_health_path.exists(),
+        "app service peer health helper should be collapsed into service crate DTOs"
+    );
+
+    let app_peer_compat = read_repo_file("crates/ssh-proxy/src/node_daemon/peers/compatibility.rs");
+    for delegated in [
+        "peer_version_check_report(PeerVersionCheckInput",
+        "unrecorded_peer_version_check_report",
+        "PeerCompatibilityInput",
+    ] {
+        assert_contains(
+            &app_peer_compat,
+            delegated,
+            "app peer compatibility should adapt descriptors into service crate reports",
+        );
+    }
+    for local_logic in [
+        "protocol_compatibility_report",
+        "compare_dotted_versions",
+        "peer_transport::PEER_VERSION",
+        "fn binary_version_check",
+        "fn version_next_action",
+        "fn version_status",
+    ] {
+        assert_not_contains(
+            &app_peer_compat,
+            local_logic,
+            "app peer compatibility should not retain protocol compatibility policy",
+        );
+    }
+}
+
+#[test]
 fn lifecycle_provider_contracts_live_in_lifecycle_crate() {
     let app_provider = read_repo_file("crates/ssh-proxy/src/peer_lifecycle/service_provider.rs");
     assert_contains(
