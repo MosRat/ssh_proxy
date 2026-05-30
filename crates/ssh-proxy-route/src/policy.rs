@@ -265,4 +265,24 @@ mod tests {
         assert!(policy.reason.contains("capped to pool=2"));
         assert!(policy.warning.is_some());
     }
+
+    #[test]
+    fn explicit_and_profile_ssh_pools_above_two_are_annotated_not_clamped() {
+        let command = plan_ssh_session_pool(&RoutePoolSizingInput {
+            command_ssh_session_pool_size: Some(8),
+            ..Default::default()
+        });
+        assert_eq!(command.size, 8);
+        assert_eq!(command.source, "command-line");
+        assert!(command.warning.as_deref().unwrap().contains("above 2"));
+
+        let profile = plan_ssh_session_pool(&RoutePoolSizingInput {
+            profile_ssh_session_pool_size: Some(4),
+            default_ssh_session_pool_size: Some(8),
+            ..Default::default()
+        });
+        assert_eq!(profile.size, 4);
+        assert_eq!(profile.source, "profile");
+        assert!(profile.warning.as_deref().unwrap().contains("above 2"));
+    }
 }

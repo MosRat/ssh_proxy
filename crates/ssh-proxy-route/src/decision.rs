@@ -430,6 +430,45 @@ mod tests {
     }
 
     #[test]
+    fn explicit_quic_native_stays_opt_in() {
+        let selected = transport_selection_policy(&TransportSelectionPolicyInput {
+            requested_transport: TransportMode::QuicNative,
+            remote_quic: Some("192.0.2.8:19083".parse().unwrap()),
+            ..input()
+        })
+        .expect("explicit quic-native");
+
+        assert_eq!(selected.transport, TransportMode::QuicNative);
+        assert_eq!(selected.source, "cli");
+        assert_eq!(remote_transport_name(selected.transport), "quic-native");
+        assert_eq!(ssh_mode_name(selected.transport), Value::Null);
+        assert_eq!(ssh_mode_reason(selected.transport), Value::Null);
+    }
+
+    #[test]
+    fn tls_endpoint_beats_unsafe_plain_default() {
+        let selected = transport_selection_policy(&TransportSelectionPolicyInput {
+            defaults_remote_transport: Some("plain-tcp"),
+            remote_tls: Some("192.0.2.8:19082".parse().unwrap()),
+            allow_plain_tcp: true,
+            defaults_allow_plain_tcp: Some(true),
+            ..input()
+        })
+        .expect("tls topology");
+
+        assert_eq!(selected.transport, TransportMode::TlsTcp);
+        assert_eq!(selected.source, "topology");
+        assert_eq!(
+            direct_transport_policy(selected.transport),
+            json!("production_direct")
+        );
+        assert_eq!(
+            tls_peer_auth_mode(selected.transport, false, false),
+            json!("server_auth")
+        );
+    }
+
+    #[test]
     fn plain_tcp_default_needs_explicit_trust_source() {
         let selected = transport_selection_policy(&TransportSelectionPolicyInput {
             defaults_remote_transport: Some("plain-tcp"),
