@@ -171,17 +171,20 @@ Layering:
   target topology, OpenSSH reachability, russh `host exec`, and remote `/tmp`
   permissions.
 - `matrix_smoke`: starts an isolated remote daemon and verifies fixed-target
-  data-plane status through `ssh-native`, SPX over SSH, and direct
-  plain/TLS/QUIC/QUIC-native when the topology is direct.
+  data-plane status through OpenSSH local-forward direct-tcpip, `ssh-native`,
+  SPX over SSH, and direct plain/TLS/QUIC/QUIC-native when the topology is
+  direct.
 - `matrix_perf_smoke`: repeats the same correctness cases with low concurrency
   and records bytes, batch-wall-clock duration, MiB/s, first-byte latency,
-  `measurement_scope`, `sample_count`, `request_count`, and `concurrency` as
-  report-first trend data. The first scope is `control-status-through-proxy`,
-  so its MiB/s is a relative transport trend, not a large-object throughput
-  benchmark.
-- `matrix_stability`: runs longer repeated status probes and records lost
-  requests, reconnect count, and `run_window_ms`; set a short duration for
-  development.
+  `measurement_scope`, `workload`, `payload_bytes`, `sample_count`,
+  `request_count`, and `concurrency` as report-first trend data. Default
+  perf-smoke workloads are `control`, `large-download`, `large-upload`, and
+  `high-concurrency`.
+- `matrix_stability`: runs longer repeated status probes plus a long streamed
+  TCP connection and records lost requests, reconnect count, and
+  `run_window_ms`; set a short duration for development.
+- `matrix_cleanup`: kills matrix daemon/bench pidfiles and removes
+  `/tmp/ssh_proxy-matrix-*` directories for the configured targets.
 
 Common configuration:
 
@@ -195,6 +198,10 @@ $env:SSH_PROXY_MATRIX_JUMP_TARGET = "proxyjump-alias"
 $env:SSH_PROXY_MATRIX_DIRECT_TARGET = "direct-alias"
 $env:SSH_PROXY_MATRIX_ACCEPT_NEW = "0"
 $env:SSH_PROXY_MATRIX_KEEP = "0"
+$env:SSH_PROXY_MATRIX_WORKLOADS = "all" # control, large-download, large-upload, long-connection, high-concurrency
+$env:SSH_PROXY_MATRIX_PAYLOAD_BYTES = "8388608"
+$env:SSH_PROXY_MATRIX_CONCURRENT_PAYLOAD_BYTES = "262144"
+$env:SSH_PROXY_MATRIX_LONG_SECS = "30"
 ```
 
 Run layers explicitly:
@@ -205,15 +212,18 @@ rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_smoke --
 rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_perf_smoke --test-threads=1
 $env:SSH_PROXY_MATRIX_DURATION_SECS = "300"
 rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_stability --test-threads=1
+rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_cleanup --test-threads=1
 ```
 
-The matrix writes `transport-matrix.json` and `transport-matrix.csv` under a
-temporary artifact directory, or `SSH_PROXY_MATRIX_ARTIFACT_DIR` when set.
-Correctness, cleanup, and classified failures are hard failures. Throughput,
-latency, and reconnect observations are report-first until several lab runs
-establish stable thresholds. For concurrent perf-smoke rows, `duration_ms` is
-the sum of per-sample batch wall-clock times, while `run_window_ms` is the total
-measurement phase for that case. The legacy PowerShell benchmark scripts remain
+The matrix writes `transport-matrix.json`, `transport-matrix.csv`, and a concise
+`transport-matrix-summary.md` under a temporary artifact directory, or
+`SSH_PROXY_MATRIX_ARTIFACT_DIR` when set. Correctness, cleanup, and classified
+failures are hard failures. Throughput, latency, and reconnect observations are
+report-first until several lab runs establish stable thresholds. For concurrent
+rows, `duration_ms` is the batch wall-clock time, while `run_window_ms` is the
+total measurement phase for that case. Payload workloads use a temporary remote
+Python TCP bench server and are skipped with `missing_remote_bench_server` when
+the target cannot provide it. The legacy PowerShell benchmark scripts remain
 compatibility/lab wrappers; prefer the Rust matrix gate for release evidence
 because it uses `rcgen` in the test harness instead of an external `openssl.exe`.
 

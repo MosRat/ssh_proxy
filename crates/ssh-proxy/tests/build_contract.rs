@@ -248,10 +248,12 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
     let entry = read_repo_file("crates/ssh-proxy/tests/transport_matrix.rs");
     let support = [
         read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/mod.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/bench.rs"),
         read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/config.rs"),
         read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/command.rs"),
         read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/remote.rs"),
         read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/report.rs"),
+        read_repo_file("crates/ssh-proxy/tests/support/transport_matrix/workload.rs"),
     ]
     .join("\n");
 
@@ -260,6 +262,7 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
         "matrix_smoke",
         "matrix_perf_smoke",
         "matrix_stability",
+        "matrix_cleanup",
     ] {
         assert_contains(
             &entry,
@@ -268,7 +271,7 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
         );
     }
     assert!(
-        entry.matches("#[ignore]").count() >= 4,
+        entry.matches("#[ignore]").count() >= 5,
         "transport matrix tests should stay ignored and out of default gates"
     );
 
@@ -286,6 +289,10 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
         "SSH_PROXY_MATRIX_DURATION_SECS",
         "SSH_PROXY_MATRIX_SAMPLES",
         "SSH_PROXY_MATRIX_CONCURRENCY",
+        "SSH_PROXY_MATRIX_WORKLOADS",
+        "SSH_PROXY_MATRIX_PAYLOAD_BYTES",
+        "SSH_PROXY_MATRIX_CONCURRENT_PAYLOAD_BYTES",
+        "SSH_PROXY_MATRIX_LONG_SECS",
     ] {
         assert_contains(
             &support,
@@ -297,15 +304,29 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
     for required in [
         "transport-matrix.json",
         "transport-matrix.csv",
+        "transport-matrix-summary.md",
         "report-first",
         "preflight_skip",
         "rcgen::generate_simple_self_signed",
         "remote_cleanup",
+        "remote_cleanup_sweep",
         "/tmp/ssh_proxy-matrix-",
         "measurement_scope",
+        "workload",
+        "large-download",
+        "large-upload",
+        "long-connection",
+        "high-concurrency",
         "request_count",
         "run_window_ms",
         "control-status-through-proxy",
+        "control-status-through-openssh-forward",
+        "large-download-through-proxy",
+        "large-download-through-openssh-forward",
+        "openssh-direct-tcpip",
+        "ExitOnForwardFailure=yes",
+        "BENCH_SERVER_SCRIPT",
+        "python3",
         "COMMAND_TIMEOUT",
     ] {
         assert_contains(

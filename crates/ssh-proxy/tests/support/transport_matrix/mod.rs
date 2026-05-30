@@ -1,11 +1,13 @@
+mod bench;
 mod command;
 mod config;
 mod remote;
 mod report;
+mod workload;
 
 use command::tool_available;
 use config::{MatrixConfig, MatrixLevel};
-use remote::{probe_target, run_target_matrix};
+use remote::{cleanup_target, probe_target, run_target_matrix};
 use report::{MatrixCaseReport, MatrixReport};
 
 pub fn run_probe() {
@@ -47,6 +49,14 @@ pub fn run_stability() {
     });
 }
 
+pub fn run_cleanup() {
+    run(MatrixLevel::Probe, |config, report| {
+        for target in &config.targets {
+            cleanup_target(config, report, target);
+        }
+    });
+}
+
 fn run(level: MatrixLevel, test: impl FnOnce(&MatrixConfig, &mut MatrixReport)) {
     let Some(config) = MatrixConfig::load(level) else {
         return;
@@ -59,6 +69,13 @@ fn run(level: MatrixLevel, test: impl FnOnce(&MatrixConfig, &mut MatrixReport)) 
     test(&config, &mut report);
     let artifact = report.write();
     eprintln!("transport matrix report: {}", artifact.display());
+    eprintln!(
+        "transport matrix table: {}",
+        artifact
+            .with_file_name("transport-matrix-summary.md")
+            .display()
+    );
+    eprintln!("{}", report.summary_table());
     report.assert_no_hard_failures();
 }
 

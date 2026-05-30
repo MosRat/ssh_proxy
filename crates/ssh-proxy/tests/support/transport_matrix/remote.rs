@@ -8,6 +8,9 @@ use std::{
 };
 
 use super::{
+    bench::{
+        BENCH_SERVER_SCRIPT, bench_download_via_tcp, bench_stream_via_tcp, bench_upload_via_tcp,
+    },
     command::{
         ChildGuard, control_status_via_tcp, direct_host_from_ssh_config, failure_class, free_addr,
         openssh_command, openssh_command_for_target, output_error, run_output, run_output_retry,
@@ -16,6 +19,7 @@ use super::{
     },
     config::{MatrixConfig, MatrixLevel, stamp},
     report::{MatrixCaseReport, MatrixReport},
+    workload::MatrixWorkload,
 };
 
 #[derive(Debug)]
@@ -31,9 +35,11 @@ struct RemoteMatrixSandbox {
     plain_port: u16,
     tls_port: u16,
     quic_port: u16,
+    bench_port: u16,
     token: String,
     local_cert: PathBuf,
     local_key: PathBuf,
+    local_bench_script: PathBuf,
     accept_new: bool,
 }
 
@@ -54,6 +60,11 @@ struct MatrixMeasurements {
     request_count: u64,
     concurrency: u64,
     run_window_ms: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SetupState {
+    bench_ready: bool,
 }
 
 pub(super) fn probe_target(config: &MatrixConfig, report: &mut MatrixReport, target: &str) {
@@ -125,11 +136,44 @@ pub(super) fn run_target_matrix(
 ) {
     let sandbox = RemoteMatrixSandbox::new(config, target);
     sandbox.with_cleanup(config.keep, report, |sandbox, report| {
-        sandbox.setup(config, report);
+        let setup = sandbox.setup(config, report);
         for spec in case_specs(config, level) {
-            sandbox.run_case(config, report, &spec);
+            for workload in &config.workloads {
+                sandbox.run_case(config, report, &spec, *workload, setup);
+            }
         }
     });
+}
+
+pub(super) fn cleanup_target(config: &MatrixConfig, report: &mut MatrixReport, target: &str) {
+    let topology = config.topology_for(target);
+    let command = "set +e; for pid in /tmp/ssh_proxy-matrix-*/daemon.pid /tmp/ssh_proxy-matrix-*/bench.pid; do if [ -f \"$pid\" ]; then kill \"$(cat \"$pid\")\" 2>/dev/null || true; fi; done; find /tmp -maxdepth 1 -type d -name 'ssh_proxy-matrix-*' -exec rm -rf -- {} +";
+    let mut row = MatrixCaseReport::new(
+        config.level_name(),
+        Some(target),
+        Some(topology),
+        "remote_cleanup_sweep",
+    );
+    row.cleanup_status = Some("requested".to_string());
+    match run_output(openssh_command_for_target(
+        target,
+        config.accept_new,
+        &[command],
+    )) {
+        Ok(output) if output.status.success() => {
+            row.cleanup_status = Some("ok".to_string());
+            row.status = "passed".to_string();
+        }
+        Ok(output) => {
+            row.cleanup_status = Some("failed".to_string());
+            row.fail(failure_class(&output), output_error(&output));
+        }
+        Err(err) => {
+            row.cleanup_status = Some("failed".to_string());
+            row.fail(classify_command_error(&err), err);
+        }
+    }
+    report.push(row);
 }
 
 impl RemoteMatrixSandbox {
@@ -152,9 +196,11 @@ impl RemoteMatrixSandbox {
             plain_port: base_port + 1,
             tls_port: base_port + 2,
             quic_port: base_port + 3,
+            bench_port: base_port + 4,
             token: format!("matrix-{stamp}-{safe_target}"),
             local_cert,
             local_key,
+            local_bench_script: temp_path("matrix-bench-server", "py"),
             accept_new: config.accept_new,
         }
     }
@@ -188,16 +234,23 @@ impl RemoteMatrixSandbox {
         report.push(row);
         let _ = fs::remove_file(&self.local_cert);
         let _ = fs::remove_file(&self.local_key);
+        let _ = fs::remove_file(&self.local_bench_script);
         if let Err(payload) = result {
             std::panic::resume_unwind(payload);
         }
     }
 
-    fn setup(&self, config: &MatrixConfig, report: &mut MatrixReport) {
+    fn setup(&self, config: &MatrixConfig, report: &mut MatrixReport) -> SetupState {
         self.generate_cert(config, report);
         self.upload_sidecar(config, report);
         self.start_daemon(config, report);
         self.assert_remote_status(config, report);
+        let bench_ready = if config.needs_bench_server() {
+            self.start_bench_server(config, report)
+        } else {
+            false
+        };
+        SetupState { bench_ready }
     }
 
     fn generate_cert(&self, config: &MatrixConfig, report: &mut MatrixReport) {
@@ -336,9 +389,112 @@ impl RemoteMatrixSandbox {
         );
     }
 
-    fn run_case(&self, config: &MatrixConfig, report: &mut MatrixReport, spec: &MatrixCaseSpec) {
+    fn start_bench_server(&self, config: &MatrixConfig, report: &mut MatrixReport) -> bool {
+        let mut python = MatrixCaseReport::new(
+            config.level_name(),
+            Some(&self.target),
+            Some(&self.topology),
+            "remote_matrix_python3",
+        );
+        match run_output(openssh_command_for_target(
+            &self.target,
+            config.accept_new,
+            &["command -v python3 >/dev/null 2>&1"],
+        )) {
+            Ok(output) if output.status.success() => python.status = "passed".to_string(),
+            Ok(output) => {
+                python.skip(
+                    failure_class(&output),
+                    "python3 is not available for matrix payload workloads",
+                );
+                report.push(python);
+                return false;
+            }
+            Err(err) => {
+                python.skip(
+                    classify_command_error(&err),
+                    "python3 availability probe failed for matrix payload workloads",
+                );
+                report.push(python);
+                return false;
+            }
+        }
+        report.push(python);
+
+        let mut local_script = MatrixCaseReport::new(
+            config.level_name(),
+            Some(&self.target),
+            Some(&self.topology),
+            "local_matrix_bench_script",
+        );
+        if let Err(err) = fs::write(&self.local_bench_script, BENCH_SERVER_SCRIPT) {
+            local_script.fail("local_io", format!("write bench server script: {err}"));
+            report.push(local_script);
+            return false;
+        }
+        report.push(local_script);
+
+        let remote_script = format!("{}/bench_server.py", self.remote_dir);
+        if !push_command_case(
+            config,
+            report,
+            &self.target,
+            &self.topology,
+            "remote_matrix_upload_bench_server",
+            run_output(scp_command(
+                &self.local_bench_script,
+                &self.target,
+                config.accept_new,
+                &remote_script,
+            )),
+        ) {
+            return false;
+        }
+
+        let wait_code = r#"import socket,sys,time
+port=int(sys.argv[1])
+deadline=time.time()+10
+while time.time()<deadline:
+    try:
+        s=socket.create_connection(("127.0.0.1", port), timeout=0.25)
+        s.close()
+        sys.exit(0)
+    except OSError:
+        time.sleep(0.25)
+sys.exit(1)
+"#;
+        let command = format!(
+            "nohup python3 {script} {port} >{log} 2>&1 < /dev/null & echo $! > {pid}; python3 -c {wait} {port}",
+            script = sh_quote(&remote_script),
+            port = self.bench_port,
+            log = sh_quote(&format!("{}/bench.log", self.remote_dir)),
+            pid = sh_quote(&format!("{}/bench.pid", self.remote_dir)),
+            wait = sh_quote(wait_code),
+        );
+        push_command_case(
+            config,
+            report,
+            &self.target,
+            &self.topology,
+            "remote_matrix_bench_server_start",
+            run_output(openssh_command_for_target(
+                &self.target,
+                config.accept_new,
+                &[&command],
+            )),
+        )
+    }
+
+    fn run_case(
+        &self,
+        config: &MatrixConfig,
+        report: &mut MatrixReport,
+        spec: &MatrixCaseSpec,
+        workload: MatrixWorkload,
+        setup: SetupState,
+    ) {
         if spec.direct_only && !config.is_direct_target(&self.target) {
-            let mut row = self.case_row(config, spec);
+            let mut row = self.case_row(config, spec, workload);
             row.skip(
                 "preflight_skip",
                 "direct peer endpoints are skipped for non-direct topology",
@@ -347,13 +503,28 @@ impl RemoteMatrixSandbox {
             report.push(row);
             return;
         }
+        if workload.requires_bench_server() && !setup.bench_ready {
+            let mut row = self.case_row(config, spec, workload);
+            row.skip(
+                "missing_remote_bench_server",
+                "payload workload skipped because remote bench server is unavailable",
+            );
+            row.fallback_classification = Some("preflight_skip".to_string());
+            report.push(row);
+            return;
+        }
 
-        let mut row = self.case_row(config, spec);
+        let mut row = self.case_row(config, spec, workload);
+        row.payload_bytes = payload_bytes_for(config, workload);
         let mut lost = 0_u64;
         let mut total_bytes = 0_u64;
         let mut total_duration = 0_u128;
         let mut first_byte = None;
-        let measurements = self.run_proxy_measurements(config, spec);
+        let measurements = if spec.case == "openssh-direct-tcpip" {
+            self.run_openssh_forward_measurements(config, workload)
+        } else {
+            self.run_proxy_measurements(config, spec, workload)
+        };
         row.with_measurement_context(
             measurements.measurement_scope,
             measurements.sample_count,
@@ -364,9 +535,12 @@ impl RemoteMatrixSandbox {
         for result in measurements.results {
             match result {
                 Ok(measurement) => {
-                    if !control_response_ok(&measurement.response) {
+                    if !measurement_ok(workload, &measurement) {
                         lost += 1;
-                        row.fail("runtime", unexpected_control_response(&measurement));
+                        row.fail(
+                            "runtime",
+                            unexpected_workload_response(workload, &measurement),
+                        );
                     } else {
                         total_bytes += measurement.bytes;
                         total_duration += measurement.duration_ms;
@@ -391,19 +565,139 @@ impl RemoteMatrixSandbox {
         report.push(row);
     }
 
+    fn run_openssh_forward_measurements(
+        &self,
+        config: &MatrixConfig,
+        workload: MatrixWorkload,
+    ) -> MatrixMeasurements {
+        let mut last = None;
+        for attempt in 0..3 {
+            let measurements = self.run_openssh_forward_measurements_once(config, workload);
+            if attempt == 2 || !measurements_should_retry(&measurements) {
+                return measurements;
+            }
+            last = Some(measurements);
+            thread::sleep(Duration::from_millis(250));
+        }
+        last.expect("OpenSSH forward retry loop should run at least once")
+    }
+
+    fn run_openssh_forward_measurements_once(
+        &self,
+        config: &MatrixConfig,
+        workload: MatrixWorkload,
+    ) -> MatrixMeasurements {
+        let listen = free_addr();
+        let target_port = self.target_port_for(workload);
+        let stderr_path = temp_path("matrix-openssh-stderr", "log");
+        let stderr = match fs::File::create(&stderr_path)
+            .map_err(|err| format!("create OpenSSH stderr log {}: {err}", stderr_path.display()))
+        {
+            Ok(file) => file,
+            Err(err) => {
+                return MatrixMeasurements::single_error(
+                    config,
+                    workload.measurement_scope("openssh"),
+                    err,
+                );
+            }
+        };
+        let mut command = Command::new("ssh");
+        command
+            .arg("-N")
+            .arg("-T")
+            .arg("-o")
+            .arg("ExitOnForwardFailure=yes")
+            .arg("-o")
+            .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("ConnectTimeout=10")
+            .arg("-o")
+            .arg(if config.accept_new {
+                "StrictHostKeyChecking=accept-new"
+            } else {
+                "StrictHostKeyChecking=yes"
+            })
+            .arg("-L")
+            .arg(format!("{}:127.0.0.1:{}", listen, target_port))
+            .arg(&self.target)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(stderr));
+        let mut child = match command
+            .spawn()
+            .map(ChildGuard::new)
+            .map_err(|err| format!("start OpenSSH forward: {err}"))
+        {
+            Ok(child) => child,
+            Err(err) => {
+                return MatrixMeasurements::single_error(
+                    config,
+                    workload.measurement_scope("openssh"),
+                    err,
+                );
+            }
+        };
+        if let Err(err) = wait_tcp(listen, &mut child) {
+            return MatrixMeasurements::single_error(
+                config,
+                workload.measurement_scope("openssh"),
+                with_proxy_log(err, &stderr_path),
+            );
+        }
+
+        let mut measurements =
+            self.run_workload_measurements(config, listen, workload, "openssh", config.samples);
+        child.kill_and_wait();
+        let proxy_log = read_proxy_log(&stderr_path);
+        for result in &mut measurements.results {
+            if let Err(err) = result {
+                let current = std::mem::take(err);
+                *err = append_proxy_log(&current, proxy_log.as_deref());
+            }
+        }
+        measurements
+    }
+
     fn run_proxy_measurements(
         &self,
         config: &MatrixConfig,
         spec: &MatrixCaseSpec,
+        workload: MatrixWorkload,
+    ) -> MatrixMeasurements {
+        let mut last = None;
+        for attempt in 0..3 {
+            let measurements = self.run_proxy_measurements_once(config, spec, workload);
+            if attempt == 2 || !measurements_should_retry(&measurements) {
+                return measurements;
+            }
+            last = Some(measurements);
+            thread::sleep(Duration::from_millis(250));
+        }
+        last.expect("proxy measurement retry loop should run at least once")
+    }
+
+    fn run_proxy_measurements_once(
+        &self,
+        config: &MatrixConfig,
+        spec: &MatrixCaseSpec,
+        workload: MatrixWorkload,
     ) -> MatrixMeasurements {
         let listen = free_addr();
+        let target_port = self.target_port_for(workload);
         let home = temp_dir("matrix-proxy-home");
         let stderr_path = temp_path("matrix-proxy-stderr", "log");
         let stderr = match fs::File::create(&stderr_path)
             .map_err(|err| format!("create proxy stderr log {}: {err}", stderr_path.display()))
         {
             Ok(file) => file,
-            Err(err) => return MatrixMeasurements::single_error(config, err),
+            Err(err) => {
+                return MatrixMeasurements::single_error(
+                    config,
+                    workload.measurement_scope("proxy"),
+                    err,
+                );
+            }
         };
         let mut command = Command::new(&config.local_bin);
         command
@@ -417,7 +711,7 @@ impl RemoteMatrixSandbox {
                 "--remote-transport",
                 spec.selected_transport,
                 "--tcp-target",
-                &format!("127.0.0.1:{}", self.control_port),
+                &format!("127.0.0.1:{target_port}"),
                 "--connect-timeout-secs",
                 "20",
                 "--no-reconnect",
@@ -438,27 +732,24 @@ impl RemoteMatrixSandbox {
             .map_err(|err| format!("start local proxy: {err}"))
         {
             Ok(child) => child,
-            Err(err) => return MatrixMeasurements::single_error(config, err),
-        };
-        if let Err(err) = wait_tcp(listen, &mut child) {
-            return MatrixMeasurements::single_error(config, with_proxy_log(err, &stderr_path));
-        }
-
-        let mut measurements = match config.requested {
-            MatrixLevel::Stability => self.run_stability_samples(config, listen),
-            MatrixLevel::PerfSmoke => self.run_perf_samples(config, listen, spec.samples),
-            _ => {
-                let started = Instant::now();
-                MatrixMeasurements {
-                    results: vec![control_status_via_tcp(listen, &self.token)],
-                    measurement_scope: "control-status-through-proxy",
-                    sample_count: 1,
-                    request_count: 1,
-                    concurrency: 1,
-                    run_window_ms: started.elapsed().as_millis().max(1),
-                }
+            Err(err) => {
+                return MatrixMeasurements::single_error(
+                    config,
+                    workload.measurement_scope("proxy"),
+                    err,
+                );
             }
         };
+        if let Err(err) = wait_tcp(listen, &mut child) {
+            return MatrixMeasurements::single_error(
+                config,
+                workload.measurement_scope("proxy"),
+                with_proxy_log(err, &stderr_path),
+            );
+        }
+
+        let mut measurements =
+            self.run_workload_measurements(config, listen, workload, "proxy", spec.samples);
         child.kill_and_wait();
         let proxy_log = read_proxy_log(&stderr_path);
         for result in &mut measurements.results {
@@ -473,11 +764,78 @@ impl RemoteMatrixSandbox {
         measurements
     }
 
-    fn run_perf_samples(
+    fn run_workload_measurements(
+        &self,
+        config: &MatrixConfig,
+        listen: SocketAddr,
+        workload: MatrixWorkload,
+        backend: &'static str,
+        samples: usize,
+    ) -> MatrixMeasurements {
+        let scope = workload.measurement_scope(backend);
+        match workload {
+            MatrixWorkload::Control => match config.requested {
+                MatrixLevel::Stability => self.run_control_stability_samples(config, listen, scope),
+                MatrixLevel::PerfSmoke => {
+                    self.run_control_perf_samples(config, listen, samples, scope)
+                }
+                _ => {
+                    let started = Instant::now();
+                    MatrixMeasurements {
+                        results: vec![control_status_via_tcp(listen, &self.token)],
+                        measurement_scope: scope,
+                        sample_count: 1,
+                        request_count: 1,
+                        concurrency: 1,
+                        run_window_ms: started.elapsed().as_millis().max(1),
+                    }
+                }
+            },
+            MatrixWorkload::LargeDownload => {
+                let started = Instant::now();
+                MatrixMeasurements {
+                    results: vec![bench_download_via_tcp(listen, config.payload_bytes)],
+                    measurement_scope: scope,
+                    sample_count: 1,
+                    request_count: 1,
+                    concurrency: 1,
+                    run_window_ms: started.elapsed().as_millis().max(1),
+                }
+            }
+            MatrixWorkload::LargeUpload => {
+                let started = Instant::now();
+                MatrixMeasurements {
+                    results: vec![bench_upload_via_tcp(listen, config.payload_bytes)],
+                    measurement_scope: scope,
+                    sample_count: 1,
+                    request_count: 1,
+                    concurrency: 1,
+                    run_window_ms: started.elapsed().as_millis().max(1),
+                }
+            }
+            MatrixWorkload::LongConnection => {
+                let started = Instant::now();
+                MatrixMeasurements {
+                    results: vec![bench_stream_via_tcp(listen, config.long_connection_secs)],
+                    measurement_scope: scope,
+                    sample_count: 1,
+                    request_count: 1,
+                    concurrency: 1,
+                    run_window_ms: started.elapsed().as_millis().max(1),
+                }
+            }
+            MatrixWorkload::HighConcurrency => {
+                self.run_high_concurrency_samples(config, listen, scope)
+            }
+        }
+    }
+
+    fn run_control_perf_samples(
         &self,
         config: &MatrixConfig,
         listen: SocketAddr,
         samples: usize,
+        scope: &'static str,
     ) -> MatrixMeasurements {
         let mut results = Vec::new();
         let started = Instant::now();
@@ -511,7 +869,7 @@ impl RemoteMatrixSandbox {
         }
         MatrixMeasurements {
             results,
-            measurement_scope: "control-status-through-proxy",
+            measurement_scope: scope,
             sample_count: samples as u64,
             request_count: (samples * concurrency) as u64,
             concurrency: concurrency as u64,
@@ -519,10 +877,11 @@ impl RemoteMatrixSandbox {
         }
     }
 
-    fn run_stability_samples(
+    fn run_control_stability_samples(
         &self,
         config: &MatrixConfig,
         listen: SocketAddr,
+        scope: &'static str,
     ) -> MatrixMeasurements {
         let started = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(config.duration_secs.max(1));
@@ -538,8 +897,49 @@ impl RemoteMatrixSandbox {
             request_count: results.len() as u64,
             sample_count: results.len() as u64,
             results,
-            measurement_scope: "control-status-through-proxy",
+            measurement_scope: scope,
             concurrency: 1,
+            run_window_ms: started.elapsed().as_millis().max(1),
+        }
+    }
+
+    fn run_high_concurrency_samples(
+        &self,
+        config: &MatrixConfig,
+        listen: SocketAddr,
+        scope: &'static str,
+    ) -> MatrixMeasurements {
+        let started = Instant::now();
+        let batch_started = Instant::now();
+        let concurrency = config.concurrency.max(1);
+        let mut handles = Vec::new();
+        for _ in 0..concurrency {
+            let bytes = config.concurrent_payload_bytes;
+            handles.push(thread::spawn(move || bench_download_via_tcp(listen, bytes)));
+        }
+        let mut results = Vec::new();
+        let mut successes = Vec::new();
+        for handle in handles {
+            match handle
+                .join()
+                .unwrap_or_else(|_| Err("matrix concurrency worker panicked".to_string()))
+            {
+                Ok(measurement) => successes.push(measurement),
+                Err(err) => results.push(Err(err)),
+            }
+        }
+        if !successes.is_empty() {
+            results.push(Ok(aggregate_batch_measurement(
+                successes,
+                batch_started.elapsed().as_millis().max(1),
+            )));
+        }
+        MatrixMeasurements {
+            results,
+            measurement_scope: scope,
+            sample_count: 1,
+            request_count: concurrency as u64,
+            concurrency: concurrency as u64,
             run_window_ms: started.elapsed().as_millis().max(1),
         }
     }
@@ -597,13 +997,19 @@ impl RemoteMatrixSandbox {
         }
     }
 
-    fn case_row(&self, config: &MatrixConfig, spec: &MatrixCaseSpec) -> MatrixCaseReport {
+    fn case_row(
+        &self,
+        config: &MatrixConfig,
+        spec: &MatrixCaseSpec,
+        workload: MatrixWorkload,
+    ) -> MatrixCaseReport {
         MatrixCaseReport::new(
             config.level_name(),
             Some(&self.target),
             Some(&self.topology),
             spec.case,
         )
+        .with_workload(workload.as_str())
         .with_transport(
             spec.selected_transport,
             spec.selection_source,
@@ -611,10 +1017,19 @@ impl RemoteMatrixSandbox {
         )
     }
 
+    fn target_port_for(&self, workload: MatrixWorkload) -> u16 {
+        if workload.requires_bench_server() {
+            self.bench_port
+        } else {
+            self.control_port
+        }
+    }
+
     fn remote_cleanup(&self) -> String {
         let command = format!(
-            "set +e; if [ -f {pid} ]; then kill \"$(cat {pid})\" 2>/dev/null || true; fi; case {dir} in /tmp/ssh_proxy-matrix-*) rm -rf {dir} ;; *) echo refused-cleanup; exit 1 ;; esac",
-            pid = sh_quote(&format!("{}/daemon.pid", self.remote_dir)),
+            "set +e; for pid in {daemon_pid} {bench_pid}; do if [ -f \"$pid\" ]; then kill \"$(cat \"$pid\")\" 2>/dev/null || true; fi; done; case {dir} in /tmp/ssh_proxy-matrix-*) rm -rf {dir} ;; *) echo refused-cleanup; exit 1 ;; esac",
+            daemon_pid = sh_quote(&format!("{}/daemon.pid", self.remote_dir)),
+            bench_pid = sh_quote(&format!("{}/bench.pid", self.remote_dir)),
             dir = sh_quote(&self.remote_dir),
         );
         match run_output(openssh_command_for_target(
@@ -629,16 +1044,34 @@ impl RemoteMatrixSandbox {
 }
 
 impl MatrixMeasurements {
-    fn single_error(config: &MatrixConfig, error: String) -> Self {
+    fn single_error(config: &MatrixConfig, scope: &'static str, error: String) -> Self {
         Self {
             results: vec![Err(error)],
-            measurement_scope: "control-status-through-proxy",
+            measurement_scope: scope,
             sample_count: 1,
             request_count: 1,
             concurrency: config.concurrency.max(1) as u64,
             run_window_ms: 0,
         }
     }
+}
+
+fn measurements_should_retry(measurements: &MatrixMeasurements) -> bool {
+    !measurements.results.is_empty()
+        && measurements
+            .results
+            .iter()
+            .all(|result| matches!(result, Err(err) if transient_runtime_error(err)))
+}
+
+fn transient_runtime_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("banner exchange")
+        || lower.contains("connection timed out")
+        || lower.contains("operation timed out")
+        || lower.contains("timed out")
+        || lower.contains("connection closed")
+        || lower.contains("broken pipe")
 }
 
 fn aggregate_batch_measurement(
@@ -678,6 +1111,14 @@ fn case_specs(config: &MatrixConfig, level: MatrixLevel) -> Vec<MatrixCaseSpec> 
         return stability_specs();
     }
     vec![
+        MatrixCaseSpec {
+            case: "openssh-direct-tcpip",
+            selected_transport: "openssh-direct-tcpip",
+            selection_source: "matrix",
+            selection_reason: "OpenSSH local forward direct-tcpip baseline",
+            direct_only: false,
+            samples,
+        },
         MatrixCaseSpec {
             case: "ssh-native",
             selected_transport: "ssh-native",
@@ -732,6 +1173,14 @@ fn case_specs(config: &MatrixConfig, level: MatrixLevel) -> Vec<MatrixCaseSpec> 
 fn stability_specs() -> Vec<MatrixCaseSpec> {
     vec![
         MatrixCaseSpec {
+            case: "openssh-direct-tcpip",
+            selected_transport: "openssh-direct-tcpip",
+            selection_source: "matrix",
+            selection_reason: "OpenSSH local forward stability baseline",
+            direct_only: false,
+            samples: 1,
+        },
+        MatrixCaseSpec {
             case: "spx-over-ssh",
             selected_transport: "tcp",
             selection_source: "matrix",
@@ -773,14 +1222,16 @@ fn push_command_case(
     topology: &str,
     case: &str,
     output: Result<std::process::Output, String>,
-) {
+) -> bool {
     let mut row = MatrixCaseReport::new(config.level_name(), Some(target), Some(topology), case);
     match output {
         Ok(output) if output.status.success() => row.status = "passed".to_string(),
         Ok(output) => row.fail(failure_class(&output), output_error(&output)),
         Err(err) => row.fail(classify_command_error(&err), err),
     }
+    let passed = row.status == "passed";
     report.push(row);
+    passed
 }
 
 fn classify_command_error(error: &str) -> &'static str {
@@ -808,6 +1259,24 @@ fn classify_runtime_error(error: &str) -> &'static str {
     }
 }
 
+fn payload_bytes_for(config: &MatrixConfig, workload: MatrixWorkload) -> Option<u64> {
+    match workload {
+        MatrixWorkload::Control | MatrixWorkload::LongConnection => None,
+        MatrixWorkload::LargeDownload | MatrixWorkload::LargeUpload => Some(config.payload_bytes),
+        MatrixWorkload::HighConcurrency => Some(config.concurrent_payload_bytes),
+    }
+}
+
+fn measurement_ok(workload: MatrixWorkload, measurement: &super::command::TcpMeasurement) -> bool {
+    match workload {
+        MatrixWorkload::Control => control_response_ok(&measurement.response),
+        MatrixWorkload::LargeDownload => measurement.response.starts_with("bench_download:"),
+        MatrixWorkload::LargeUpload => measurement.response.starts_with("OK "),
+        MatrixWorkload::LongConnection => measurement.response.starts_with("bench_stream:"),
+        MatrixWorkload::HighConcurrency => measurement.response.starts_with("bench_download:"),
+    }
+}
+
 fn control_response_ok(response: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(response)
         .ok()
@@ -815,10 +1284,14 @@ fn control_response_ok(response: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn unexpected_control_response(measurement: &super::command::TcpMeasurement) -> String {
+fn unexpected_workload_response(
+    workload: MatrixWorkload,
+    measurement: &super::command::TcpMeasurement,
+) -> String {
     append_proxy_log(
         &format!(
-            "unexpected control response: {}",
+            "unexpected {} response: {}",
+            workload.as_str(),
             nonempty_or_placeholder(&measurement.response)
         ),
         measurement.proxy_stderr.as_deref(),
@@ -871,9 +1344,9 @@ fn allocate_remote_base_port(stamp: &str, target: &str) -> u16 {
         hash = hash.wrapping_mul(31).wrapping_add(u32::from(byte));
     }
     let candidate = 26000 + (hash % 16000) as u16;
-    if candidate % 4 == 0 {
+    if candidate % 8 == 0 {
         candidate
     } else {
-        candidate + (4 - candidate % 4)
+        candidate + (8 - candidate % 8)
     }
 }

@@ -5,6 +5,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use super::{
+    bench::{DEFAULT_CONCURRENT_PAYLOAD_BYTES, DEFAULT_PAYLOAD_BYTES},
+    workload::MatrixWorkload,
+};
+
 const GATE_ENV: &str = "SSH_PROXY_MATRIX";
 const LEVEL_ENV: &str = "SSH_PROXY_MATRIX_LEVEL";
 const TARGETS_ENV: &str = "SSH_PROXY_MATRIX_TARGETS";
@@ -18,6 +23,10 @@ const SIDECAR_ENV: &str = "SSH_PROXY_MATRIX_SIDECAR";
 const DURATION_SECS_ENV: &str = "SSH_PROXY_MATRIX_DURATION_SECS";
 const SAMPLES_ENV: &str = "SSH_PROXY_MATRIX_SAMPLES";
 const CONCURRENCY_ENV: &str = "SSH_PROXY_MATRIX_CONCURRENCY";
+const WORKLOADS_ENV: &str = "SSH_PROXY_MATRIX_WORKLOADS";
+const PAYLOAD_BYTES_ENV: &str = "SSH_PROXY_MATRIX_PAYLOAD_BYTES";
+const CONCURRENT_PAYLOAD_BYTES_ENV: &str = "SSH_PROXY_MATRIX_CONCURRENT_PAYLOAD_BYTES";
+const LONG_SECS_ENV: &str = "SSH_PROXY_MATRIX_LONG_SECS";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum MatrixLevel {
@@ -42,6 +51,10 @@ pub(super) struct MatrixConfig {
     pub(super) duration_secs: u64,
     pub(super) samples: usize,
     pub(super) concurrency: usize,
+    pub(super) workloads: Vec<MatrixWorkload>,
+    pub(super) payload_bytes: u64,
+    pub(super) concurrent_payload_bytes: u64,
+    pub(super) long_connection_secs: u64,
 }
 
 impl MatrixConfig {
@@ -73,6 +86,12 @@ impl MatrixConfig {
             )
         });
 
+        let duration_secs = env_u64(DURATION_SECS_ENV).unwrap_or(match requested {
+            MatrixLevel::Stability => 1800,
+            MatrixLevel::PerfSmoke => 30,
+            _ => 0,
+        });
+        let workloads = MatrixWorkload::parse_list(env_string(WORKLOADS_ENV).as_deref(), requested);
         Some(Self {
             run_level,
             requested,
@@ -84,17 +103,21 @@ impl MatrixConfig {
             artifact_dir,
             local_bin: env_path(LOCAL_BIN_ENV).unwrap_or_else(default_local_bin),
             sidecar: env_path(SIDECAR_ENV).unwrap_or_else(default_sidecar),
-            duration_secs: env_u64(DURATION_SECS_ENV).unwrap_or(match requested {
-                MatrixLevel::Stability => 1800,
-                MatrixLevel::PerfSmoke => 30,
-                _ => 0,
-            }),
+            duration_secs,
             samples: env_usize(SAMPLES_ENV).unwrap_or(match requested {
                 MatrixLevel::PerfSmoke => 4,
                 MatrixLevel::Stability => 0,
                 _ => 1,
             }),
             concurrency: env_usize(CONCURRENCY_ENV).unwrap_or(2),
+            workloads,
+            payload_bytes: env_u64(PAYLOAD_BYTES_ENV).unwrap_or(DEFAULT_PAYLOAD_BYTES),
+            concurrent_payload_bytes: env_u64(CONCURRENT_PAYLOAD_BYTES_ENV)
+                .unwrap_or(DEFAULT_CONCURRENT_PAYLOAD_BYTES),
+            long_connection_secs: env_u64(LONG_SECS_ENV).unwrap_or_else(|| match requested {
+                MatrixLevel::Stability => duration_secs.max(1),
+                _ => 15,
+            }),
         })
     }
 
@@ -125,6 +148,12 @@ impl MatrixConfig {
 
     pub(super) fn level_name(&self) -> &'static str {
         self.requested.as_str()
+    }
+
+    pub(super) fn needs_bench_server(&self) -> bool {
+        self.workloads
+            .iter()
+            .any(|workload| workload.requires_bench_server())
     }
 }
 
@@ -177,7 +206,14 @@ pub(super) fn env_string(name: &str) -> Option<String> {
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
-    env_string(name).map(PathBuf::from)
+    env_string(name).map(|value| {
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            path
+        } else {
+            workspace_root().join(path)
+        }
+    })
 }
 
 fn env_u64(name: &str) -> Option<u64> {

@@ -13,6 +13,7 @@ pub(super) struct MatrixCaseReport {
     pub target: Option<String>,
     pub topology: Option<String>,
     pub case: String,
+    pub workload: Option<String>,
     pub selected_transport: Option<String>,
     pub selection_source: Option<String>,
     pub selection_reason: Option<String>,
@@ -22,6 +23,7 @@ pub(super) struct MatrixCaseReport {
     pub request_count: Option<u64>,
     pub concurrency: Option<u64>,
     pub run_window_ms: Option<u128>,
+    pub payload_bytes: Option<u64>,
     pub bytes: Option<u64>,
     pub duration_ms: Option<u128>,
     pub mibps: Option<f64>,
@@ -66,6 +68,7 @@ impl MatrixCaseReport {
             target: target.map(ToOwned::to_owned),
             topology: topology.map(ToOwned::to_owned),
             case: case.to_string(),
+            workload: None,
             selected_transport: None,
             selection_source: None,
             selection_reason: None,
@@ -75,6 +78,7 @@ impl MatrixCaseReport {
             request_count: None,
             concurrency: None,
             run_window_ms: None,
+            payload_bytes: None,
             bytes: None,
             duration_ms: None,
             mibps: None,
@@ -105,6 +109,11 @@ impl MatrixCaseReport {
         self.selected_transport = Some(transport.to_string());
         self.selection_source = Some(source.to_string());
         self.selection_reason = Some(reason.to_string());
+        self
+    }
+
+    pub(super) fn with_workload(mut self, workload: &str) -> Self {
+        self.workload = Some(workload.to_string());
         self
     }
 
@@ -157,6 +166,7 @@ impl MatrixReport {
         });
         let json_path = self.artifact_dir.join("transport-matrix.json");
         let csv_path = self.artifact_dir.join("transport-matrix.csv");
+        let summary_path = self.artifact_dir.join("transport-matrix-summary.md");
         let json_path_text = json_path.display().to_string();
         for row in &mut self.cases {
             row.artifact_path = Some(json_path_text.clone());
@@ -178,7 +188,13 @@ impl MatrixReport {
         .unwrap_or_else(|err| panic!("failed to write {}: {err}", json_path.display()));
         fs::write(&csv_path, csv_rows(&self.cases))
             .unwrap_or_else(|err| panic!("failed to write {}: {err}", csv_path.display()));
+        fs::write(&summary_path, summary_table(&self.cases))
+            .unwrap_or_else(|err| panic!("failed to write {}: {err}", summary_path.display()));
         json_path
+    }
+
+    pub(super) fn summary_table(&self) -> String {
+        summary_table(&self.cases)
     }
 
     pub(super) fn assert_no_hard_failures(&self) {
@@ -206,7 +222,7 @@ impl MatrixReport {
 
 fn csv_rows(rows: &[MatrixCaseReport]) -> String {
     let mut output = String::from(
-        "level,target,topology,case,selected_transport,selection_source,selection_reason,fallback_classification,measurement_scope,sample_count,request_count,concurrency,run_window_ms,bytes,duration_ms,mibps,first_byte_ms,lost_requests,reconnect_count,cleanup_status,artifact_path,status,error_kind,error\n",
+        "level,target,topology,case,workload,selected_transport,selection_source,selection_reason,fallback_classification,measurement_scope,sample_count,request_count,concurrency,run_window_ms,payload_bytes,bytes,duration_ms,mibps,first_byte_ms,lost_requests,reconnect_count,cleanup_status,artifact_path,status,error_kind,error\n",
     );
     for row in rows {
         let fields = [
@@ -214,6 +230,7 @@ fn csv_rows(rows: &[MatrixCaseReport]) -> String {
             row.target.as_deref().unwrap_or(""),
             row.topology.as_deref().unwrap_or(""),
             row.case.as_str(),
+            row.workload.as_deref().unwrap_or(""),
             row.selected_transport.as_deref().unwrap_or(""),
             row.selection_source.as_deref().unwrap_or(""),
             row.selection_reason.as_deref().unwrap_or(""),
@@ -229,6 +246,9 @@ fn csv_rows(rows: &[MatrixCaseReport]) -> String {
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             &row.run_window_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.payload_bytes
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             &row.bytes.map(|value| value.to_string()).unwrap_or_default(),
@@ -263,6 +283,50 @@ fn csv_rows(rows: &[MatrixCaseReport]) -> String {
         output.push('\n');
     }
     output
+}
+
+fn summary_table(rows: &[MatrixCaseReport]) -> String {
+    let mut output = String::from(
+        "| target | topology | workload | case | transport | status | MiB/s | first byte ms | bytes | req/lost | cleanup |\n",
+    );
+    output.push_str("| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    let mut selected: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.workload.is_some() || row.cleanup_status.is_some() || row.status != "passed"
+        })
+        .collect();
+    if selected.is_empty() {
+        selected = rows.iter().collect();
+    }
+    for row in selected {
+        output.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {}/{} | {} |\n",
+            md_cell(row.target.as_deref().unwrap_or("local")),
+            md_cell(row.topology.as_deref().unwrap_or("")),
+            md_cell(row.workload.as_deref().unwrap_or("")),
+            md_cell(&row.case),
+            md_cell(row.selected_transport.as_deref().unwrap_or("")),
+            md_cell(&row.status),
+            row.mibps
+                .map(|value| format!("{value:.3}"))
+                .unwrap_or_else(|| "-".to_string()),
+            row.first_byte_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            row.bytes
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            row.request_count.unwrap_or(0),
+            row.lost_requests.unwrap_or(0),
+            md_cell(row.cleanup_status.as_deref().unwrap_or("")),
+        ));
+    }
+    output
+}
+
+fn md_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
 }
 
 fn csv_escape(value: &str) -> String {

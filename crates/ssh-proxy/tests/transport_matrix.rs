@@ -24,3 +24,9 @@ fn matrix_perf_smoke() {
 fn matrix_stability() {
     transport_matrix::run_stability();
 }
+
+#[test]
+#[ignore]
+fn matrix_cleanup() {
+    transport_matrix::run_cleanup();
+}
