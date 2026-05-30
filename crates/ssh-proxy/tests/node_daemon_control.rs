@@ -1,6 +1,6 @@
 mod support;
 
-use std::{fs, net::TcpListener, process::Stdio, thread, time::Duration};
+use std::{fs, net::TcpListener, process::Stdio};
 
 use support::node_daemon::*;
 

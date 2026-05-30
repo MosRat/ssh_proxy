@@ -10,10 +10,3 @@ pub(crate) fn parse_remote_os(value: &str) -> Result<cli::RemoteOs> {
         other => bail!("invalid remote_os value {other:?}"),
     }
 }
-
-#[cfg(test)]
-pub(crate) fn parse_remote_transport(value: &str) -> Result<cli::RemoteTransport> {
-    ssh_proxy_route::parse_transport_mode(value)
-        .map(Into::into)
-        .map_err(anyhow::Error::msg)
-}
