@@ -1039,6 +1039,26 @@ fn production_service_paths_report_operability_errors_without_panics() {
 }
 
 #[test]
+fn production_runtime_paths_avoid_unclassified_panics() {
+    let mut violations = Vec::new();
+    for relative in [
+        "crates/ssh-proxy/src",
+        "crates/ssh-proxy-service/src",
+        "crates/ssh-proxy-platform/src",
+        "crates/ssh-proxy-deploy/src",
+        "crates/ssh-proxy-lifecycle/src",
+    ] {
+        collect_production_panic_violations(&workspace_root().join(relative), &mut violations);
+    }
+
+    assert!(
+        violations.is_empty(),
+        "production runtime paths should return structured errors instead of panicking:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn runtime_operability_logs_keep_correlation_fields() {
     let routes = read_repo_file("crates/ssh-proxy/src/node_daemon/routes.rs");
     for field in [
@@ -1487,12 +1507,58 @@ fn collect_command_execution_violations(path: &Path, violations: &mut Vec<String
     }
 }
 
+fn collect_production_panic_violations(path: &Path, violations: &mut Vec<String>) {
+    let entries =
+        fs::read_dir(path).unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| {
+            panic!(
+                "failed to read directory entry under {}: {err}",
+                path.display()
+            )
+        });
+        let entry_path = entry.path();
+        if entry_path.is_dir() {
+            collect_production_panic_violations(&entry_path, violations);
+            continue;
+        }
+        if entry_path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        if production_panic_path_is_allowed(&entry_path) {
+            continue;
+        }
+
+        let text = fs::read_to_string(&entry_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", entry_path.display()));
+        let production_text = text.split("#[cfg(test)]").next().unwrap_or("");
+        for (line_number, line) in production_text.lines().enumerate() {
+            for pattern in ["unwrap(", "expect(", "panic!(", "todo!(", "unimplemented!("] {
+                if line.contains(pattern) {
+                    violations.push(format!(
+                        "{}:{} contains `{pattern}`",
+                        relative_workspace_path(&entry_path),
+                        line_number + 1
+                    ));
+                }
+            }
+        }
+    }
+}
+
 fn command_execution_path_is_allowed(path: &Path) -> bool {
     let relative = relative_workspace_path(path).replace('\\', "/");
     relative.starts_with("crates/ssh-proxy-platform/src/")
         || relative == "crates/ssh-proxy-lifecycle/src/executor/local.rs"
         || relative.ends_with("/tests.rs")
         || relative.contains("/tests/")
+}
+
+fn production_panic_path_is_allowed(path: &Path) -> bool {
+    let relative = relative_workspace_path(path).replace('\\', "/");
+    relative.ends_with("/tests.rs")
+        || relative.contains("/tests/")
+        || relative == "crates/ssh-proxy-lifecycle/src/executor/fake.rs"
 }
 
 fn contains_process_command_new(line: &str) -> bool {
