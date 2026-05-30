@@ -26,15 +26,16 @@ fn main() {
 
     let mut candidates = Vec::new();
     if let Some(path) = env::var_os("SSH_PROXY_LINUX_MUSL_BIN").map(PathBuf::from) {
+        println!("cargo:rerun-if-changed={}", path.display());
         candidates.push(path);
     }
-    candidates.push(
-        workspace_root
-            .join("target")
-            .join("x86_64-unknown-linux-musl")
-            .join("release")
-            .join("ssh_proxy"),
-    );
+    let release_sidecar = workspace_root
+        .join("target")
+        .join("x86_64-unknown-linux-musl")
+        .join("release")
+        .join("ssh_proxy");
+    println!("cargo:rerun-if-changed={}", release_sidecar.display());
+    candidates.push(release_sidecar);
     if profile != "release" {
         candidates.push(
             workspace_root

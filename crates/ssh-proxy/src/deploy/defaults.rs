@@ -23,6 +23,12 @@ pub(super) async fn apply_remote_auto_defaults(
     if let Some(remote_path) = args.remote_path.as_deref() {
         match remote_defaults_via_admin(client, remote_path, args).await {
             Ok(report) => {
+                if report.transport == report.control {
+                    anyhow::bail!(
+                        "remote admin defaults returned overlapping transport/control endpoint {}",
+                        report.transport
+                    );
+                }
                 args.remote_tcp = report.transport;
                 args.remote_control = report.control;
                 resolved_node_id = report.node_id;
@@ -63,6 +69,12 @@ pub(super) async fn apply_remote_auto_defaults(
             {
                 resolved_node_name = Some(value.to_string());
             }
+        }
+        if args.remote_tcp == args.remote_control {
+            anyhow::bail!(
+                "remote defaults returned overlapping transport/control endpoint {}",
+                args.remote_tcp
+            );
         }
     }
     let node_id = args

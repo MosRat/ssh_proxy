@@ -1,6 +1,9 @@
-use anyhow::Result;
+use std::time::Duration;
+
+use anyhow::{Result, bail};
 use serde_json::Value;
 pub use ssh_proxy_deploy::RemoteInstallResult;
+use tokio::time;
 
 use crate::{cli, peer_lifecycle, ssh_client};
 
@@ -9,6 +12,8 @@ use super::{
     helper::upload_helper, remote_commands::default_persistent_remote_path,
 };
 use peer_lifecycle::workflow::LifecyclePlan;
+
+const REMOTE_INSTALL_SERVICE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn install_remote(mut args: cli::InstallRemoteArgs) -> Result<RemoteInstallResult> {
     let client = ssh_client::Client::connect_install_args(&args).await?;
@@ -80,34 +85,53 @@ async fn install_remote_service(
         }
         cli::PersistMode::Auto => {
             let install_report =
-                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
+                run_remote_install_plan_with_timeout(&executor, &spec, plan.action_plan).await?;
             println!("installed persistent helper on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Systemd => {
             let install_report =
-                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
+                run_remote_install_plan_with_timeout(&executor, &spec, plan.action_plan).await?;
             println!("installed user systemd service on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Nohup => {
             let install_report =
-                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
+                run_remote_install_plan_with_timeout(&executor, &spec, plan.action_plan).await?;
             println!("started nohup helper on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Launchd => {
             let install_report =
-                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
+                run_remote_install_plan_with_timeout(&executor, &spec, plan.action_plan).await?;
             println!("installed user launchd service on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
         cli::PersistMode::Schtasks => {
             let install_report =
-                run_remote_install_plan(&executor, &spec, plan.action_plan).await?;
+                run_remote_install_plan_with_timeout(&executor, &spec, plan.action_plan).await?;
             println!("installed user scheduled task on {}", args.target);
             Ok((plan.reported_service_manager, Some(install_report)))
         }
+    }
+}
+
+async fn run_remote_install_plan_with_timeout<E: peer_lifecycle::executor::PeerExecutor>(
+    executor: &E,
+    spec: &peer_lifecycle::spec::PeerLifecycleSpec,
+    plan: LifecyclePlan,
+) -> Result<Value> {
+    match time::timeout(
+        REMOTE_INSTALL_SERVICE_TIMEOUT,
+        run_remote_install_plan(executor, spec, plan),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => bail!(
+            "remote service install command timed out after {}s",
+            REMOTE_INSTALL_SERVICE_TIMEOUT.as_secs()
+        ),
     }
 }
 

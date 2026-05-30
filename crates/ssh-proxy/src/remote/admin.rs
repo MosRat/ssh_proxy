@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use ssh_proxy_config::{AppConfig, default_node_name, first_available_addr};
+use ssh_proxy_config::{AppConfig, default_node_name, first_available_addr, is_addr_available};
 use ssh_proxy_deploy::{
     RemoteAdminChecksumReport, RemoteAdminDefaultsReport, RemoteAdminIntent,
     apply_git_proxy_config, cleanup_git_proxy_config, remote_admin_error, remote_admin_ok,
@@ -112,14 +112,39 @@ fn checksum(path: &str) -> Result<Value> {
 fn defaults(preferred_transport: SocketAddr, preferred_control: SocketAddr) -> Result<Value> {
     let config_path = peer_config_path();
     let config = read_app_config(&config_path).unwrap_or_default();
+    let transport = first_available_addr(preferred_transport, 200);
+    let control = first_available_addr_except(preferred_control, 200, transport);
     let report = RemoteAdminDefaultsReport {
-        transport: first_available_addr(preferred_transport, 200),
-        control: first_available_addr(preferred_control, 200),
+        transport,
+        control,
         node_id: config.identity.node_id,
         node_name: config.identity.node_name.unwrap_or_else(default_node_name),
         config: config_path.display().to_string(),
     };
     serde_json::to_value(report).context("failed to render defaults report")
+}
+
+fn first_available_addr_except(
+    preferred: SocketAddr,
+    span: u16,
+    reserved: SocketAddr,
+) -> SocketAddr {
+    let mut candidate = first_available_addr(preferred, span);
+    if candidate != reserved {
+        return candidate;
+    }
+    let start = candidate.port().saturating_add(1);
+    let ip = candidate.ip();
+    for offset in 0..span {
+        let Some(port) = start.checked_add(offset) else {
+            break;
+        };
+        candidate = SocketAddr::new(ip, port);
+        if candidate != reserved && is_addr_available(candidate) {
+            return candidate;
+        }
+    }
+    preferred
 }
 
 fn status(remote_tcp: Option<SocketAddr>, remote_path: Option<String>) -> Value {
@@ -289,5 +314,15 @@ mod tests {
 
         assert_eq!(value["remote_path"], "/tmp/ssh_proxy");
         assert!(value.get("config").is_some());
+    }
+
+    #[test]
+    fn remote_admin_defaults_keep_control_distinct_from_transport() {
+        let reserved = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let reserved_addr = reserved.local_addr().unwrap();
+        let selected = first_available_addr_except(reserved_addr, 20, reserved_addr);
+
+        assert_ne!(selected, reserved_addr);
+        assert_eq!(selected.ip(), reserved_addr.ip());
     }
 }

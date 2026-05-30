@@ -84,16 +84,18 @@ is_free() {{
 }}
 pick_port() {{
   start="$1"
+  reserved="${{2:-}}"
   end=$((start + 199))
   port="$start"
   while [ "$port" -le "$end" ]; do
-    if is_free "$port"; then printf '%s' "$port"; return 0; fi
+    if [ "$port" != "$reserved" ] && is_free "$port"; then printf '%s' "$port"; return 0; fi
     port=$((port + 1))
   done
+  if [ "$start" = "$reserved" ]; then start=$((start + 1)); fi
   printf '%s' "$start"
 }}
 transport_port=$(pick_port {transport_port})
-control_port=$(pick_port {control_port})
+control_port=$(pick_port {control_port} "$transport_port")
 transport="127.0.0.1:$transport_port"
 control="127.0.0.1:$control_port"
 config_file="$HOME/.ssh_proxy/config.toml"
@@ -189,6 +191,10 @@ mod tests {
         );
 
         assert!(command.contains("pick_port 19080"), "{command}");
+        assert!(
+            command.contains("control_port=$(pick_port 19081 \"$transport_port\")"),
+            "{command}"
+        );
         assert!(command.contains("printf 'transport=%s"), "{command}");
         assert!(!command.contains("cat > \"$config_file\""), "{command}");
     }

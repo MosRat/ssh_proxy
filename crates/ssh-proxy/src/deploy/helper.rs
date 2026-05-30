@@ -137,10 +137,7 @@ pub async fn upload_helper(
     );
     match remote_os {
         cli::RemoteOs::Unix | cli::RemoteOs::Auto => {
-            let command = format!(
-                "set -eu; p={}; mkdir -p \"$(dirname \"$p\")\"; cat > \"$p\"; chmod 700 \"$p\"",
-                sh_quote(&remote_path)
-            );
+            let command = unix_upload_helper_command(&remote_path);
             client.exec_upload(command, bytes).await?;
         }
         cli::RemoteOs::Windows => {
@@ -153,6 +150,13 @@ pub async fn upload_helper(
         }
     }
     Ok(remote_path)
+}
+
+fn unix_upload_helper_command(remote_path: &str) -> String {
+    format!(
+        "set -eu; p={}; mkdir -p \"$(dirname \"$p\")\"; tmp=\"$p.tmp.$$\"; trap 'rm -f \"$tmp\"' EXIT INT TERM; cat > \"$tmp\"; chmod 700 \"$tmp\"; mv -f \"$tmp\" \"$p\"; trap - EXIT",
+        sh_quote(remote_path)
+    )
 }
 
 async fn remote_helper_matches(
@@ -307,5 +311,20 @@ pub fn remote_reverse_socks_command(
             sh_quote(remote_path),
             remote_listen
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_upload_helper_replaces_running_binary_via_temp_file() {
+        let command = unix_upload_helper_command("/home/me/.local/bin/ssh_proxy");
+
+        assert!(command.contains("tmp=\"$p.tmp.$$\""), "{command}");
+        assert!(command.contains("cat > \"$tmp\""), "{command}");
+        assert!(command.contains("mv -f \"$tmp\" \"$p\""), "{command}");
+        assert!(!command.contains("cat > \"$p\""), "{command}");
     }
 }
