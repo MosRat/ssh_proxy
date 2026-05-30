@@ -5,6 +5,20 @@ fast while still preserving full release confidence.
 
 ## Fast Edit Loop
 
+Prefer the `rtk` native wrappers for normal targeted checks. PowerShell and CMD
+scripts are compatibility or batch gates; use them when you need their cleanup
+behavior, grouped options, or environment setup. `sccache` is supported in the
+local toolchain, so repeated `rtk cargo ...` checks should stay fast after the
+first build.
+
+The common per-topic gate is:
+
+```powershell
+rtk cargo fmt --all -- --check
+rtk cargo test -p ssh_proxy --test build_contract
+rtk cargo check --workspace --tests
+```
+
 Run the default fast gate after normal daemon, CLI, or extension edits:
 
 ```powershell
@@ -59,13 +73,17 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
   `cargo test -p ssh_proxy --bin ssh_proxy proxy_session`;
 - remote peer file command rendering: `cargo test -p ssh_proxy --bin ssh_proxy remote_config_write`;
 - local service lifecycle reporting: `cargo test -p ssh_proxy --bin ssh_proxy service`;
+- service health and peer compatibility DTOs:
+  `rtk cargo test -p ssh-proxy-service`, `rtk cargo test -p ssh-proxy-protocol`,
+  `rtk cargo test -p ssh_proxy --bin ssh_proxy service`, and
+  `rtk cargo test -p ssh_proxy --bin ssh_proxy diagnostics`;
 - route transport decisions and daemon route metadata: `cargo test -p ssh_proxy --bin ssh_proxy routes`;
 - SPX runtime report and proxy tunnel adapter changes:
   `cargo test -p ssh_proxy --bin ssh_proxy controller socks`;
 - repair/report schema: `cargo test -p ssh_proxy --bin ssh_proxy repair diagnostics`;
 - workspace dependency, runtime boundary, and external execution contracts:
-  `cargo test -p ssh_proxy --test build_contract`;
-- extension command shape: `npm --prefix apps/vscode-remote-proxy test`.
+  `rtk cargo test -p ssh_proxy --test build_contract`;
+- extension command shape: `rtk npm --prefix apps/vscode-remote-proxy test`.
 
 Prefer the pure lifecycle/provider tests while editing service managers. They use
 fake executors and command rendering contracts, so they do not install services,
@@ -74,7 +92,7 @@ open long-lived routes, or keep `target/debug/ssh_proxy.exe` locked on Windows.
 Run the VS Code tests separately when extension code changes:
 
 ```powershell
-npm --prefix apps/vscode-remote-proxy test
+rtk npm --prefix apps/vscode-remote-proxy test
 ```
 
 ## Full Local Gate
@@ -119,9 +137,9 @@ intentionally running the workspace debug binary outside the test harness.
 Before publishing, keep the full release gate explicit:
 
 ```powershell
-cargo test --workspace --tests
-cargo build -p ssh_proxy --release
-cargo zigbuild -p ssh_proxy --target x86_64-unknown-linux-musl --release
-npm --prefix apps/vscode-remote-proxy test
-npm --prefix apps/vscode-remote-proxy run package:with-kernel
+rtk cargo test --workspace --tests
+rtk cargo build -p ssh_proxy --release
+rtk cargo zigbuild -p ssh_proxy --target x86_64-unknown-linux-musl --release
+rtk npm --prefix apps/vscode-remote-proxy test
+rtk npm --prefix apps/vscode-remote-proxy run package:with-kernel
 ```
