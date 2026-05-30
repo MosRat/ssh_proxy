@@ -43,6 +43,7 @@ impl NodeManager {
                 &existing,
                 self.proxy_session_route_is_live(&spec).await,
             ) && self.proxy_session_matches_existing(&job_id, &spec).await
+                && self.proxy_session_peer_allows_reuse(&spec).await
             {
                 let session = self
                     .state
@@ -115,11 +116,22 @@ impl NodeManager {
         }
     }
 
+    async fn proxy_session_peer_allows_reuse(&self, spec: &ProxySessionSpec) -> bool {
+        self.state
+            .peer_status(&spec.target)
+            .await
+            .as_ref()
+            .is_none_or(state_machine::peer_status_allows_proxy_session_reuse)
+    }
+
     async fn proxy_session_route_is_live(&self, spec: &ProxySessionSpec) -> bool {
-        let route_id = spec.route_id();
+        self.route_id_is_live(&spec.route_id()).await
+    }
+
+    async fn route_id_is_live(&self, route_id: &str) -> bool {
         let routes = self.routes.lock().await;
         routes
-            .get(&route_id)
+            .get(route_id)
             .map(|task| !task.handle.is_finished())
             .unwrap_or(false)
     }
@@ -200,15 +212,22 @@ impl NodeManager {
             .id
             .or_else(|| request_spec.as_ref().map(ProxySessionSpec::route_id))
             .ok_or_else(|| anyhow!("proxy_session_down requires id or proxy_session spec"))?;
-        let cleanup_spec = match request_spec.clone() {
-            Some(spec) => Some(spec),
-            None => self
-                .state
-                .session_by_route(&id)
-                .await
-                .and_then(|record| record.to_spec().ok()),
+        let stored_session = match self.state.session_by_route(&id).await {
+            Some(session) => Some(session),
+            None => self.state.session_by_job(&id).await,
         };
-        let route_response = self.stop_route(NodeRequest::route_stop(id.clone())).await;
+        let cleanup_spec = stored_session
+            .as_ref()
+            .and_then(|record| record.to_spec().ok())
+            .or_else(|| request_spec.clone());
+        let route_id = stored_session
+            .as_ref()
+            .map(|session| session.route_id.clone())
+            .or_else(|| request_spec.as_ref().map(ProxySessionSpec::route_id))
+            .unwrap_or_else(|| id.clone());
+        let route_response = self
+            .stop_route(NodeRequest::route_stop(route_id.clone()))
+            .await;
         let cleanup_response = match cleanup_spec.as_ref() {
             Some(spec) => {
                 let config = {
@@ -239,16 +258,21 @@ impl NodeManager {
         let job_id = request_spec
             .as_ref()
             .map(ProxySessionSpec::job_id)
+            .or_else(|| {
+                stored_session
+                    .as_ref()
+                    .map(|session| session.job_id.clone())
+            })
             .or_else(|| cleanup_spec.as_ref().map(ProxySessionSpec::job_id))
             .unwrap_or_else(|| format!("proxy:{id}"));
         let job = JobRecord::new(job_id, "ensure_proxy_session")
-            .with_route(id.clone())
+            .with_route(route_id.clone())
             .transition(JobState::Cancelled, JobPhase::Cancelled, 100);
         let job = self.jobs.upsert(job, "proxy session stopped").await?;
         let session = self
             .state
             .cancel_session(
-                &id,
+                &route_id,
                 &job.id,
                 route_response.as_ref().err().map(|err| err.to_string()),
             )
@@ -257,7 +281,7 @@ impl NodeManager {
             "ok": route_response.is_ok(),
             "kind": "proxy_session_down",
             "daemon_api": "v0.3",
-            "route_id": id,
+            "route_id": route_id,
             "job": job.to_value(),
             "session": session.map(|session| session.to_value()),
             "route_stop": route_response.ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()),
@@ -266,7 +290,13 @@ impl NodeManager {
     }
 
     pub(super) async fn reconcile_proxy_sessions(&self) -> Result<()> {
-        for session in self.state.unfinished_sessions().await {
+        for session in self.state.sessions().await {
+            let unfinished = !matches!(session.state.as_str(), "healthy" | "failed" | "cancelled");
+            let missing_live_route =
+                session.state == "healthy" && !self.route_id_is_live(&session.route_id).await;
+            if !unfinished && !missing_live_route {
+                continue;
+            }
             let job = JobRecord::new(session.job_id.clone(), "ensure_proxy_session")
                 .with_target(session.target.clone())
                 .with_workspace(session.workspace_id.clone())
@@ -274,12 +304,35 @@ impl NodeManager {
                 .with_remote_url(Some(session.remote_url.clone()))
                 .transition(JobState::WaitingRetry, JobPhase::Reconciling, 5)
                 .with_next_action("rerun_ensure_proxy_session");
+            let mut job = job;
+            let route = if missing_live_route {
+                job.blocker = Some("route_not_running".to_string());
+                job.last_error =
+                    Some("daemon has no live route task for this proxy session".to_string());
+                Some(status::missing_route(
+                    Some(session.route_id.clone()),
+                    Some(session.remote_url.clone()),
+                ))
+            } else {
+                None
+            };
             self.jobs
                 .upsert(
                     job,
-                    "proxy session requires reconciliation after daemon restart",
+                    if missing_live_route {
+                        "healthy proxy session lost its live route after daemon restart"
+                    } else {
+                        "proxy session requires reconciliation after daemon restart"
+                    },
                 )
                 .await?;
+            if let Ok(spec) = session.to_spec()
+                && let Some(job) = self.jobs.get(&session.job_id).await
+            {
+                self.state
+                    .upsert_session_from_job(&spec, &job, route.clone())
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -331,10 +384,7 @@ mod tests {
             workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
+            remote_port_policy: RemotePortPolicy::new(17890),
             connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         };
@@ -371,10 +421,7 @@ mod tests {
             workspace_paths: Vec::new(),
             local_proxy: "socks5h://user:pass@[::1]:1080/path".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
+            remote_port_policy: RemotePortPolicy::new(17890),
             connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         };

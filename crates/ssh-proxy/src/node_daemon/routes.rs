@@ -1,10 +1,14 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 pub(super) use ssh_proxy_route::RouteStats;
-use tokio::{sync::Mutex, task::JoinHandle};
+use tokio::{
+    sync::Mutex,
+    task::JoinHandle,
+    time::{self},
+};
 use tracing::info;
 
 use crate::{cli, controller, quic_native, ssh_native};
@@ -160,9 +164,11 @@ impl NodeManager {
             .ok_or_else(|| anyhow!("route_stop requires id"))?;
         let mut routes = self.routes.lock().await;
         if let Some(task) = routes.remove(&id) {
-            task.handle.abort();
             let persist = task.persist;
+            let handle = task.handle;
+            handle.abort();
             drop(routes);
+            let stop_confirmed = time::timeout(Duration::from_secs(2), handle).await.is_ok();
             if persist {
                 self.save_routes().await?;
             }
@@ -170,6 +176,7 @@ impl NodeManager {
                 "ok": true,
                 "message": format!("route {id:?} stopped"),
                 "removed_persistent": persist,
+                "stop_confirmed": stop_confirmed,
             }))
         } else {
             bail!("route {id:?} is not running");

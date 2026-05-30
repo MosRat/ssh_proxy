@@ -4,7 +4,11 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::time;
+use ssh_proxy_transport::proxy::http::http_header_end;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    time,
+};
 
 use crate::{config, ssh_client};
 
@@ -15,6 +19,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const INITIAL_DELAY: Duration = Duration::from_millis(250);
 const MAX_DELAY: Duration = Duration::from_secs(1);
+const PROXY_FINGERPRINT_REQUEST: &[u8] =
+    b"GET /ssh-proxy-handoff-probe HTTP/1.1\r\nhost: ssh-proxy.invalid\r\nconnection: close\r\n\r\n";
+const PROXY_FINGERPRINT_BODY: &[u8] = b"400 Bad Request\n";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct HandoffProbeStatus {
@@ -154,11 +161,21 @@ pub(super) async fn wait_remote_port_ready(
         .await
         {
             Ok(Ok(stream)) => {
-                drop(stream);
-                return Ok(HandoffProbeStatus::ready(
-                    attempts,
-                    attempt_started.elapsed(),
-                ));
+                match time::timeout(PROBE_TIMEOUT, verify_proxy_fingerprint(stream)).await {
+                    Ok(Ok(())) => {
+                        return Ok(HandoffProbeStatus::ready(
+                            attempts,
+                            attempt_started.elapsed(),
+                        ));
+                    }
+                    Ok(Err(err)) => (err, Some(attempt_started.elapsed())),
+                    Err(_) => (
+                        format!(
+                            "remote port {host}:{port} did not return ssh_proxy proxy fingerprint within {PROBE_TIMEOUT:?}",
+                        ),
+                        Some(attempt_started.elapsed()),
+                    ),
+                }
             }
             Ok(Err(err)) => (err.to_string(), Some(attempt_started.elapsed())),
             Err(_) => (
@@ -169,8 +186,16 @@ pub(super) async fn wait_remote_port_ready(
             ),
         };
 
+        let classification = classify_probe_error(&last_error);
+        if terminal_probe_failure(classification) {
+            let detail = format!(
+                "handoff probe found terminal {classification} after {attempts} attempts probing {host}:{port}: {last_error}",
+            );
+            return Err(failure(classification, detail, attempts, last_latency));
+        }
+
         if started.elapsed() >= budget {
-            let blocker = match classify_probe_error(&last_error) {
+            let blocker = match classification {
                 "remote_port_not_ready" => "handoff_timeout",
                 other => other,
             };
@@ -187,15 +212,68 @@ pub(super) async fn wait_remote_port_ready(
     }
 }
 
+async fn verify_proxy_fingerprint(mut stream: ssh_client::SshStream) -> Result<(), String> {
+    stream
+        .write_all(PROXY_FINGERPRINT_REQUEST)
+        .await
+        .map_err(|err| format!("failed to write handoff fingerprint request: {err}"))?;
+    stream
+        .shutdown()
+        .await
+        .map_err(|err| format!("failed to finish handoff fingerprint request: {err}"))?;
+
+    let mut response = Vec::with_capacity(256);
+    let mut buf = [0_u8; 128];
+    loop {
+        let n = stream
+            .read(&mut buf)
+            .await
+            .map_err(|err| format!("failed to read handoff fingerprint response: {err}"))?;
+        if n == 0 {
+            break;
+        }
+        response.extend_from_slice(&buf[..n]);
+        if let Some(header_end) = http_header_end(&response) {
+            if response.len() >= header_end + PROXY_FINGERPRINT_BODY.len() {
+                break;
+            }
+        }
+        if response.len() > 1024 {
+            break;
+        }
+    }
+    let header_end = http_header_end(&response)
+        .ok_or_else(|| "handoff fingerprint response did not include HTTP headers".to_string())?;
+    let head = String::from_utf8_lossy(&response[..header_end]).to_ascii_lowercase();
+    let body = &response[header_end..];
+    if head.starts_with("http/1.1 400 bad request\r\n")
+        && head.contains("\r\ncontent-length: 16\r\n")
+        && head.contains("\r\nconnection: close\r\n")
+        && body.starts_with(PROXY_FINGERPRINT_BODY)
+    {
+        return Ok(());
+    }
+    Err(
+        "remote port accepted TCP but did not speak ssh_proxy HTTP/SOCKS handoff protocol"
+            .to_string(),
+    )
+}
+
 pub(super) fn classify_probe_error(message: &str) -> &'static str {
     let lower = message.to_ascii_lowercase();
     if lower.contains("refused") {
         "remote_port_refused"
     } else if lower.contains("timed out") || lower.contains("timeout") {
         "remote_port_not_ready"
+    } else if lower.contains("fingerprint") || lower.contains("did not speak ssh_proxy") {
+        "remote_port_conflict"
     } else {
         "ssh_direct_tcpip_failed"
     }
+}
+
+fn terminal_probe_failure(classification: &str) -> bool {
+    matches!(classification, "remote_port_conflict")
 }
 
 fn failure(
@@ -234,9 +312,20 @@ mod tests {
             "remote_port_not_ready"
         );
         assert_eq!(
+            classify_probe_error("remote port accepted TCP but did not speak ssh_proxy protocol"),
+            "remote_port_conflict"
+        );
+        assert_eq!(
             classify_probe_error("administratively prohibited"),
             "ssh_direct_tcpip_failed"
         );
+    }
+
+    #[test]
+    fn only_protocol_conflicts_fail_fast() {
+        assert!(terminal_probe_failure("remote_port_conflict"));
+        assert!(!terminal_probe_failure("remote_port_refused"));
+        assert!(!terminal_probe_failure("remote_port_not_ready"));
     }
 
     #[test]

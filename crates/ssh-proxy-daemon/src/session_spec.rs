@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ssh_proxy_core::model::RouteConnectMode;
 
+pub const DEFAULT_REMOTE_PORT_RANGE_SIZE: u16 = 20;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxySessionSpec {
     pub target: String,
@@ -44,6 +46,8 @@ pub struct SshTargetSpec {
 pub struct RemotePortPolicy {
     pub preferred: u16,
     pub auto_pick: bool,
+    #[serde(default = "default_remote_port_range_size")]
+    pub range_size: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,15 +116,62 @@ impl ProxySessionSpec {
     }
 
     pub fn remote_url(&self) -> String {
+        self.remote_url_for_port(self.remote_port_policy.preferred)
+    }
+
+    pub fn remote_url_for_port(&self, remote_port: u16) -> String {
         proxy_url_for_remote(
             &self.local_proxy,
             &self.remote_bind.to_string(),
-            self.remote_port_policy.preferred,
+            remote_port,
         )
+    }
+
+    pub fn with_remote_port(&self, remote_port: u16) -> Self {
+        let mut spec = self.clone();
+        spec.remote_port_policy.preferred = remote_port;
+        spec
     }
 
     pub fn to_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| Value::Null)
+    }
+}
+
+impl RemotePortPolicy {
+    pub fn new(preferred: u16) -> Self {
+        Self {
+            preferred,
+            auto_pick: true,
+            range_size: DEFAULT_REMOTE_PORT_RANGE_SIZE,
+        }
+    }
+
+    pub fn fixed(preferred: u16) -> Self {
+        Self {
+            preferred,
+            auto_pick: false,
+            range_size: 1,
+        }
+    }
+
+    pub fn candidates(&self) -> Vec<u16> {
+        let count = if self.auto_pick {
+            self.range_size.max(1)
+        } else {
+            1
+        };
+        let mut candidates = Vec::with_capacity(count as usize);
+        for offset in 0..count {
+            let Some(port) = self.preferred.checked_add(offset) else {
+                break;
+            };
+            candidates.push(port);
+        }
+        if candidates.is_empty() {
+            candidates.push(self.preferred);
+        }
+        candidates
     }
 }
 
@@ -145,17 +196,39 @@ impl SshTargetSpec {
 }
 
 pub fn proxy_session_specs_match(left: &ProxySessionSpec, right: &ProxySessionSpec) -> bool {
-    let mut left = left.clone();
-    let mut right = right.clone();
-    normalize_proxy_session_spec_for_live_reuse(&mut left);
-    normalize_proxy_session_spec_for_live_reuse(&mut right);
-    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+    let selected_port = left.remote_port_policy.preferred;
+    if selected_port == right.remote_port_policy.preferred {
+        return proxy_session_specs_match_at_selected_port(left, right, selected_port);
+    }
+    if right.remote_port_policy.auto_pick
+        && right
+            .remote_port_policy
+            .candidates()
+            .contains(&selected_port)
+    {
+        return proxy_session_specs_match_at_selected_port(left, right, selected_port);
+    }
+    false
 }
 
 pub fn normalize_proxy_session_spec_for_live_reuse(spec: &mut ProxySessionSpec) {
     if let Some(ssh) = spec.ssh.as_mut() {
         ssh.identity.clear();
     }
+}
+
+fn proxy_session_specs_match_at_selected_port(
+    existing: &ProxySessionSpec,
+    requested: &ProxySessionSpec,
+    selected_port: u16,
+) -> bool {
+    let mut existing = existing.with_remote_port(selected_port);
+    let mut requested = requested.with_remote_port(selected_port);
+    existing.remote_port_policy = RemotePortPolicy::fixed(selected_port);
+    requested.remote_port_policy = RemotePortPolicy::fixed(selected_port);
+    normalize_proxy_session_spec_for_live_reuse(&mut existing);
+    normalize_proxy_session_spec_for_live_reuse(&mut requested);
+    serde_json::to_value(existing).ok() == serde_json::to_value(requested).ok()
 }
 
 pub fn proxy_url_for_remote(local_proxy: &str, remote_bind: &str, remote_port: u16) -> String {
@@ -199,6 +272,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn default_remote_port_range_size() -> u16 {
+    DEFAULT_REMOTE_PORT_RANGE_SIZE
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -213,10 +290,7 @@ mod tests {
             workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
+            remote_port_policy: RemotePortPolicy::new(17890),
             connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         }
@@ -230,6 +304,19 @@ mod tests {
         assert_eq!(spec.job_id(), "proxy:window-a");
         assert_eq!(spec.session_id(), "session:window-a");
         assert_eq!(spec.remote_url(), "http://127.0.0.1:17890/");
+        assert_eq!(spec.remote_url_for_port(17891), "http://127.0.0.1:17891/");
+    }
+
+    #[test]
+    fn remote_port_policy_generates_bounded_candidates() {
+        let mut policy = RemotePortPolicy::new(17890);
+        policy.range_size = 3;
+
+        assert_eq!(policy.candidates(), vec![17890, 17891, 17892]);
+        assert_eq!(RemotePortPolicy::fixed(17890).candidates(), vec![17890]);
+
+        policy.preferred = u16::MAX;
+        assert_eq!(policy.candidates(), vec![u16::MAX]);
     }
 
     #[test]
@@ -268,10 +355,7 @@ mod tests {
             workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
+            remote_port_policy: RemotePortPolicy::new(17890),
             connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: ApplyPolicy::default(),
         };
@@ -284,6 +368,9 @@ mod tests {
         assert!(proxy_session_specs_match(&existing, &enriched));
 
         existing.remote_port_policy.preferred = 17891;
+        assert!(proxy_session_specs_match(&existing, &enriched));
+
+        enriched.remote_port_policy = RemotePortPolicy::fixed(17890);
         assert!(!proxy_session_specs_match(&existing, &enriched));
     }
 }

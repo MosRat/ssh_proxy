@@ -83,6 +83,19 @@ pub struct UpArgs {
     #[arg(long, default_value_t = 17890, help = "Preferred remote proxy port")]
     pub remote_port: u16,
 
+    #[arg(
+        long = "no-remote-auto-pick",
+        help = "Fail instead of trying nearby remote ports when the preferred port is unavailable"
+    )]
+    pub no_remote_auto_pick: bool,
+
+    #[arg(
+        long,
+        default_value_t = 20,
+        help = "Number of remote ports to try when remote auto-pick is enabled"
+    )]
+    pub remote_port_range_size: u16,
+
     #[arg(long, value_enum, default_value = "auto")]
     pub connect_mode: RouteConnectMode,
 
@@ -296,6 +309,12 @@ pub struct VscodeUpArgs {
     #[arg(long, default_value_t = 17890)]
     pub remote_port: u16,
 
+    #[arg(long = "no-remote-auto-pick")]
+    pub no_remote_auto_pick: bool,
+
+    #[arg(long, default_value_t = 20)]
+    pub remote_port_range_size: u16,
+
     #[arg(long, value_enum, default_value = "auto")]
     pub connect_mode: RouteConnectMode,
 
@@ -450,6 +469,8 @@ impl VscodeUpArgs {
             workspace: Some(self.workspace),
             remote_bind: self.remote_bind,
             remote_port: self.remote_port,
+            no_remote_auto_pick: self.no_remote_auto_pick,
+            remote_port_range_size: self.remote_port_range_size,
             connect_mode: self.connect_mode,
             endpoint: self.endpoint,
             token: self.token,

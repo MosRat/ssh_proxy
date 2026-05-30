@@ -29,7 +29,7 @@ pub(super) fn setup_payload(
         workspace_paths: spec.workspace_paths.clone(),
         remote_url: remote_url.to_string(),
         bind_host: spec.remote_bind.to_string(),
-        port: spec.remote_port_policy.preferred,
+        port: remote_port_from_url(remote_url).unwrap_or(spec.remote_port_policy.preferred),
         connect_mode: spec.connect_mode.to_string(),
         route_id: spec.route_id(),
         job_id: spec.job_id(),
@@ -55,4 +55,18 @@ pub(super) fn setup_payload(
 
 pub(super) fn build_proxy_env(proxy_url: &str, no_proxy: &str) -> BTreeMap<String, String> {
     deploy_build_proxy_env(proxy_url, no_proxy)
+}
+
+fn remote_port_from_url(url: &str) -> Option<u16> {
+    let (_, rest) = url.split_once("://")?;
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = rest[..authority_end]
+        .rsplit_once('@')
+        .map(|(_, endpoint)| endpoint)
+        .unwrap_or(&rest[..authority_end]);
+    if let Some(stripped) = authority.strip_prefix('[') {
+        let (_, tail) = stripped.split_once(']')?;
+        return tail.strip_prefix(':')?.parse().ok();
+    }
+    authority.rsplit_once(':')?.1.parse().ok()
 }

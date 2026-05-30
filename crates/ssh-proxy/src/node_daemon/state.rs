@@ -43,10 +43,7 @@ impl ProxySessionRecordExt for ProxySessionRecord {
             workspace_paths: self.workspace_paths.clone(),
             local_proxy: self.local_proxy.clone(),
             remote_bind: self.remote_bind.parse()?,
-            remote_port_policy: RemotePortPolicy {
-                preferred: self.remote_port,
-                auto_pick: true,
-            },
+            remote_port_policy: RemotePortPolicy::new(self.remote_port),
             connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: decode_or_default(&self.apply_policy)?,
         })
@@ -236,10 +233,7 @@ mod tests {
             workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: super::super::proxy_session::RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
+            remote_port_policy: super::super::proxy_session::RemotePortPolicy::new(17890),
             connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: super::super::proxy_session::ApplyPolicy::default(),
         }

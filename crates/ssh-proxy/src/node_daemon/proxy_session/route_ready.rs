@@ -14,13 +14,23 @@ use crate::node_daemon::{
 
 use super::{ProxySessionSpec, error_chain, job_runner::job_for_phase, status};
 
+#[derive(Debug, Clone)]
+pub(super) enum RouteReadyOutcome {
+    Healthy,
+    Failed {
+        blocker: String,
+        message: String,
+        remote_url: Option<String>,
+    },
+}
+
 impl NodeManager {
     pub(super) async fn wait_for_proxy_route_ready(
         &self,
         spec: &ProxySessionSpec,
         job_id: &str,
         remote_url: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<RouteReadyOutcome> {
         let route_id = spec.route_id();
         let deadline = time::Instant::now() + Duration::from_secs(90);
         loop {
@@ -34,13 +44,17 @@ impl NodeManager {
                         .unwrap_or("route failed")
                         .to_string();
                     let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
-                        .with_remote_url(remote_url)
-                        .failed(error, Some("route_failed".to_string()));
+                        .with_remote_url(remote_url.clone())
+                        .failed(error.clone(), Some("route_failed".to_string()));
                     let job = self.jobs.upsert(job, "route failed").await?;
                     self.state
                         .upsert_session_from_job(spec, &job, Some(route))
                         .await?;
-                    return Ok(());
+                    return Ok(RouteReadyOutcome::Failed {
+                        blocker: "route_failed".to_string(),
+                        message: error,
+                        remote_url,
+                    });
                 }
                 if matches!(state.as_deref(), Some("running" | "ready" | "restarting")) {
                     let remote_url_value = remote_url.clone().unwrap_or_else(|| spec.remote_url());
@@ -103,16 +117,22 @@ impl NodeManager {
                                         failure.status.clone(),
                                     )
                                     .await?;
+                                let blocker = failure.blocker.clone();
+                                let message = failure.message.clone();
                                 let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
-                                    .with_remote_url(Some(remote_url_value))
-                                    .failed(failure.message, Some(failure.blocker))
+                                    .with_remote_url(Some(remote_url_value.clone()))
+                                    .failed(message.clone(), Some(blocker.clone()))
                                     .with_next_action("run ssh_proxy doctor --json");
                                 let job =
                                     self.jobs.upsert(job, "remote handoff probe failed").await?;
                                 self.state
                                     .upsert_session_from_job(spec, &job, Some(route.clone()))
                                     .await?;
-                                return Ok(());
+                                return Ok(RouteReadyOutcome::Failed {
+                                    blocker,
+                                    message,
+                                    remote_url: Some(remote_url_value),
+                                });
                             }
                         }
                     } else {
@@ -184,10 +204,18 @@ impl NodeManager {
                                 .update_remote_setup_status(
                                     &spec.session_id(),
                                     job_id,
-                                    RemoteSetupStatus::failed(error, None, Some(remote_url_value)),
+                                    RemoteSetupStatus::failed(
+                                        error.clone(),
+                                        None,
+                                        Some(remote_url_value.clone()),
+                                    ),
                                 )
                                 .await?;
-                            return Ok(());
+                            return Ok(RouteReadyOutcome::Failed {
+                                blocker: "remote_setup_failed".to_string(),
+                                message: error,
+                                remote_url: Some(remote_url_value.clone()),
+                            });
                         }
                     }
                     let job = self
@@ -213,10 +241,11 @@ impl NodeManager {
                     self.state
                         .upsert_session_from_job(spec, &job, Some(route))
                         .await?;
-                    return Ok(());
+                    return Ok(RouteReadyOutcome::Healthy);
                 }
             }
             if time::Instant::now() >= deadline {
+                let remote_url_for_failure = remote_url.clone();
                 let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
                     .with_remote_url(remote_url)
                     .failed(
@@ -226,7 +255,12 @@ impl NodeManager {
                     .with_next_action("rerun_ensure_proxy_session");
                 let job = self.jobs.upsert(job, "route readiness timed out").await?;
                 self.state.upsert_session_from_job(spec, &job, None).await?;
-                return Ok(());
+                return Ok(RouteReadyOutcome::Failed {
+                    blocker: "route_ready_timeout".to_string(),
+                    message: "route readiness timed out before remote handoff could start"
+                        .to_string(),
+                    remote_url: remote_url_for_failure,
+                });
             }
             time::sleep(Duration::from_millis(250)).await;
         }

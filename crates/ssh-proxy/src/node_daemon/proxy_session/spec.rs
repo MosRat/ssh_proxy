@@ -12,7 +12,8 @@ pub(crate) fn proxy_session_spec_from_up_args(args: &cli::UpArgs) -> ProxySessio
         remote_bind: args.remote_bind,
         remote_port_policy: RemotePortPolicy {
             preferred: args.remote_port,
-            auto_pick: true,
+            auto_pick: !args.no_remote_auto_pick,
+            range_size: args.remote_port_range_size,
         },
         connect_mode: args.connect_mode.into(),
         apply_policy: ApplyPolicy {

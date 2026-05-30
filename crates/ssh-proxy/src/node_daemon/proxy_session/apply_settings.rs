@@ -41,6 +41,14 @@ impl NodeManager {
             .clone()
             .or_else(|| session.as_ref().map(|session| session.remote_url.clone()))
             .unwrap_or_else(|| spec.remote_url());
+        let spec = match remote_endpoint_from_url(&remote_url) {
+            Ok((remote_bind, remote_port)) => {
+                let mut selected = spec.with_remote_port(remote_port);
+                selected.remote_bind = remote_bind;
+                selected
+            }
+            Err(_) => spec,
+        };
         let job_id = format!("apply-settings:{}", sanitize_key(spec.key()));
         let job = JobRecord::new(job_id.clone(), "apply_remote_settings")
             .with_target(spec.target.clone())
@@ -253,10 +261,7 @@ pub(super) fn spec_from_apply_request(request: &NodeRequest) -> Result<ProxySess
         workspace_paths: Vec::new(),
         local_proxy: remote_url,
         remote_bind,
-        remote_port_policy: RemotePortPolicy {
-            preferred: remote_port,
-            auto_pick: true,
-        },
+        remote_port_policy: RemotePortPolicy::new(remote_port),
         connect_mode: RouteConnectMode::ReverseLink,
         apply_policy: ApplyPolicy::default(),
     })

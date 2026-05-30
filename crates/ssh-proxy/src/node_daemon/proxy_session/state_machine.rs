@@ -1,4 +1,7 @@
-use super::super::jobs::{JobPhase, JobRecord, JobState};
+use super::super::{
+    jobs::{JobPhase, JobRecord, JobState},
+    state::PeerStatusRecord,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ProxySessionStep {
@@ -72,12 +75,31 @@ pub(super) fn route_start_blocker(error: &str) -> String {
     }
 }
 
+pub(super) fn remote_port_failure_is_retryable(blocker: &str, message: &str) -> bool {
+    if blocker == "remote_port_conflict" {
+        return true;
+    }
+    if blocker != "route_failed" {
+        return false;
+    }
+    let lower = message.to_ascii_lowercase();
+    lower.contains("address already in use")
+        || lower.contains("already in use")
+        || lower.contains("cannot assign requested address")
+        || lower.contains("bind")
+}
+
 pub(super) fn reusable_proxy_session_job(job: &JobRecord, live_route: bool) -> bool {
     match job.state {
+        JobState::WaitingRetry if job.blocker.as_deref() == Some("route_not_running") => false,
         JobState::Queued | JobState::Running | JobState::WaitingRetry => true,
         JobState::Healthy => live_route,
         JobState::Failed | JobState::Cancelled => false,
     }
+}
+
+pub(super) fn peer_status_allows_proxy_session_reuse(peer: &PeerStatusRecord) -> bool {
+    !peer.update_required
 }
 
 pub(super) fn job_health(job: &JobRecord) -> &'static str {
@@ -110,6 +132,22 @@ mod tests {
     }
 
     #[test]
+    fn remote_port_retry_classification_is_narrow() {
+        assert!(remote_port_failure_is_retryable(
+            "remote_port_conflict",
+            "foreign fingerprint"
+        ));
+        assert!(remote_port_failure_is_retryable(
+            "route_failed",
+            "Address already in use"
+        ));
+        assert!(!remote_port_failure_is_retryable(
+            "route_ready_timeout",
+            "timed out"
+        ));
+    }
+
+    #[test]
     fn proxy_session_steps_keep_public_progress_contract() {
         assert_eq!(resolve_target_step().phase, JobPhase::ResolveTarget);
         assert_eq!(validate_local_proxy_step().progress, 18);
@@ -117,5 +155,14 @@ mod tests {
             ensure_peer_step().message,
             "ensuring persistent remote peer"
         );
+    }
+
+    #[test]
+    fn stale_peer_status_blocks_proxy_session_reuse() {
+        let mut peer = PeerStatusRecord::new("remote");
+        assert!(peer_status_allows_proxy_session_reuse(&peer));
+
+        peer.update_required = true;
+        assert!(!peer_status_allows_proxy_session_reuse(&peer));
     }
 }

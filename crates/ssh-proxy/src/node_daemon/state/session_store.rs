@@ -130,13 +130,12 @@ impl ProductionState {
         json!(sessions)
     }
 
-    pub(in crate::node_daemon) async fn unfinished_sessions(&self) -> Vec<ProxySessionRecord> {
+    pub(in crate::node_daemon) async fn sessions(&self) -> Vec<ProxySessionRecord> {
         self.sessions
             .lock()
             .await
             .sessions
             .values()
-            .filter(|session| !matches!(session.state.as_str(), "healthy" | "failed" | "cancelled"))
             .cloned()
             .collect()
     }

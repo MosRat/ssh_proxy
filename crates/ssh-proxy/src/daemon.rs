@@ -754,6 +754,8 @@ mod tests {
             workspace: Some("workspace-a".to_string()),
             remote_bind: "127.0.0.1".parse().unwrap(),
             remote_port: 17890,
+            no_remote_auto_pick: false,
+            remote_port_range_size: 20,
             connect_mode: cli::RouteConnectMode::ReverseLink,
             endpoint: control_socket::default_endpoint_string(),
             token: None,

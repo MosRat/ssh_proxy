@@ -401,10 +401,7 @@ mod tests {
             workspace_paths: Vec::new(),
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse().unwrap(),
-            remote_port_policy: crate::node_daemon::RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
+            remote_port_policy: crate::node_daemon::RemotePortPolicy::new(17890),
             connect_mode: cli::RouteConnectMode::Auto.into(),
             apply_policy: Default::default(),
         };

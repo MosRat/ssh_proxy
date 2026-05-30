@@ -267,10 +267,7 @@ mod tests {
             workspace_paths: vec!["/home/wen/project".to_string()],
             local_proxy: "http://127.0.0.1:10808/".to_string(),
             remote_bind: "127.0.0.1".parse::<IpAddr>().unwrap(),
-            remote_port_policy: super::super::proxy_session::RemotePortPolicy {
-                preferred: 17890,
-                auto_pick: true,
-            },
+            remote_port_policy: super::super::proxy_session::RemotePortPolicy::new(17890),
             connect_mode: RouteConnectMode::ReverseLink,
             apply_policy: super::super::proxy_session::ApplyPolicy::default(),
         }

@@ -11,7 +11,7 @@ use crate::node_daemon::{
     jobs::{JobPhase, JobRecord, JobState},
 };
 
-use super::{ProxySessionSpec, SshTargetSpec, state_machine};
+use super::{ProxySessionSpec, SshTargetSpec, route_ready::RouteReadyOutcome, state_machine};
 
 impl NodeManager {
     pub(super) async fn run_proxy_session_job(
@@ -28,7 +28,6 @@ impl NodeManager {
             peer = %spec.target,
             "proxy session job started"
         );
-        let route_request = route_request_from_spec(&spec);
         let step = state_machine::resolve_target_step();
         self.proxy_job_phase(&spec, &job_id, step.phase, step.progress, step.message)
             .await?;
@@ -67,128 +66,266 @@ impl NodeManager {
                 .await?;
         }
 
+        let candidates = spec.remote_port_policy.candidates();
+        let candidate_count = candidates.len();
+        let mut last_retryable_failure: Option<PortAttemptFailure> = None;
+        for (attempt_index, port) in candidates.iter().copied().enumerate() {
+            let attempt_spec = spec.with_remote_port(port);
+            if attempt_index > 0 {
+                let job = self
+                    .jobs
+                    .upsert(
+                        job_for_phase(&attempt_spec, &job_id, JobPhase::SelectRemotePort, 24)
+                            .transition(JobState::WaitingRetry, JobPhase::SelectRemotePort, 24)
+                            .with_next_action("try_next_remote_port")
+                            .with_retry_after_ms(250)
+                            .with_recovery_attempts(attempt_index as u32),
+                        "remote port conflict detected; trying next candidate",
+                    )
+                    .await?;
+                self.state
+                    .upsert_session_from_job(&attempt_spec, &job, None)
+                    .await?;
+            }
+            match self
+                .run_proxy_session_route_attempt(&attempt_spec, &job_id, attempt_index as u32)
+                .await?
+            {
+                RouteReadyOutcome::Healthy => return Ok(()),
+                RouteReadyOutcome::Failed {
+                    blocker,
+                    message,
+                    remote_url,
+                } => {
+                    if state_machine::remote_port_failure_is_retryable(&blocker, &message)
+                        && attempt_index + 1 < candidate_count
+                        && spec.remote_port_policy.auto_pick
+                    {
+                        warn!(
+                            job_id = %job_id,
+                            session_id = %session_id,
+                            route_id = %route_id,
+                            peer = %spec.target,
+                            port,
+                            blocker = %blocker,
+                            error = %message,
+                            "remote port candidate failed; trying next port"
+                        );
+                        let _ = self
+                            .stop_route(NodeRequest::route_stop(attempt_spec.route_id()))
+                            .await;
+                        time::sleep(Duration::from_millis(250)).await;
+                        last_retryable_failure = Some(PortAttemptFailure {
+                            port,
+                            blocker,
+                            message,
+                            remote_url,
+                        });
+                        continue;
+                    }
+                    if state_machine::remote_port_failure_is_retryable(&blocker, &message)
+                        && spec.remote_port_policy.auto_pick
+                    {
+                        last_retryable_failure = Some(PortAttemptFailure {
+                            port,
+                            blocker,
+                            message,
+                            remote_url,
+                        });
+                        break;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        if let Some(failure) = last_retryable_failure {
+            self.record_remote_port_range_exhausted(&spec, &job_id, failure, candidate_count)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn run_proxy_session_route_attempt(
+        &self,
+        spec: &ProxySessionSpec,
+        job_id: &str,
+        recovery_attempts: u32,
+    ) -> Result<RouteReadyOutcome> {
+        let route_request = route_request_from_spec(spec);
         let response = self.handle_route_intent(route_request.clone()).await;
         match response {
             Ok(response) => {
-                let parsed = serde_json::from_str::<Value>(&response).unwrap_or(Value::Null);
-                let remote_url = parsed
-                    .get("remote_url")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| Some(spec.remote_url()));
-                info!(
-                    job_id = %job_id,
-                    session_id = %session_id,
-                    route_id = %route_id,
-                    peer = %spec.target,
-                    remote_url = remote_url.as_deref().unwrap_or("unknown"),
-                    "proxy session route intent accepted"
-                );
-                self.jobs
-                    .upsert(
-                        job_for_phase(&spec, &job_id, JobPhase::StartRoute, 70)
-                            .with_remote_url(remote_url.clone()),
-                        "route intent accepted",
-                    )
-                    .await?;
-                if let Some(job) = self.jobs.get(&job_id).await {
-                    self.state
-                        .upsert_session_from_job(&spec, &job, None)
-                        .await?;
-                }
-                self.wait_for_proxy_route_ready(&spec, &job_id, remote_url)
-                    .await?;
+                self.record_route_intent_accepted(spec, job_id, &response, recovery_attempts)
+                    .await
             }
             Err(err) => {
                 let error = err.to_string();
                 if state_machine::route_start_conflict_is_repairable(&error) {
                     warn!(
                         job_id = %job_id,
-                        session_id = %session_id,
-                        route_id = %route_id,
+                        session_id = %spec.session_id(),
+                        route_id = %spec.route_id(),
                         peer = %spec.target,
+                        port = spec.remote_port_policy.preferred,
                         error = %error,
                         "proxy session route conflict detected; restarting daemon-owned route"
                     );
                     let job = self
                         .jobs
                         .upsert(
-                            job_for_phase(&spec, &job_id, JobPhase::StartRoute, 68)
+                            job_for_phase(spec, job_id, JobPhase::StartRoute, 68)
                                 .transition(JobState::WaitingRetry, JobPhase::StartRoute, 68)
                                 .with_next_action("restart_conflicting_route")
                                 .with_retry_after_ms(250)
-                                .with_recovery_attempts(1),
+                                .with_recovery_attempts(recovery_attempts + 1),
                             "route conflict detected; restarting daemon-owned route",
                         )
                         .await?;
-                    self.state
-                        .upsert_session_from_job(&spec, &job, None)
-                        .await?;
+                    self.state.upsert_session_from_job(spec, &job, None).await?;
                     let _ = self
                         .stop_route(NodeRequest::route_stop(spec.route_id()))
                         .await;
                     time::sleep(Duration::from_millis(250)).await;
                     match self.handle_route_intent(route_request).await {
                         Ok(response) => {
-                            let parsed =
-                                serde_json::from_str::<Value>(&response).unwrap_or(Value::Null);
-                            let remote_url = parsed
-                                .get("remote_url")
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                                .or_else(|| Some(spec.remote_url()));
-                            info!(
-                                job_id = %job_id,
-                                session_id = %session_id,
-                                route_id = %route_id,
-                                peer = %spec.target,
-                                remote_url = remote_url.as_deref().unwrap_or("unknown"),
-                                "proxy session route intent accepted after restart"
-                            );
-                            self.jobs
-                                .upsert(
-                                    job_for_phase(&spec, &job_id, JobPhase::StartRoute, 70)
-                                        .with_remote_url(remote_url.clone())
-                                        .with_recovery_attempts(1),
-                                    "route conflict repaired and route intent accepted",
-                                )
-                                .await?;
-                            if let Some(job) = self.jobs.get(&job_id).await {
-                                self.state
-                                    .upsert_session_from_job(&spec, &job, None)
-                                    .await?;
-                            }
-                            self.wait_for_proxy_route_ready(&spec, &job_id, remote_url)
-                                .await?;
+                            self.record_route_intent_accepted(
+                                spec,
+                                job_id,
+                                &response,
+                                recovery_attempts + 1,
+                            )
+                            .await
                         }
                         Err(retry_err) => {
-                            let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
-                                .with_recovery_attempts(1)
-                                .failed(
-                                    retry_err.to_string(),
-                                    Some("route_already_running_different_spec".to_string()),
-                                )
+                            let message = retry_err.to_string();
+                            let blocker = "route_already_running_different_spec".to_string();
+                            let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
+                                .with_recovery_attempts(recovery_attempts + 1)
+                                .failed(message.clone(), Some(blocker.clone()))
                                 .with_next_action("ssh_proxy down --target <target> --json");
                             let job = self
                                 .jobs
                                 .upsert(job, "route conflict repair failed")
                                 .await?;
-                            self.state
-                                .upsert_session_from_job(&spec, &job, None)
-                                .await?;
+                            self.state.upsert_session_from_job(spec, &job, None).await?;
+                            Ok(RouteReadyOutcome::Failed {
+                                blocker,
+                                message,
+                                remote_url: Some(spec.remote_url()),
+                            })
                         }
                     }
                 } else {
                     let blocker = state_machine::route_start_blocker(&error);
-                    let job = job_for_phase(&spec, &job_id, JobPhase::Failed, 100)
-                        .failed(error, Some(blocker));
+                    let job = job_for_phase(spec, job_id, JobPhase::Failed, 100)
+                        .with_recovery_attempts(recovery_attempts)
+                        .failed(error.clone(), Some(blocker.clone()));
                     let job = self.jobs.upsert(job, "route intent failed").await?;
-                    self.state
-                        .upsert_session_from_job(&spec, &job, None)
-                        .await?;
+                    self.state.upsert_session_from_job(spec, &job, None).await?;
+                    Ok(RouteReadyOutcome::Failed {
+                        blocker,
+                        message: error,
+                        remote_url: Some(spec.remote_url()),
+                    })
                 }
             }
         }
+    }
+
+    async fn record_route_intent_accepted(
+        &self,
+        spec: &ProxySessionSpec,
+        job_id: &str,
+        response: &str,
+        recovery_attempts: u32,
+    ) -> Result<RouteReadyOutcome> {
+        let parsed = serde_json::from_str::<Value>(response).unwrap_or(Value::Null);
+        let remote_url = parsed
+            .get("remote_url")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| Some(spec.remote_url()));
+        info!(
+            job_id = %job_id,
+            session_id = %spec.session_id(),
+            route_id = %spec.route_id(),
+            peer = %spec.target,
+            port = spec.remote_port_policy.preferred,
+            remote_url = remote_url.as_deref().unwrap_or("unknown"),
+            "proxy session route intent accepted"
+        );
+        self.jobs
+            .upsert(
+                job_for_phase(spec, job_id, JobPhase::StartRoute, 70)
+                    .with_remote_url(remote_url.clone())
+                    .with_recovery_attempts(recovery_attempts),
+                "route intent accepted",
+            )
+            .await?;
+        if let Some(job) = self.jobs.get(job_id).await {
+            self.state.upsert_session_from_job(spec, &job, None).await?;
+        }
+        self.wait_for_proxy_route_ready(spec, job_id, remote_url)
+            .await
+    }
+
+    async fn record_remote_port_range_exhausted(
+        &self,
+        spec: &ProxySessionSpec,
+        job_id: &str,
+        failure: PortAttemptFailure,
+        candidate_count: usize,
+    ) -> Result<()> {
+        let candidates = spec.remote_port_policy.candidates();
+        let first = candidates
+            .first()
+            .copied()
+            .unwrap_or(spec.remote_port_policy.preferred);
+        let last = candidates.last().copied().unwrap_or(first);
+        let selected_spec = spec.with_remote_port(failure.port);
+        let message = if first == last {
+            format!("remote port {first} is unavailable: {}", failure.message)
+        } else {
+            format!(
+                "remote port range {first}-{last} exhausted after {candidate_count} attempts; last failure on {}: {}",
+                failure.port, failure.message
+            )
+        };
+        let job = self
+            .jobs
+            .upsert(
+                job_for_phase(&selected_spec, job_id, JobPhase::Failed, 100)
+                    .with_remote_url(
+                        failure
+                            .remote_url
+                            .or_else(|| Some(selected_spec.remote_url())),
+                    )
+                    .with_recovery_attempts(candidate_count.saturating_sub(1) as u32)
+                    .failed(
+                        message.clone(),
+                        Some("remote_port_range_exhausted".to_string()),
+                    )
+                    .with_next_action(
+                        "choose another remote port or increase remote port range size",
+                    ),
+                "remote port range exhausted",
+            )
+            .await?;
+        self.state
+            .upsert_session_from_job(&selected_spec, &job, None)
+            .await?;
+        warn!(
+            job_id = %job_id,
+            session_id = %selected_spec.session_id(),
+            route_id = %selected_spec.route_id(),
+            peer = %selected_spec.target,
+            first_port = first,
+            last_port = last,
+            failed_port = failure.port,
+            blocker = %failure.blocker,
+            error = %message,
+            "remote port range exhausted"
+        );
         Ok(())
     }
 
@@ -207,6 +344,14 @@ impl NodeManager {
         self.state.upsert_session_from_job(spec, &job, None).await?;
         Ok(job)
     }
+}
+
+#[derive(Debug, Clone)]
+struct PortAttemptFailure {
+    port: u16,
+    blocker: String,
+    message: String,
+    remote_url: Option<String>,
 }
 
 pub(in crate::node_daemon::proxy_session) fn route_request_from_spec(
