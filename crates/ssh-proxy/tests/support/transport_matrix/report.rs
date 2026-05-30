@@ -17,6 +17,11 @@ pub(super) struct MatrixCaseReport {
     pub selection_source: Option<String>,
     pub selection_reason: Option<String>,
     pub fallback_classification: Option<String>,
+    pub measurement_scope: Option<String>,
+    pub sample_count: Option<u64>,
+    pub request_count: Option<u64>,
+    pub concurrency: Option<u64>,
+    pub run_window_ms: Option<u128>,
     pub bytes: Option<u64>,
     pub duration_ms: Option<u128>,
     pub mibps: Option<f64>,
@@ -65,6 +70,11 @@ impl MatrixCaseReport {
             selection_source: None,
             selection_reason: None,
             fallback_classification: None,
+            measurement_scope: None,
+            sample_count: None,
+            request_count: None,
+            concurrency: None,
+            run_window_ms: None,
             bytes: None,
             duration_ms: None,
             mibps: None,
@@ -105,6 +115,21 @@ impl MatrixCaseReport {
         if duration_ms > 0 {
             self.mibps = Some(((bytes as f64) / 1024.0 / 1024.0) / (duration_ms as f64 / 1000.0));
         }
+    }
+
+    pub(super) fn with_measurement_context(
+        &mut self,
+        scope: &str,
+        sample_count: u64,
+        request_count: u64,
+        concurrency: u64,
+        run_window_ms: u128,
+    ) {
+        self.measurement_scope = Some(scope.to_string());
+        self.sample_count = Some(sample_count);
+        self.request_count = Some(request_count);
+        self.concurrency = Some(concurrency);
+        self.run_window_ms = Some(run_window_ms);
     }
 }
 
@@ -181,7 +206,7 @@ impl MatrixReport {
 
 fn csv_rows(rows: &[MatrixCaseReport]) -> String {
     let mut output = String::from(
-        "level,target,topology,case,selected_transport,selection_source,selection_reason,fallback_classification,bytes,duration_ms,mibps,first_byte_ms,lost_requests,reconnect_count,cleanup_status,artifact_path,status,error_kind,error\n",
+        "level,target,topology,case,selected_transport,selection_source,selection_reason,fallback_classification,measurement_scope,sample_count,request_count,concurrency,run_window_ms,bytes,duration_ms,mibps,first_byte_ms,lost_requests,reconnect_count,cleanup_status,artifact_path,status,error_kind,error\n",
     );
     for row in rows {
         let fields = [
@@ -193,6 +218,19 @@ fn csv_rows(rows: &[MatrixCaseReport]) -> String {
             row.selection_source.as_deref().unwrap_or(""),
             row.selection_reason.as_deref().unwrap_or(""),
             row.fallback_classification.as_deref().unwrap_or(""),
+            row.measurement_scope.as_deref().unwrap_or(""),
+            &row.sample_count
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.request_count
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.concurrency
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.run_window_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             &row.bytes.map(|value| value.to_string()).unwrap_or_default(),
             &row.duration_ms
                 .map(|value| value.to_string())

@@ -302,6 +302,11 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
         "rcgen::generate_simple_self_signed",
         "remote_cleanup",
         "/tmp/ssh_proxy-matrix-",
+        "measurement_scope",
+        "request_count",
+        "run_window_ms",
+        "control-status-through-proxy",
+        "COMMAND_TIMEOUT",
     ] {
         assert_contains(
             &support,

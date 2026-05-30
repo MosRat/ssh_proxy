@@ -174,10 +174,14 @@ Layering:
   data-plane status through `ssh-native`, SPX over SSH, and direct
   plain/TLS/QUIC/QUIC-native when the topology is direct.
 - `matrix_perf_smoke`: repeats the same correctness cases with low concurrency
-  and records bytes, duration, MiB/s, and first-byte latency as report-first
-  trend data.
+  and records bytes, batch-wall-clock duration, MiB/s, first-byte latency,
+  `measurement_scope`, `sample_count`, `request_count`, and `concurrency` as
+  report-first trend data. The first scope is `control-status-through-proxy`,
+  so its MiB/s is a relative transport trend, not a large-object throughput
+  benchmark.
 - `matrix_stability`: runs longer repeated status probes and records lost
-  requests and reconnect count; set a short duration for development.
+  requests, reconnect count, and `run_window_ms`; set a short duration for
+  development.
 
 Common configuration:
 
@@ -207,7 +211,9 @@ The matrix writes `transport-matrix.json` and `transport-matrix.csv` under a
 temporary artifact directory, or `SSH_PROXY_MATRIX_ARTIFACT_DIR` when set.
 Correctness, cleanup, and classified failures are hard failures. Throughput,
 latency, and reconnect observations are report-first until several lab runs
-establish stable thresholds. The legacy PowerShell benchmark scripts remain
+establish stable thresholds. For concurrent perf-smoke rows, `duration_ms` is
+the sum of per-sample batch wall-clock times, while `run_window_ms` is the total
+measurement phase for that case. The legacy PowerShell benchmark scripts remain
 compatibility/lab wrappers; prefer the Rust matrix gate for release evidence
 because it uses `rcgen` in the test harness instead of an external `openssl.exe`.
 

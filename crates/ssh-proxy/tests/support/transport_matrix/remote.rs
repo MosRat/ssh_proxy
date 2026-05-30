@@ -47,6 +47,15 @@ struct MatrixCaseSpec {
     samples: usize,
 }
 
+struct MatrixMeasurements {
+    results: Vec<Result<super::command::TcpMeasurement, String>>,
+    measurement_scope: &'static str,
+    sample_count: u64,
+    request_count: u64,
+    concurrency: u64,
+    run_window_ms: u128,
+}
+
 pub(super) fn probe_target(config: &MatrixConfig, report: &mut MatrixReport, target: &str) {
     let topology = config.topology_for(target);
     let mut openssh = MatrixCaseReport::new(
@@ -345,7 +354,14 @@ impl RemoteMatrixSandbox {
         let mut total_duration = 0_u128;
         let mut first_byte = None;
         let measurements = self.run_proxy_measurements(config, spec);
-        for result in measurements {
+        row.with_measurement_context(
+            measurements.measurement_scope,
+            measurements.sample_count,
+            measurements.request_count,
+            measurements.concurrency,
+            measurements.run_window_ms,
+        );
+        for result in measurements.results {
             match result {
                 Ok(measurement) => {
                     if !control_response_ok(&measurement.response) {
@@ -379,7 +395,7 @@ impl RemoteMatrixSandbox {
         &self,
         config: &MatrixConfig,
         spec: &MatrixCaseSpec,
-    ) -> Vec<Result<super::command::TcpMeasurement, String>> {
+    ) -> MatrixMeasurements {
         let listen = free_addr();
         let home = temp_dir("matrix-proxy-home");
         let stderr_path = temp_path("matrix-proxy-stderr", "log");
@@ -387,7 +403,7 @@ impl RemoteMatrixSandbox {
             .map_err(|err| format!("create proxy stderr log {}: {err}", stderr_path.display()))
         {
             Ok(file) => file,
-            Err(err) => return vec![Err(err)],
+            Err(err) => return MatrixMeasurements::single_error(config, err),
         };
         let mut command = Command::new(&config.local_bin);
         command
@@ -422,20 +438,30 @@ impl RemoteMatrixSandbox {
             .map_err(|err| format!("start local proxy: {err}"))
         {
             Ok(child) => child,
-            Err(err) => return vec![Err(err)],
+            Err(err) => return MatrixMeasurements::single_error(config, err),
         };
         if let Err(err) = wait_tcp(listen, &mut child) {
-            return vec![Err(with_proxy_log(err, &stderr_path))];
+            return MatrixMeasurements::single_error(config, with_proxy_log(err, &stderr_path));
         }
 
-        let mut results = match config.requested {
+        let mut measurements = match config.requested {
             MatrixLevel::Stability => self.run_stability_samples(config, listen),
             MatrixLevel::PerfSmoke => self.run_perf_samples(config, listen, spec.samples),
-            _ => vec![control_status_via_tcp(listen, &self.token)],
+            _ => {
+                let started = Instant::now();
+                MatrixMeasurements {
+                    results: vec![control_status_via_tcp(listen, &self.token)],
+                    measurement_scope: "control-status-through-proxy",
+                    sample_count: 1,
+                    request_count: 1,
+                    concurrency: 1,
+                    run_window_ms: started.elapsed().as_millis().max(1),
+                }
+            }
         };
         child.kill_and_wait();
         let proxy_log = read_proxy_log(&stderr_path);
-        for result in &mut results {
+        for result in &mut measurements.results {
             match result {
                 Ok(measurement) => measurement.proxy_stderr = proxy_log.clone(),
                 Err(err) => {
@@ -444,7 +470,7 @@ impl RemoteMatrixSandbox {
                 }
             }
         }
-        results
+        measurements
     }
 
     fn run_perf_samples(
@@ -452,32 +478,53 @@ impl RemoteMatrixSandbox {
         config: &MatrixConfig,
         listen: SocketAddr,
         samples: usize,
-    ) -> Vec<Result<super::command::TcpMeasurement, String>> {
+    ) -> MatrixMeasurements {
         let mut results = Vec::new();
-        for _ in 0..samples.max(1) {
+        let started = Instant::now();
+        let samples = samples.max(1);
+        let concurrency = config.concurrency.max(1);
+        for _ in 0..samples {
             let mut handles = Vec::new();
-            for _ in 0..config.concurrency.max(1) {
+            let batch_started = Instant::now();
+            for _ in 0..concurrency {
                 let token = self.token.clone();
                 handles.push(thread::spawn(move || {
                     control_status_via_tcp(listen, &token)
                 }));
             }
+            let mut successes = Vec::new();
             for handle in handles {
-                results.push(
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| Err("matrix perf worker panicked".to_string())),
-                );
+                match handle
+                    .join()
+                    .unwrap_or_else(|_| Err("matrix perf worker panicked".to_string()))
+                {
+                    Ok(measurement) => successes.push(measurement),
+                    Err(err) => results.push(Err(err)),
+                }
+            }
+            if !successes.is_empty() {
+                results.push(Ok(aggregate_batch_measurement(
+                    successes,
+                    batch_started.elapsed().as_millis().max(1),
+                )));
             }
         }
-        results
+        MatrixMeasurements {
+            results,
+            measurement_scope: "control-status-through-proxy",
+            sample_count: samples as u64,
+            request_count: (samples * concurrency) as u64,
+            concurrency: concurrency as u64,
+            run_window_ms: started.elapsed().as_millis().max(1),
+        }
     }
 
     fn run_stability_samples(
         &self,
         config: &MatrixConfig,
         listen: SocketAddr,
-    ) -> Vec<Result<super::command::TcpMeasurement, String>> {
+    ) -> MatrixMeasurements {
+        let started = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(config.duration_secs.max(1));
         let mut results = Vec::new();
         while Instant::now() < deadline {
@@ -487,7 +534,14 @@ impl RemoteMatrixSandbox {
         if results.is_empty() {
             results.push(control_status_via_tcp(listen, &self.token));
         }
-        results
+        MatrixMeasurements {
+            request_count: results.len() as u64,
+            sample_count: results.len() as u64,
+            results,
+            measurement_scope: "control-status-through-proxy",
+            concurrency: 1,
+            run_window_ms: started.elapsed().as_millis().max(1),
+        }
     }
 
     fn add_transport_args(&self, command: &mut Command, spec: &MatrixCaseSpec) {
@@ -571,6 +625,46 @@ impl RemoteMatrixSandbox {
             Ok(output) if output.status.success() => "ok".to_string(),
             _ => "failed".to_string(),
         }
+    }
+}
+
+impl MatrixMeasurements {
+    fn single_error(config: &MatrixConfig, error: String) -> Self {
+        Self {
+            results: vec![Err(error)],
+            measurement_scope: "control-status-through-proxy",
+            sample_count: 1,
+            request_count: 1,
+            concurrency: config.concurrency.max(1) as u64,
+            run_window_ms: 0,
+        }
+    }
+}
+
+fn aggregate_batch_measurement(
+    measurements: Vec<super::command::TcpMeasurement>,
+    duration_ms: u128,
+) -> super::command::TcpMeasurement {
+    let mut iter = measurements.into_iter();
+    let first = iter
+        .next()
+        .expect("aggregate requires at least one measurement");
+    let mut response = first.response.clone();
+    let mut bytes = first.bytes;
+    let mut first_byte_ms = first.first_byte_ms;
+    for measurement in iter {
+        if response.is_empty() {
+            response = measurement.response.clone();
+        }
+        bytes += measurement.bytes;
+        first_byte_ms = first_byte_ms.min(measurement.first_byte_ms);
+    }
+    super::command::TcpMeasurement {
+        response,
+        bytes,
+        duration_ms,
+        first_byte_ms,
+        proxy_stderr: None,
     }
 }
 
