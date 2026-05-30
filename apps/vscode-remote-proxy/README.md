@@ -152,7 +152,14 @@ npm test
 Launch an Extension Development Host:
 
 ```powershell
-code --new-window --extensionDevelopmentPath=F:\WorkSpace\Rust\ssh_proxy\apps\vscode-remote-proxy
+pwsh -NoProfile -File ..\..\scripts\launch-vscode-extension-dev.ps1
+```
+
+Run the local prerelease build, stage the bundled kernel binaries, package the
+VSIX, and optionally launch the debug host:
+
+```powershell
+pwsh -NoProfile -File ..\..\scripts\prerelease-local.ps1 -LaunchVscode
 ```
 
 Package without restaging kernel binaries:

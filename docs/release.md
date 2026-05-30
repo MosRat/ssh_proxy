@@ -74,6 +74,30 @@ npm --prefix apps/vscode-remote-proxy test
 npm --prefix apps/vscode-remote-proxy run package:with-kernel
 ```
 
+For a single local prerelease pass that keeps the normal edit loop targeted,
+builds both Rust release artifacts, stages extension kernels, runs extension
+tests, packages the VSIX, and optionally opens an Extension Development Host,
+use:
+
+```powershell
+pwsh -NoProfile -File scripts/prerelease-local.ps1
+```
+
+Useful options:
+
+- `-CleanLocalState`: stop/uninstall local daemon services best-effort and
+  remove the default `$HOME\.ssh_proxy` state before staging the extension.
+- `-CleanProgramData`: additionally remove `%ProgramData%\ssh_proxy`; use this
+  only when you explicitly want to discard local installed daemon binaries.
+- `-LaunchVscode`: open VS Code with
+  `apps/vscode-remote-proxy` as `--extensionDevelopmentPath`.
+- `-FullRust`: add `cargo test --workspace --tests -- --test-threads=1`.
+- `-SkipPackage`: leave a staged debug environment without producing a VSIX.
+
+The script uses `sccache` when available, keeps the Linux musl sidecar contract
+by invoking `scripts/build-release.ps1`, and reuses the same packaging scripts as
+the release flow. Staged binaries and VSIX files are ignored by Git.
+
 ## Rust Release Binary
 
 ```powershell
@@ -109,6 +133,13 @@ pwsh -NoProfile -File scripts/package-vscode-extension.ps1 -SkipBuild
 ```
 
 The staged binaries are ignored by Git and should not be committed.
+
+To launch the extension development window without rerunning the prerelease
+gate:
+
+```powershell
+pwsh -NoProfile -File scripts/launch-vscode-extension-dev.ps1
+```
 
 ## GitHub Actions Release
 

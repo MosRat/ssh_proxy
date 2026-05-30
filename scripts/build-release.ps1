@@ -19,11 +19,27 @@ function Invoke-NativeChecked {
     }
 }
 
+function Invoke-NativeBestEffort {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Command
+    )
+
+    try {
+        & $Command
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "$Name exited with code $LASTEXITCODE"
+        }
+    } catch {
+        Write-Warning "$Name failed: $($_.Exception.Message)"
+    }
+}
+
 Push-Location $root
 try {
     if (-not $NoSccache -and (Get-Command sccache -ErrorAction SilentlyContinue)) {
         $env:RUSTC_WRAPPER = "sccache"
-        Invoke-NativeChecked "sccache start-server" { sccache --start-server }
+        Invoke-NativeBestEffort "sccache start-server" { sccache --start-server }
     }
 
     Invoke-NativeChecked "cargo zigbuild" { cargo zigbuild -p ssh_proxy --target $Target --release }

@@ -8,6 +8,9 @@ py-smoke.*
 /docs/bench-*.md
 /docs/test-*.md
 /docs/*performance-analysis*.md
+/apps/vscode-remote-proxy/*.vsix
+/apps/vscode-remote-proxy/assets/bin/linux-x64/
+/apps/vscode-remote-proxy/assets/bin/win32-x64/
 
 # Local environment and machine-specific run configuration.
 /.env
