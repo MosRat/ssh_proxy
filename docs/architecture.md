@@ -237,17 +237,21 @@ Protocol/transport matrix tests are the opt-in performance and stability layer
 above remote E2E. They use the same local-only target configuration, then write
 sanitized JSON/CSV/Markdown artifacts that join connection strategy, selected
 transport, fallback classification, workload, payload size, correctness, scoped
-throughput samples, first-byte latency, sample/request/concurrency counts, run
-window, lost requests, reconnect count, and cleanup status. The matrix is
-report-first for speed numbers: correctness and classified cleanup are hard
-gates, while throughput and latency become thresholded only after repeated lab
-baselines. Workloads are normalized across the same transport cases:
+throughput samples, median/p95 throughput, median/p95 first-byte latency,
+median/p95 duration, sample/request/concurrency counts, run window, lost
+requests, reconnect count, and cleanup status. The matrix is report-first for
+speed numbers: correctness and cleanup are hard gates, while throughput and
+latency become thresholded only after repeated lab baselines. Workloads are
+normalized across the same transport cases:
 `control`, `large-download`, `large-upload`, `long-connection`, and
 `high-concurrency`. Control scopes are `control-status-through-proxy` and
 `control-status-through-openssh-forward`; payload scopes use the same proxy vs.
-OpenSSH local-forward split through a temporary remote TCP bench server. The
-summary Markdown table filters out successful setup rows so a single matrix run
-can be pasted as release evidence without leaking target details.
+OpenSSH local-forward split through a temporary remote TCP bench server. Bench
+setup is start/probe classified, and payload rows are preflight-skipped when the
+target cannot provide that server. The summary Markdown table filters out
+successful setup rows, hides control-plane throughput as `n/a`, and favors
+median/p95 values so a single matrix run can be pasted as release evidence
+without leaking target details.
 ProxyJump/no-login topology requires OpenSSH/russh/SPX-over-SSH success; direct
 topology additionally attempts direct plain/TLS/QUIC/QUIC-native and classifies
 unreachable candidates as preflight skips or runtime failures.

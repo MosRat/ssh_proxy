@@ -98,3 +98,39 @@ fn push_unique(workloads: &mut Vec<MatrixWorkload>, workload: MatrixWorkload) {
         workloads.push(workload);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_list_expands_all_and_deduplicates_aliases() {
+        let workloads = MatrixWorkload::parse_list(
+            Some("all,download,large-download,upload,long,concurrent"),
+            MatrixLevel::PerfSmoke,
+        );
+
+        assert_eq!(
+            workloads,
+            vec![
+                MatrixWorkload::Control,
+                MatrixWorkload::LargeDownload,
+                MatrixWorkload::LargeUpload,
+                MatrixWorkload::LongConnection,
+                MatrixWorkload::HighConcurrency,
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_list_falls_back_to_level_defaults() {
+        assert_eq!(
+            MatrixWorkload::parse_list(Some("unknown"), MatrixLevel::Smoke),
+            vec![MatrixWorkload::Control]
+        );
+        assert_eq!(
+            MatrixWorkload::parse_list(None, MatrixLevel::Stability),
+            vec![MatrixWorkload::Control, MatrixWorkload::LongConnection]
+        );
+    }
+}

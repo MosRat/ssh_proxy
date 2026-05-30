@@ -14,11 +14,11 @@ use super::{
     command::{
         ChildGuard, control_status_via_tcp, direct_host_from_ssh_config, failure_class, free_addr,
         openssh_command, openssh_command_for_target, output_error, run_output, run_output_retry,
-        run_with_stdin, russh_host_exec_command, scp_command, sh_quote, temp_dir, temp_path,
-        wait_tcp,
+        run_output_retry_timeout, run_output_timeout, run_with_stdin, russh_host_exec_command,
+        scp_command, sh_quote, temp_dir, temp_path, wait_tcp,
     },
     config::{MatrixConfig, MatrixLevel, stamp},
-    report::{MatrixCaseReport, MatrixReport},
+    report::{MatrixCaseReport, MatrixReport, MeasurementSample},
     workload::MatrixWorkload,
 };
 
@@ -463,25 +463,42 @@ while time.time()<deadline:
         time.sleep(0.25)
 sys.exit(1)
 "#;
-        let command = format!(
-            "nohup python3 {script} {port} >{log} 2>&1 < /dev/null & echo $! > {pid}; python3 -c {wait} {port}",
+        let start_command = format!(
+            "rm -f {pid}; nohup python3 {script} {port} >{log} 2>&1 < /dev/null & echo $! > {pid}; sleep 0.2; test -s {pid}",
             script = sh_quote(&remote_script),
             port = self.bench_port,
             log = sh_quote(&format!("{}/bench.log", self.remote_dir)),
             pid = sh_quote(&format!("{}/bench.pid", self.remote_dir)),
-            wait = sh_quote(wait_code),
         );
-        push_command_case(
+        if !push_bench_setup_case(
             config,
             report,
             &self.target,
             &self.topology,
             "remote_matrix_bench_server_start",
-            run_output(openssh_command_for_target(
-                &self.target,
-                config.accept_new,
-                &[&command],
-            )),
+            run_output_timeout(
+                openssh_command_for_target(&self.target, config.accept_new, &[&start_command]),
+                Duration::from_secs(20),
+            ),
+        ) {
+            return false;
+        }
+
+        let probe_command = format!(
+            "python3 -c {wait} {port} || (cat {log} 2>/dev/null; exit 1)",
+            wait = sh_quote(wait_code),
+            port = self.bench_port,
+            log = sh_quote(&format!("{}/bench.log", self.remote_dir)),
+        );
+        let mut make_probe =
+            || openssh_command_for_target(&self.target, config.accept_new, &[&probe_command]);
+        push_bench_setup_case(
+            config,
+            report,
+            &self.target,
+            &self.topology,
+            "remote_matrix_bench_server_probe",
+            run_output_retry_timeout(&mut make_probe, 5, Duration::from_secs(15)),
         )
     }
 
@@ -517,9 +534,7 @@ sys.exit(1)
         let mut row = self.case_row(config, spec, workload);
         row.payload_bytes = payload_bytes_for(config, workload);
         let mut lost = 0_u64;
-        let mut total_bytes = 0_u64;
-        let mut total_duration = 0_u128;
-        let mut first_byte = None;
+        let mut successful_samples = Vec::new();
         let measurements = if spec.case == "openssh-direct-tcpip" {
             self.run_openssh_forward_measurements(config, workload)
         } else {
@@ -542,13 +557,11 @@ sys.exit(1)
                             unexpected_workload_response(workload, &measurement),
                         );
                     } else {
-                        total_bytes += measurement.bytes;
-                        total_duration += measurement.duration_ms;
-                        first_byte = Some(
-                            first_byte
-                                .unwrap_or(measurement.first_byte_ms)
-                                .min(measurement.first_byte_ms),
-                        );
+                        successful_samples.push(MeasurementSample {
+                            bytes: measurement.bytes,
+                            duration_ms: measurement.duration_ms,
+                            first_byte_ms: measurement.first_byte_ms,
+                        });
                     }
                 }
                 Err(err) => {
@@ -559,8 +572,8 @@ sys.exit(1)
         }
         row.lost_requests = Some(lost);
         row.reconnect_count = Some(0);
-        if total_bytes > 0 {
-            row.with_measurement(total_bytes, total_duration.max(1), first_byte.unwrap_or(0));
+        if !successful_samples.is_empty() {
+            row.with_measurement_samples(&successful_samples);
         }
         report.push(row);
     }
@@ -793,22 +806,32 @@ sys.exit(1)
             },
             MatrixWorkload::LargeDownload => {
                 let started = Instant::now();
+                let samples = samples.max(1);
+                let mut results = Vec::with_capacity(samples);
+                for _ in 0..samples {
+                    results.push(bench_download_via_tcp(listen, config.payload_bytes));
+                }
                 MatrixMeasurements {
-                    results: vec![bench_download_via_tcp(listen, config.payload_bytes)],
+                    results,
                     measurement_scope: scope,
-                    sample_count: 1,
-                    request_count: 1,
+                    sample_count: samples as u64,
+                    request_count: samples as u64,
                     concurrency: 1,
                     run_window_ms: started.elapsed().as_millis().max(1),
                 }
             }
             MatrixWorkload::LargeUpload => {
                 let started = Instant::now();
+                let samples = samples.max(1);
+                let mut results = Vec::with_capacity(samples);
+                for _ in 0..samples {
+                    results.push(bench_upload_via_tcp(listen, config.payload_bytes));
+                }
                 MatrixMeasurements {
-                    results: vec![bench_upload_via_tcp(listen, config.payload_bytes)],
+                    results,
                     measurement_scope: scope,
-                    sample_count: 1,
-                    request_count: 1,
+                    sample_count: samples as u64,
+                    request_count: samples as u64,
                     concurrency: 1,
                     run_window_ms: started.elapsed().as_millis().max(1),
                 }
@@ -910,35 +933,38 @@ sys.exit(1)
         scope: &'static str,
     ) -> MatrixMeasurements {
         let started = Instant::now();
-        let batch_started = Instant::now();
+        let samples = config.samples.max(1);
         let concurrency = config.concurrency.max(1);
-        let mut handles = Vec::new();
-        for _ in 0..concurrency {
-            let bytes = config.concurrent_payload_bytes;
-            handles.push(thread::spawn(move || bench_download_via_tcp(listen, bytes)));
-        }
         let mut results = Vec::new();
-        let mut successes = Vec::new();
-        for handle in handles {
-            match handle
-                .join()
-                .unwrap_or_else(|_| Err("matrix concurrency worker panicked".to_string()))
-            {
-                Ok(measurement) => successes.push(measurement),
-                Err(err) => results.push(Err(err)),
+        for _ in 0..samples {
+            let batch_started = Instant::now();
+            let mut handles = Vec::new();
+            for _ in 0..concurrency {
+                let bytes = config.concurrent_payload_bytes;
+                handles.push(thread::spawn(move || bench_download_via_tcp(listen, bytes)));
             }
-        }
-        if !successes.is_empty() {
-            results.push(Ok(aggregate_batch_measurement(
-                successes,
-                batch_started.elapsed().as_millis().max(1),
-            )));
+            let mut successes = Vec::new();
+            for handle in handles {
+                match handle
+                    .join()
+                    .unwrap_or_else(|_| Err("matrix concurrency worker panicked".to_string()))
+                {
+                    Ok(measurement) => successes.push(measurement),
+                    Err(err) => results.push(Err(err)),
+                }
+            }
+            if !successes.is_empty() {
+                results.push(Ok(aggregate_batch_measurement(
+                    successes,
+                    batch_started.elapsed().as_millis().max(1),
+                )));
+            }
         }
         MatrixMeasurements {
             results,
             measurement_scope: scope,
-            sample_count: 1,
-            request_count: concurrency as u64,
+            sample_count: samples as u64,
+            request_count: (samples * concurrency) as u64,
             concurrency: concurrency as u64,
             run_window_ms: started.elapsed().as_millis().max(1),
         }
@@ -1234,11 +1260,55 @@ fn push_command_case(
     passed
 }
 
+fn push_bench_setup_case(
+    config: &MatrixConfig,
+    report: &mut MatrixReport,
+    target: &str,
+    topology: &str,
+    case: &str,
+    output: Result<std::process::Output, String>,
+) -> bool {
+    let mut row = MatrixCaseReport::new(config.level_name(), Some(target), Some(topology), case);
+    match output {
+        Ok(output) if output.status.success() => row.status = "passed".to_string(),
+        Ok(output) => {
+            let error = output_error(&output);
+            row.skip(classify_bench_setup_error(&error), error);
+            row.fallback_classification = Some("preflight_skip".to_string());
+        }
+        Err(err) => {
+            row.skip(classify_bench_setup_error(&err), err);
+            row.fallback_classification = Some("preflight_skip".to_string());
+        }
+    }
+    let passed = row.status == "passed";
+    report.push(row);
+    passed
+}
+
 fn classify_command_error(error: &str) -> &'static str {
     if error.contains("failed to spawn") {
         "spawn_failed"
     } else {
         classify_runtime_error(error)
+    }
+}
+
+fn classify_bench_setup_error(error: &str) -> &'static str {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("command timed out") {
+        "bench_setup_timeout"
+    } else if lower.contains("address already in use") {
+        "bench_setup_port_conflict"
+    } else if lower.contains("connection closed")
+        || lower.contains("broken pipe")
+        || lower.contains("banner exchange")
+    {
+        "transient_network"
+    } else if lower.contains("python") && lower.contains("not found") {
+        "missing_python3"
+    } else {
+        "bench_setup_unavailable"
     }
 }
 
@@ -1348,5 +1418,47 @@ fn allocate_remote_base_port(stamp: &str, target: &str) -> u16 {
         candidate
     } else {
         candidate + (8 - candidate % 8)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bench_setup_errors_are_preflight_classified() {
+        assert_eq!(
+            classify_bench_setup_error("command timed out after 20s"),
+            "bench_setup_timeout"
+        );
+        assert_eq!(
+            classify_bench_setup_error("OSError: Address already in use"),
+            "bench_setup_port_conflict"
+        );
+        assert_eq!(
+            classify_bench_setup_error("Connection closed by remote host"),
+            "transient_network"
+        );
+        assert_eq!(
+            classify_bench_setup_error("python3: not found"),
+            "missing_python3"
+        );
+    }
+
+    #[test]
+    fn workload_response_checks_distinguish_payload_shapes() {
+        let measurement = super::super::command::TcpMeasurement {
+            response: "bench_download:1048576".to_string(),
+            bytes: 1024 * 1024,
+            duration_ms: 10,
+            first_byte_ms: 1,
+            proxy_stderr: None,
+        };
+        assert!(measurement_ok(MatrixWorkload::LargeDownload, &measurement));
+        assert!(measurement_ok(
+            MatrixWorkload::HighConcurrency,
+            &measurement
+        ));
+        assert!(!measurement_ok(MatrixWorkload::LargeUpload, &measurement));
     }
 }

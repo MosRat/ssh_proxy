@@ -175,11 +175,11 @@ Layering:
   SPX over SSH, and direct plain/TLS/QUIC/QUIC-native when the topology is
   direct.
 - `matrix_perf_smoke`: repeats the same correctness cases with low concurrency
-  and records bytes, batch-wall-clock duration, MiB/s, first-byte latency,
-  `measurement_scope`, `workload`, `payload_bytes`, `sample_count`,
-  `request_count`, and `concurrency` as report-first trend data. Default
-  perf-smoke workloads are `control`, `large-download`, `large-upload`, and
-  `high-concurrency`.
+  and records bytes, aggregate duration, median/p95 MiB/s, median/p95
+  first-byte latency, median/p95 duration, `measurement_scope`, `workload`,
+  `payload_bytes`, `sample_count`, `request_count`, and `concurrency` as
+  report-first trend data. Default perf-smoke workloads are `control`,
+  `large-download`, `large-upload`, and `high-concurrency`.
 - `matrix_stability`: runs longer repeated status probes plus a long streamed
   TCP connection and records lost requests, reconnect count, and
   `run_window_ms`; set a short duration for development.
@@ -204,6 +204,24 @@ $env:SSH_PROXY_MATRIX_CONCURRENT_PAYLOAD_BYTES = "262144"
 $env:SSH_PROXY_MATRIX_LONG_SECS = "30"
 ```
 
+Use small payloads for the development loop and larger payloads for a speed
+baseline. The Markdown table hides control-plane MiB/s as `n/a`, because status
+JSON is useful for first-byte latency and correctness but not throughput.
+
+```powershell
+# Fast perf-smoke trend run.
+$env:SSH_PROXY_MATRIX_PAYLOAD_BYTES = "8388608"
+$env:SSH_PROXY_MATRIX_CONCURRENT_PAYLOAD_BYTES = "262144"
+$env:SSH_PROXY_MATRIX_SAMPLES = "3"
+$env:SSH_PROXY_MATRIX_CONCURRENCY = "2"
+
+# More realistic lab baseline.
+$env:SSH_PROXY_MATRIX_PAYLOAD_BYTES = "67108864"
+$env:SSH_PROXY_MATRIX_CONCURRENT_PAYLOAD_BYTES = "1048576"
+$env:SSH_PROXY_MATRIX_SAMPLES = "5"
+$env:SSH_PROXY_MATRIX_CONCURRENCY = "8"
+```
+
 Run layers explicitly:
 
 ```powershell
@@ -217,15 +235,18 @@ rtk cargo test -p ssh_proxy --test transport_matrix -- --ignored matrix_cleanup 
 
 The matrix writes `transport-matrix.json`, `transport-matrix.csv`, and a concise
 `transport-matrix-summary.md` under a temporary artifact directory, or
-`SSH_PROXY_MATRIX_ARTIFACT_DIR` when set. Correctness, cleanup, and classified
-failures are hard failures. Throughput, latency, and reconnect observations are
-report-first until several lab runs establish stable thresholds. For concurrent
-rows, `duration_ms` is the batch wall-clock time, while `run_window_ms` is the
-total measurement phase for that case. Payload workloads use a temporary remote
-Python TCP bench server and are skipped with `missing_remote_bench_server` when
-the target cannot provide it. The legacy PowerShell benchmark scripts remain
-compatibility/lab wrappers; prefer the Rust matrix gate for release evidence
-because it uses `rcgen` in the test harness instead of an external `openssl.exe`.
+`SSH_PROXY_MATRIX_ARTIFACT_DIR` when set. Correctness and cleanup are hard
+failures. Throughput, latency, and reconnect observations are report-first until
+several lab runs establish stable thresholds. For concurrent rows, each sample
+records one batch-wall-clock measurement, while `run_window_ms` is the total
+measurement phase for that case. Payload workloads use a temporary remote
+Python TCP bench server. Bench setup is split into start and probe rows; if a
+target cannot provide the bench server, those rows and dependent payload rows
+are skipped with `bench_setup_*` or `missing_remote_bench_server` rather than
+turning the whole matrix into a hard failure. The legacy PowerShell benchmark
+scripts remain compatibility/lab wrappers; prefer the Rust matrix gate for
+release evidence because it uses `rcgen` in the test harness instead of an
+external `openssl.exe`.
 
 ## Full Local Gate
 

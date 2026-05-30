@@ -7,6 +7,13 @@ use serde::Serialize;
 
 use super::config::{MatrixConfig, MatrixLevel};
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct MeasurementSample {
+    pub(super) bytes: u64,
+    pub(super) duration_ms: u128,
+    pub(super) first_byte_ms: u128,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct MatrixCaseReport {
     pub level: String,
@@ -27,7 +34,13 @@ pub(super) struct MatrixCaseReport {
     pub bytes: Option<u64>,
     pub duration_ms: Option<u128>,
     pub mibps: Option<f64>,
+    pub median_mibps: Option<f64>,
+    pub p95_mibps: Option<f64>,
     pub first_byte_ms: Option<u128>,
+    pub median_first_byte_ms: Option<u128>,
+    pub p95_first_byte_ms: Option<u128>,
+    pub median_duration_ms: Option<u128>,
+    pub p95_duration_ms: Option<u128>,
     pub lost_requests: Option<u64>,
     pub reconnect_count: Option<u64>,
     pub cleanup_status: Option<String>,
@@ -82,7 +95,13 @@ impl MatrixCaseReport {
             bytes: None,
             duration_ms: None,
             mibps: None,
+            median_mibps: None,
+            p95_mibps: None,
             first_byte_ms: None,
+            median_first_byte_ms: None,
+            p95_first_byte_ms: None,
+            median_duration_ms: None,
+            p95_duration_ms: None,
             lost_requests: None,
             reconnect_count: None,
             cleanup_status: None,
@@ -124,6 +143,41 @@ impl MatrixCaseReport {
         if duration_ms > 0 {
             self.mibps = Some(((bytes as f64) / 1024.0 / 1024.0) / (duration_ms as f64 / 1000.0));
         }
+    }
+
+    pub(super) fn with_measurement_samples(&mut self, samples: &[MeasurementSample]) {
+        if samples.is_empty() {
+            return;
+        }
+        let bytes = samples.iter().map(|sample| sample.bytes).sum();
+        let duration_ms = samples
+            .iter()
+            .map(|sample| sample.duration_ms.max(1))
+            .sum::<u128>();
+        let first_byte_ms = samples
+            .iter()
+            .map(|sample| sample.first_byte_ms)
+            .min()
+            .unwrap_or(0);
+        self.with_measurement(bytes, duration_ms.max(1), first_byte_ms);
+
+        let mibps_values: Vec<_> = samples
+            .iter()
+            .filter_map(|sample| mibps(sample.bytes, sample.duration_ms))
+            .collect();
+        self.median_mibps = median_f64(&mibps_values);
+        self.p95_mibps = p95_f64(&mibps_values);
+
+        let durations: Vec<_> = samples
+            .iter()
+            .map(|sample| sample.duration_ms.max(1))
+            .collect();
+        self.median_duration_ms = median_u128(&durations);
+        self.p95_duration_ms = p95_u128(&durations);
+
+        let first_bytes: Vec<_> = samples.iter().map(|sample| sample.first_byte_ms).collect();
+        self.median_first_byte_ms = median_u128(&first_bytes);
+        self.p95_first_byte_ms = p95_u128(&first_bytes);
     }
 
     pub(super) fn with_measurement_context(
@@ -222,7 +276,7 @@ impl MatrixReport {
 
 fn csv_rows(rows: &[MatrixCaseReport]) -> String {
     let mut output = String::from(
-        "level,target,topology,case,workload,selected_transport,selection_source,selection_reason,fallback_classification,measurement_scope,sample_count,request_count,concurrency,run_window_ms,payload_bytes,bytes,duration_ms,mibps,first_byte_ms,lost_requests,reconnect_count,cleanup_status,artifact_path,status,error_kind,error\n",
+        "level,target,topology,case,workload,selected_transport,selection_source,selection_reason,fallback_classification,measurement_scope,sample_count,request_count,concurrency,run_window_ms,payload_bytes,bytes,duration_ms,mibps,median_mibps,p95_mibps,first_byte_ms,median_first_byte_ms,p95_first_byte_ms,median_duration_ms,p95_duration_ms,lost_requests,reconnect_count,cleanup_status,artifact_path,status,error_kind,error\n",
     );
     for row in rows {
         let fields = [
@@ -258,7 +312,25 @@ fn csv_rows(rows: &[MatrixCaseReport]) -> String {
             &row.mibps
                 .map(|value| format!("{value:.6}"))
                 .unwrap_or_default(),
+            &row.median_mibps
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
+            &row.p95_mibps
+                .map(|value| format!("{value:.6}"))
+                .unwrap_or_default(),
             &row.first_byte_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.median_first_byte_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.p95_first_byte_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.median_duration_ms
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            &row.p95_duration_ms
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             &row.lost_requests
@@ -287,9 +359,11 @@ fn csv_rows(rows: &[MatrixCaseReport]) -> String {
 
 fn summary_table(rows: &[MatrixCaseReport]) -> String {
     let mut output = String::from(
-        "| target | topology | workload | case | transport | status | MiB/s | first byte ms | bytes | req/lost | cleanup |\n",
+        "| target | topology | workload | case | transport | status | MiB/s med/p95 | first byte med/p95 ms | duration med/p95 ms | bytes | req/lost | cleanup |\n",
     );
-    output.push_str("| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    output.push_str(
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n",
+    );
     let mut selected: Vec<_> = rows
         .iter()
         .filter(|row| {
@@ -301,19 +375,20 @@ fn summary_table(rows: &[MatrixCaseReport]) -> String {
     }
     for row in selected {
         output.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {}/{} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {}/{} | {} |\n",
             md_cell(row.target.as_deref().unwrap_or("local")),
             md_cell(row.topology.as_deref().unwrap_or("")),
             md_cell(row.workload.as_deref().unwrap_or("")),
             md_cell(&row.case),
             md_cell(row.selected_transport.as_deref().unwrap_or("")),
             md_cell(&row.status),
-            row.mibps
-                .map(|value| format!("{value:.3}"))
-                .unwrap_or_else(|| "-".to_string()),
-            row.first_byte_ms
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+            throughput_cell(row),
+            ms_pair(
+                row.median_first_byte_ms,
+                row.p95_first_byte_ms,
+                row.first_byte_ms
+            ),
+            ms_pair(row.median_duration_ms, row.p95_duration_ms, row.duration_ms),
             row.bytes
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -323,6 +398,25 @@ fn summary_table(rows: &[MatrixCaseReport]) -> String {
         ));
     }
     output
+}
+
+fn throughput_cell(row: &MatrixCaseReport) -> String {
+    if row.workload.as_deref() == Some("control") {
+        return "n/a".to_string();
+    }
+    match (row.median_mibps, row.p95_mibps, row.mibps) {
+        (Some(median), Some(p95), _) => format!("{median:.3}/{p95:.3}"),
+        (_, _, Some(value)) => format!("{value:.3}"),
+        _ => "-".to_string(),
+    }
+}
+
+fn ms_pair(median: Option<u128>, p95: Option<u128>, fallback: Option<u128>) -> String {
+    match (median, p95, fallback) {
+        (Some(median), Some(p95), _) => format!("{median}/{p95}"),
+        (_, _, Some(value)) => value.to_string(),
+        _ => "-".to_string(),
+    }
 }
 
 fn md_cell(value: &str) -> String {
@@ -340,4 +434,137 @@ fn csv_escape(value: &str) -> String {
 #[allow(dead_code)]
 pub(super) fn path_text(path: &Path) -> String {
     path.display().to_string()
+}
+
+fn mibps(bytes: u64, duration_ms: u128) -> Option<f64> {
+    (duration_ms > 0).then(|| ((bytes as f64) / 1024.0 / 1024.0) / (duration_ms as f64 / 1000.0))
+}
+
+fn median_f64(values: &[f64]) -> Option<f64> {
+    let mut values: Vec<_> = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect();
+    values.sort_by(f64::total_cmp);
+    match values.len() {
+        0 => None,
+        len if len % 2 == 1 => Some(values[len / 2]),
+        len => Some((values[(len / 2) - 1] + values[len / 2]) / 2.0),
+    }
+}
+
+fn p95_f64(values: &[f64]) -> Option<f64> {
+    let mut values: Vec<_> = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect();
+    values.sort_by(f64::total_cmp);
+    nearest_rank_index(values.len(), 0.95).map(|index| values[index])
+}
+
+fn median_u128(values: &[u128]) -> Option<u128> {
+    let mut values = values.to_vec();
+    values.sort_unstable();
+    match values.len() {
+        0 => None,
+        len if len % 2 == 1 => Some(values[len / 2]),
+        len => Some(values[(len / 2) - 1].saturating_add(values[len / 2]) / 2),
+    }
+}
+
+fn p95_u128(values: &[u128]) -> Option<u128> {
+    let mut values = values.to_vec();
+    values.sort_unstable();
+    nearest_rank_index(values.len(), 0.95).map(|index| values[index])
+}
+
+fn nearest_rank_index(len: usize, percentile: f64) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let rank = ((len as f64) * percentile).ceil().max(1.0) as usize;
+    Some(rank.saturating_sub(1).min(len - 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measurement_samples_record_median_and_p95() {
+        let mut row = MatrixCaseReport::new("perf-smoke", Some("direct"), Some("direct"), "spx")
+            .with_workload("large-download");
+        row.with_measurement_samples(&[
+            MeasurementSample {
+                bytes: 1024 * 1024,
+                duration_ms: 1000,
+                first_byte_ms: 20,
+            },
+            MeasurementSample {
+                bytes: 1024 * 1024,
+                duration_ms: 500,
+                first_byte_ms: 10,
+            },
+            MeasurementSample {
+                bytes: 1024 * 1024,
+                duration_ms: 250,
+                first_byte_ms: 30,
+            },
+        ]);
+
+        assert_eq!(row.bytes, Some(3 * 1024 * 1024));
+        assert_eq!(row.duration_ms, Some(1750));
+        assert_eq!(row.first_byte_ms, Some(10));
+        assert_eq!(row.median_mibps, Some(2.0));
+        assert_eq!(row.p95_mibps, Some(4.0));
+        assert_eq!(row.median_first_byte_ms, Some(20));
+        assert_eq!(row.p95_first_byte_ms, Some(30));
+    }
+
+    #[test]
+    fn summary_table_uses_percentiles_and_hides_control_throughput() {
+        let mut control =
+            MatrixCaseReport::new("perf-smoke", Some("target"), Some("direct"), "control")
+                .with_workload("control");
+        control.with_measurement_samples(&[MeasurementSample {
+            bytes: 128,
+            duration_ms: 10,
+            first_byte_ms: 8,
+        }]);
+
+        let mut download =
+            MatrixCaseReport::new("perf-smoke", Some("target"), Some("direct"), "download")
+                .with_workload("large-download");
+        download.with_measurement_samples(&[
+            MeasurementSample {
+                bytes: 1024 * 1024,
+                duration_ms: 1000,
+                first_byte_ms: 11,
+            },
+            MeasurementSample {
+                bytes: 1024 * 1024,
+                duration_ms: 500,
+                first_byte_ms: 9,
+            },
+        ]);
+
+        let table = summary_table(&[control, download]);
+        assert!(table.contains("MiB/s med/p95"));
+        assert!(table.contains("| control | control |"));
+        assert!(table.contains("| n/a | 8/8 |"));
+        assert!(table.contains("| large-download | download |"));
+        assert!(table.contains("| 1.500/2.000 | 10/11 |"));
+    }
+
+    #[test]
+    fn csv_includes_percentile_columns() {
+        let row = MatrixCaseReport::new("perf-smoke", None, None, "case");
+        let csv = csv_rows(&[row]);
+        assert!(csv.starts_with("level,target,topology"));
+        assert!(csv.contains("median_mibps,p95_mibps"));
+        assert!(csv.contains("median_first_byte_ms,p95_first_byte_ms"));
+        assert!(csv.contains("median_duration_ms,p95_duration_ms"));
+    }
 }

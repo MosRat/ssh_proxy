@@ -139,7 +139,14 @@ pub(super) fn russh_host_exec_command(
     command
 }
 
-pub(super) fn run_output(mut command: Command) -> Result<Output, String> {
+pub(super) fn run_output(command: Command) -> Result<Output, String> {
+    run_output_timeout(command, COMMAND_TIMEOUT)
+}
+
+pub(super) fn run_output_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<Output, String> {
     let description = format!("{command:?}");
     command
         .stdin(Stdio::null())
@@ -148,7 +155,7 @@ pub(super) fn run_output(mut command: Command) -> Result<Output, String> {
     let child = command
         .spawn()
         .map_err(|err| format!("failed to spawn command {description}: {err}"))?;
-    wait_with_timeout(child, COMMAND_TIMEOUT, &description)
+    wait_with_timeout(child, timeout, &description)
 }
 
 fn wait_with_timeout(
@@ -204,9 +211,17 @@ pub(super) fn run_output_retry(
     mut make_command: impl FnMut() -> Command,
     attempts: usize,
 ) -> Result<Output, String> {
+    run_output_retry_timeout(&mut make_command, attempts, COMMAND_TIMEOUT)
+}
+
+pub(super) fn run_output_retry_timeout(
+    make_command: &mut impl FnMut() -> Command,
+    attempts: usize,
+    timeout: Duration,
+) -> Result<Output, String> {
     let attempts = attempts.max(1);
     for attempt in 0..attempts {
-        match run_output(make_command()) {
+        match run_output_timeout(make_command(), timeout) {
             Ok(output)
                 if output.status.success()
                     || !output_looks_transient(&output)

@@ -319,6 +319,11 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
         "high-concurrency",
         "request_count",
         "run_window_ms",
+        "median_mibps",
+        "p95_mibps",
+        "median_first_byte_ms",
+        "p95_first_byte_ms",
+        "MiB/s med/p95",
         "control-status-through-proxy",
         "control-status-through-openssh-forward",
         "large-download-through-proxy",
@@ -328,6 +333,10 @@ fn transport_matrix_harness_stays_opt_in_report_first_and_sanitized() {
         "BENCH_SERVER_SCRIPT",
         "python3",
         "COMMAND_TIMEOUT",
+        "run_output_timeout",
+        "run_output_retry_timeout",
+        "remote_matrix_bench_server_probe",
+        "bench_setup_timeout",
     ] {
         assert_contains(
             &support,
