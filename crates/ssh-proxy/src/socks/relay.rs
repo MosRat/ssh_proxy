@@ -3,13 +3,16 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
+use ssh_proxy_transport::proxy::http::{
+    HttpResponseBodyMode, http_header_end, rewrite_response_head_for_proxy_close,
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional_with_sizes},
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional_with_sizes},
     net::TcpStream,
     sync::watch,
     time,
@@ -17,6 +20,15 @@ use tokio::{
 use tracing::debug;
 
 use crate::{controller, data_plane, protocol::TCP_DATA_CHUNK, quic_native, ssh_native};
+
+const HTTP_RESPONSE_HEADER_LIMIT: usize = 64 * 1024;
+const HTTP_CLOSE_DELIMITED_IDLE_TIMEOUT: Duration = Duration::from_millis(750);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RelayMode {
+    Raw,
+    HttpForward,
+}
 
 enum QuicNativeRelayOutcome {
     Completed((u64, u64)),
@@ -30,6 +42,7 @@ pub(super) async fn relay_spx_tcp(
     remote_flow: data_plane::SpxTcpFlow,
     state: Arc<controller::SharedState>,
     worker_slot: usize,
+    mode: RelayMode,
 ) -> Result<()> {
     let (remote_tx, mut remote_rx, remote_close) = remote_flow.split();
     let (mut client_reader, mut client_writer) = stream.into_split();
@@ -65,13 +78,27 @@ pub(super) async fn relay_spx_tcp(
     let state_to_client = state.clone();
     let remote_to_client_bytes = relay_remote_to_client.clone();
     let mut remote_to_client = tokio::spawn(async move {
-        while let Some(data) = remote_rx.recv().await {
-            state_to_client.record_remote_to_client_bytes(data.len());
-            state_to_client.record_worker_remote_to_client_bytes(worker_slot, data.len());
-            remote_to_client_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-            client_writer.write_all(&data).await?;
+        match mode {
+            RelayMode::Raw => {
+                while let Some(data) = remote_rx.recv().await {
+                    state_to_client.record_remote_to_client_bytes(data.len());
+                    state_to_client.record_worker_remote_to_client_bytes(worker_slot, data.len());
+                    remote_to_client_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+                    client_writer.write_all(&data).await?;
+                }
+                client_writer.shutdown().await?;
+            }
+            RelayMode::HttpForward => {
+                relay_http_forward_spx_response(
+                    remote_rx,
+                    client_writer,
+                    state_to_client,
+                    worker_slot,
+                    remote_to_client_bytes,
+                )
+                .await?;
+            }
         }
-        client_writer.shutdown().await?;
         Ok::<_, anyhow::Error>(())
     });
 
@@ -108,6 +135,130 @@ pub(super) async fn relay_spx_tcp(
         )
         .await;
     remote_close.close("tcp connection closed").await;
+    Ok(())
+}
+
+enum HttpForwardResponseState {
+    ReadingHead(BytesMut),
+    ContentLength(u64),
+    Chunked,
+    CloseDelimited,
+    Done,
+}
+
+impl HttpForwardResponseState {
+    fn from_body_mode(mode: HttpResponseBodyMode) -> Self {
+        match mode {
+            HttpResponseBodyMode::ContentLength(0) | HttpResponseBodyMode::NoBody => Self::Done,
+            HttpResponseBodyMode::ContentLength(length) => Self::ContentLength(length),
+            HttpResponseBodyMode::Chunked => Self::Chunked,
+            HttpResponseBodyMode::CloseDelimited => Self::CloseDelimited,
+        }
+    }
+
+    fn uses_idle_close(&self) -> bool {
+        matches!(self, Self::CloseDelimited)
+    }
+
+    fn is_done(&self) -> bool {
+        matches!(self, Self::Done)
+    }
+}
+
+async fn relay_http_forward_spx_response(
+    mut remote_rx: data_plane::SpxTcpReceiver,
+    mut client_writer: tokio::net::tcp::OwnedWriteHalf,
+    state: Arc<controller::SharedState>,
+    worker_slot: usize,
+    remote_to_client_bytes: Arc<AtomicU64>,
+) -> Result<()> {
+    let mut response_state =
+        HttpForwardResponseState::ReadingHead(BytesMut::with_capacity(8 * 1024));
+    loop {
+        let data = if response_state.uses_idle_close() {
+            match time::timeout(HTTP_CLOSE_DELIMITED_IDLE_TIMEOUT, remote_rx.recv()).await {
+                Ok(data) => data,
+                Err(_) => break,
+            }
+        } else {
+            remote_rx.recv().await
+        };
+        let Some(data) = data else {
+            break;
+        };
+        state.record_remote_to_client_bytes(data.len());
+        state.record_worker_remote_to_client_bytes(worker_slot, data.len());
+        remote_to_client_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+        write_http_forward_response_chunk(&mut client_writer, &mut response_state, &data).await?;
+        if response_state.is_done() {
+            break;
+        }
+    }
+    client_writer.shutdown().await?;
+    Ok(())
+}
+
+async fn write_http_forward_response_chunk<W>(
+    writer: &mut W,
+    state: &mut HttpForwardResponseState,
+    data: &[u8],
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    match state {
+        HttpForwardResponseState::ReadingHead(buffer) => {
+            buffer.extend_from_slice(data);
+            if buffer.len() > HTTP_RESPONSE_HEADER_LIMIT {
+                anyhow::bail!("HTTP proxy response headers too large");
+            }
+            let Some(header_end) = http_header_end(buffer) else {
+                return Ok(());
+            };
+            let body = buffer[header_end..].to_vec();
+            let (head, body_mode) = rewrite_response_head_for_proxy_close(&buffer[..header_end])?;
+            writer.write_all(&head).await?;
+            *state = HttpForwardResponseState::from_body_mode(body_mode);
+            write_http_forward_body_chunk(writer, state, &body).await?;
+        }
+        HttpForwardResponseState::ContentLength(_)
+        | HttpForwardResponseState::Chunked
+        | HttpForwardResponseState::CloseDelimited => {
+            write_http_forward_body_chunk(writer, state, data).await?;
+        }
+        HttpForwardResponseState::Done => {}
+    }
+    Ok(())
+}
+
+async fn write_http_forward_body_chunk<W>(
+    writer: &mut W,
+    state: &mut HttpForwardResponseState,
+    data: &[u8],
+) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    match state {
+        HttpForwardResponseState::ContentLength(remaining) => {
+            let take = data
+                .len()
+                .min((*remaining).try_into().unwrap_or(usize::MAX));
+            if take > 0 {
+                writer.write_all(&data[..take]).await?;
+            }
+            *remaining = remaining.saturating_sub(take as u64);
+            if *remaining == 0 {
+                *state = HttpForwardResponseState::Done;
+            }
+        }
+        HttpForwardResponseState::Chunked | HttpForwardResponseState::CloseDelimited => {
+            if !data.is_empty() {
+                writer.write_all(data).await?;
+            }
+        }
+        HttpForwardResponseState::ReadingHead(_) | HttpForwardResponseState::Done => {}
+    }
     Ok(())
 }
 

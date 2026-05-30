@@ -20,6 +20,14 @@ pub enum HttpRequestKind {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpResponseBodyMode {
+    ContentLength(u64),
+    Chunked,
+    CloseDelimited,
+    NoBody,
+}
+
 impl HttpRequest {
     pub async fn read_from(stream: &mut TcpStream) -> Result<Self> {
         let mut bytes = Vec::new();
@@ -30,18 +38,15 @@ impl HttpRequest {
                 bail!("HTTP proxy request closed before headers");
             }
             bytes.extend_from_slice(&buf[..n]);
-            if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+            if http_header_end(&bytes).is_some() {
                 break;
             }
             if bytes.len() > 64 * 1024 {
                 bail!("HTTP proxy request headers too large");
             }
         }
-        let header_end = bytes
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .map(|pos| pos + 4)
-            .ok_or_else(|| anyhow!("missing HTTP header terminator"))?;
+        let header_end =
+            http_header_end(&bytes).ok_or_else(|| anyhow!("missing HTTP header terminator"))?;
         let headers = std::str::from_utf8(&bytes[..header_end])
             .context("HTTP proxy headers are not utf-8")?;
         let mut lines = headers.split("\r\n");
@@ -73,13 +78,18 @@ impl HttpRequest {
         rewritten.push(b' ');
         rewritten.extend_from_slice(version.as_bytes());
         rewritten.extend_from_slice(b"\r\n");
-        for line in lines {
-            if line.is_empty() {
-                break;
+        let header_lines = lines
+            .take_while(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        let connection_tokens = connection_header_tokens(&header_lines);
+        for line in header_lines {
+            if should_skip_forward_header(line, &connection_tokens) {
+                continue;
             }
             rewritten.extend_from_slice(line.as_bytes());
             rewritten.extend_from_slice(b"\r\n");
         }
+        rewritten.extend_from_slice(b"connection: close\r\n");
         rewritten.extend_from_slice(b"\r\n");
         rewritten.extend_from_slice(&bytes[header_end..]);
         Ok(Self {
@@ -90,6 +100,129 @@ impl HttpRequest {
             },
         })
     }
+}
+
+pub fn rewrite_response_head_for_proxy_close(
+    head: &[u8],
+) -> Result<(Vec<u8>, HttpResponseBodyMode)> {
+    let headers = std::str::from_utf8(head).context("HTTP proxy response headers are not utf-8")?;
+    let mut lines = headers.split("\r\n");
+    let status_line = lines
+        .next()
+        .ok_or_else(|| anyhow!("missing HTTP response status line"))?;
+    let status = parse_response_status(status_line)?;
+    let header_lines = lines
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let connection_tokens = connection_header_tokens(&header_lines);
+    let mut content_length = None;
+    let mut chunked = false;
+
+    let mut rewritten = Vec::new();
+    rewritten.extend_from_slice(status_line.as_bytes());
+    rewritten.extend_from_slice(b"\r\n");
+    for line in header_lines {
+        if let Some((name, value)) = split_header(line) {
+            if name.eq_ignore_ascii_case("content-length") {
+                if content_length.is_none() {
+                    content_length = value.parse::<u64>().ok();
+                }
+            } else if name.eq_ignore_ascii_case("transfer-encoding")
+                && value
+                    .split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case("chunked"))
+            {
+                chunked = true;
+            }
+        }
+        if should_skip_forward_header(line, &connection_tokens) {
+            continue;
+        }
+        rewritten.extend_from_slice(line.as_bytes());
+        rewritten.extend_from_slice(b"\r\n");
+    }
+    rewritten.extend_from_slice(b"connection: close\r\n\r\n");
+
+    let body_mode = if response_status_has_no_body(status) {
+        HttpResponseBodyMode::NoBody
+    } else if chunked {
+        HttpResponseBodyMode::Chunked
+    } else if let Some(length) = content_length {
+        HttpResponseBodyMode::ContentLength(length)
+    } else {
+        HttpResponseBodyMode::CloseDelimited
+    };
+
+    Ok((rewritten, body_mode))
+}
+
+pub fn http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|pos| pos + 4)
+}
+
+fn parse_response_status(status_line: &str) -> Result<u16> {
+    let mut parts = status_line.split_whitespace();
+    let version = parts
+        .next()
+        .ok_or_else(|| anyhow!("missing HTTP response version"))?;
+    if !version.starts_with("HTTP/") {
+        bail!("invalid HTTP response status line");
+    }
+    let status = parts
+        .next()
+        .ok_or_else(|| anyhow!("missing HTTP response status"))?
+        .parse::<u16>()
+        .context("invalid HTTP response status")?;
+    Ok(status)
+}
+
+fn response_status_has_no_body(status: u16) -> bool {
+    (100..200).contains(&status) || matches!(status, 204 | 304)
+}
+
+fn connection_header_tokens(headers: &[&str]) -> Vec<String> {
+    headers
+        .iter()
+        .filter_map(|line| split_header(line))
+        .filter(|(name, _)| name.eq_ignore_ascii_case("connection"))
+        .flat_map(|(_, value)| value.split(','))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn should_skip_forward_header(line: &str, connection_tokens: &[String]) -> bool {
+    let Some((name, _)) = split_header(line) else {
+        return false;
+    };
+    is_static_hop_by_hop_header(name)
+        || connection_tokens
+            .iter()
+            .any(|token| name.eq_ignore_ascii_case(token))
+}
+
+fn split_header(line: &str) -> Option<(&str, &str)> {
+    let (name, value) = line.split_once(':')?;
+    Some((name.trim(), value.trim()))
+}
+
+fn is_static_hop_by_hop_header(name: &str) -> bool {
+    [
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "upgrade",
+    ]
+    .iter()
+    .any(|header| name.eq_ignore_ascii_case(header))
 }
 
 struct AbsoluteTarget {

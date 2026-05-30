@@ -4,7 +4,7 @@ use anyhow::Result;
 use ssh_proxy_transport::proxy::http::{HttpRequest, HttpRequestKind, write_http_error};
 use tokio::net::TcpStream;
 
-use crate::{controller, quic_native, ssh_native};
+use crate::{controller, quic_native, socks::relay::RelayMode, ssh_native};
 
 pub(super) enum TunnelBackend {
     Spx(Arc<controller::SharedState>),
@@ -60,6 +60,7 @@ pub(super) async fn handle_http_proxy(
                 backend,
                 TunnelResponse::HttpConnect,
                 Vec::new(),
+                RelayMode::Raw,
             )
             .await
         }
@@ -76,6 +77,7 @@ pub(super) async fn handle_http_proxy(
                 backend,
                 TunnelResponse::None,
                 request,
+                RelayMode::HttpForward,
             )
             .await
         }
@@ -90,14 +92,34 @@ pub(super) async fn open_tunnel(
     backend: TunnelBackend,
     response: TunnelResponse,
     initial_remote: Vec<u8>,
+    mode: RelayMode,
 ) -> Result<()> {
     match backend {
         TunnelBackend::Spx(state) => {
-            super::open_tunnel(stream, peer, host, port, state, response, initial_remote).await
+            super::open_tunnel(
+                stream,
+                peer,
+                host,
+                port,
+                state,
+                response,
+                initial_remote,
+                mode,
+            )
+            .await
         }
         TunnelBackend::SshNative(state) => {
-            super::open_tunnel_ssh_native(stream, peer, host, port, state, response, initial_remote)
-                .await
+            super::open_tunnel_ssh_native(
+                stream,
+                peer,
+                host,
+                port,
+                state,
+                response,
+                initial_remote,
+                mode,
+            )
+            .await
         }
         TunnelBackend::QuicNative { state, kind } => {
             super::open_tunnel_quic_native(
@@ -109,6 +131,7 @@ pub(super) async fn open_tunnel(
                 state,
                 response,
                 initial_remote,
+                mode,
             )
             .await
         }

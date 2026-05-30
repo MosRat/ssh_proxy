@@ -24,6 +24,7 @@ use crate::{cli, controller, data_plane, protocol::UdpDatagram, quic_native, ssh
 mod relay;
 mod tunnel;
 
+use relay::RelayMode;
 use tunnel::{TunnelBackend, TunnelResponse};
 
 pub async fn handle_client(
@@ -69,6 +70,7 @@ pub async fn handle_fixed_target(
         TunnelBackend::spx(state),
         TunnelResponse::None,
         Vec::new(),
+        RelayMode::Raw,
     )
     .await
 }
@@ -96,6 +98,7 @@ pub async fn handle_client_ssh_native(
                 TunnelBackend::ssh_native(state),
                 TunnelResponse::SocksSuccess,
                 Vec::new(),
+                RelayMode::Raw,
             )
             .await
         }
@@ -126,6 +129,7 @@ pub async fn handle_fixed_target_ssh_native(
         TunnelBackend::ssh_native(state),
         TunnelResponse::None,
         Vec::new(),
+        RelayMode::Raw,
     )
     .await
 }
@@ -158,6 +162,7 @@ pub async fn handle_client_quic_native(
                 TunnelBackend::quic_native(state, quic_native::TargetKind::TcpConnect),
                 TunnelResponse::SocksSuccess,
                 Vec::new(),
+                RelayMode::Raw,
             )
             .await
         }
@@ -188,6 +193,7 @@ pub async fn handle_fixed_target_quic_native(
         TunnelBackend::quic_native(state, quic_native::TargetKind::FixedTcp),
         TunnelResponse::None,
         Vec::new(),
+        RelayMode::Raw,
     )
     .await
 }
@@ -208,6 +214,7 @@ async fn handle_connect(
         backend,
         TunnelResponse::SocksSuccess,
         Vec::new(),
+        RelayMode::Raw,
     )
     .await
 }
@@ -220,6 +227,7 @@ async fn open_tunnel(
     state: Arc<controller::SharedState>,
     response: TunnelResponse,
     initial_remote: Vec<u8>,
+    mode: RelayMode,
 ) -> Result<()> {
     state.record_tcp_open();
     let _guard = TcpConnGuard {
@@ -282,6 +290,7 @@ async fn open_tunnel(
         remote_flow,
         state.clone(),
         worker_slot,
+        mode,
     )
     .await;
     state.record_worker_tcp_close(worker_slot);
@@ -296,6 +305,7 @@ async fn open_tunnel_ssh_native(
     state: Arc<ssh_native::State>,
     response: TunnelResponse,
     initial_remote: Vec<u8>,
+    _mode: RelayMode,
 ) -> Result<()> {
     state.record_tcp_open();
     let _guard = SshNativeTcpConnGuard {
@@ -353,6 +363,7 @@ async fn open_tunnel_quic_native(
     state: Arc<quic_native::State>,
     response: TunnelResponse,
     initial_remote: Vec<u8>,
+    _mode: RelayMode,
 ) -> Result<()> {
     state.record_tcp_open();
     let _guard = QuicNativeTcpConnGuard {

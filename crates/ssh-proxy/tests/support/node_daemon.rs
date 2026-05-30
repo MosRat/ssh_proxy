@@ -304,6 +304,38 @@ pub fn start_http_server(body: &'static str) -> (SocketAddr, thread::JoinHandle<
     (addr, handle)
 }
 
+pub fn start_http_server_close_delimited_keep_alive(
+    body: &'static str,
+) -> (SocketAddr, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind http");
+    let addr = listener.local_addr().expect("http addr");
+    let handle = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set http read timeout");
+            let mut request = Vec::new();
+            let mut buf = [0_u8; 256];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => request.extend_from_slice(&buf[..n]),
+                    Err(_) => break,
+                }
+            }
+            let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            let proxy_header_forwarded = request.contains("\r\nproxy-connection:");
+            let origin_close_requested = request.contains("\r\nconnection: close\r\n");
+            let response = format!("HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\n{body}");
+            let _ = stream.write_all(response.as_bytes());
+            assert!(!proxy_header_forwarded, "proxy header reached origin");
+            assert!(origin_close_requested, "origin close was not requested");
+            thread::sleep(Duration::from_secs(3));
+        }
+    });
+    (addr, handle)
+}
+
 pub fn start_http_server_many(
     body: &'static str,
     max_requests: usize,
@@ -391,6 +423,22 @@ pub fn http_absolute_get(proxy: SocketAddr, target: SocketAddr) -> String {
     let mut stream = std::net::TcpStream::connect(proxy).expect("connect proxy");
     let request = format!(
         "GET http://{target}/via-http-proxy?x=1 HTTP/1.1\r\nhost: {target}\r\nconnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .expect("absolute http request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("http response");
+    response
+}
+
+pub fn http_absolute_keep_alive_get(proxy: SocketAddr, target: SocketAddr) -> String {
+    let mut stream = std::net::TcpStream::connect(proxy).expect("connect proxy");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set proxy read timeout");
+    let request = format!(
+        "GET http://{target}/close-delimited HTTP/1.1\r\nhost: {target}\r\nproxy-connection: Keep-Alive\r\n\r\n"
     );
     stream
         .write_all(request.as_bytes())

@@ -408,6 +408,23 @@ fn unified_listener_accepts_http_absolute_form_proxy_requests() {
     let _ = fs::remove_file(routes_path);
 }
 
+#[test]
+fn http_absolute_form_proxy_closes_close_delimited_keep_alive_responses() {
+    let (daemon, mut proxy_child, endpoint, proxy, routes_path, token) =
+        start_plain_tcp_proxy("plain-tcp", false, None);
+
+    let (http, http_handle) =
+        start_http_server_close_delimited_keep_alive("close-delimited-egress-ok");
+    let response = http_absolute_keep_alive_get(proxy, http);
+    assert!(response.contains("close-delimited-egress-ok"));
+
+    let _ = proxy_child.kill();
+    let _ = proxy_child.wait();
+    stop_child_with_token(daemon, &endpoint, &token);
+    let _ = http_handle.join();
+    let _ = fs::remove_file(routes_path);
+}
+
 fn run_plain_tcp_proxy_case(
     remote_transport: &str,
     allow_plain_tcp: bool,
