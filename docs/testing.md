@@ -19,6 +19,15 @@ rtk cargo test -p ssh_proxy --test build_contract
 rtk cargo check --workspace --tests
 ```
 
+Tests follow ownership boundaries. Pure `Spec`, `Intent`, `Plan`, `Policy`,
+`Report`, and `Decision` behavior belongs in the crate that owns that type:
+route policy in `ssh-proxy-route`, proxy session DTOs in `ssh-proxy-daemon`,
+service health and peer compatibility in `ssh-proxy-service`, and provider or
+remote setup rendering in `ssh-proxy-deploy`, `ssh-proxy-lifecycle`, or
+`ssh-proxy-platform`. The app crate tests should cover CLI/config adapters,
+legacy daemon JSON-line compatibility, real Tokio listener/probe behavior, and
+small smoke tests that need the `ssh_proxy` binary.
+
 Run the default fast gate after normal daemon, CLI, or extension edits:
 
 ```powershell
@@ -78,6 +87,14 @@ Add targeted Rust tests instead of the full suite when only one subsystem moved:
   `rtk cargo test -p ssh_proxy --bin ssh_proxy service`, and
   `rtk cargo test -p ssh_proxy --bin ssh_proxy diagnostics`;
 - route transport decisions and daemon route metadata: `cargo test -p ssh_proxy --bin ssh_proxy routes`;
+- pure route conflict, pool, preflight, fallback, remote-use, and route report
+  policy: `rtk cargo test -p ssh-proxy-route`;
+- daemon control JSON-line contracts:
+  `rtk cargo test -p ssh_proxy --test node_daemon_control`;
+- daemon route persistence/recovery smoke:
+  `rtk cargo test -p ssh_proxy --test node_daemon_routes -- --test-threads=1`;
+- transport runtime smoke:
+  `rtk cargo test -p ssh_proxy --test transport_smoke -- --test-threads=1`;
 - SPX runtime report and proxy tunnel adapter changes:
   `cargo test -p ssh_proxy --bin ssh_proxy controller socks`;
 - repair/report schema: `cargo test -p ssh_proxy --bin ssh_proxy repair diagnostics`;
@@ -94,6 +111,48 @@ Run the VS Code tests separately when extension code changes:
 ```powershell
 rtk npm --prefix apps/vscode-remote-proxy test
 ```
+
+## Remote E2E Gate
+
+Real SSH tests are opt-in and never part of the normal per-commit gate. Keep
+private host aliases and jump topology in local environment files only. The
+tracked example is `scripts/remote-e2e.local.example.ps1`; copy it to ignored
+`scripts/remote-e2e.local.ps1` or set the variables in your shell.
+
+Remote levels:
+
+- `probe`: verifies OpenSSH reachability and `ssh_proxy host exec` russh parity
+  for declared target aliases. It does not write remote files.
+- `smoke`: uploads the release musl sidecar, starts a temporary remote daemon
+  under `/tmp/ssh_proxy-e2e-*`, checks daemon status/routes, and cleans up.
+- `full`: extends smoke with own-binary `remote admin` checksum/status checks
+  and fallback classification assertions.
+
+Required opt-in and common knobs:
+
+```powershell
+rtk cargo zigbuild -p ssh_proxy --target x86_64-unknown-linux-musl --release
+$env:SSH_PROXY_REMOTE_E2E = "1"
+$env:SSH_PROXY_REMOTE_LEVEL = "probe" # probe, smoke, or full
+$env:SSH_PROXY_REMOTE_TARGETS = "proxyjump-alias,direct-alias"
+$env:SSH_PROXY_REMOTE_JUMP_TARGET = "proxyjump-alias"
+$env:SSH_PROXY_REMOTE_DIRECT_TARGET = "direct-alias"
+$env:SSH_PROXY_REMOTE_ACCEPT_NEW = "0"
+$env:SSH_PROXY_REMOTE_KEEP = "0"
+```
+
+Run layers explicitly:
+
+```powershell
+rtk cargo test -p ssh_proxy --test remote_e2e -- --ignored remote_probe --test-threads=1
+rtk cargo test -p ssh_proxy --test remote_e2e -- --ignored remote_smoke --test-threads=1
+rtk cargo test -p ssh_proxy --test remote_e2e -- --ignored remote_full --test-threads=1
+```
+
+Remote runs report only target alias, topology class, cleanup status, and
+failure classification. Each target gets a stamp, token, remote directory,
+daemon pidfile, control port, and transport port. Failed runs still clean up
+unless `SSH_PROXY_REMOTE_KEEP=1` is set for investigation.
 
 ## Full Local Gate
 

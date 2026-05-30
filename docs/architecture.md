@@ -214,6 +214,25 @@ paths return structured errors or compatibility reports instead of adding
 `unwrap`, `expect`, `panic`, `todo`, or `unimplemented`; test helpers and
 `#[cfg(test)]` modules are the exception.
 
+Test ownership follows the same layer map. Pure policy and report assertions
+live in the crate that owns the type: route policy in `ssh-proxy-route`, daemon
+session and control DTOs in `ssh-proxy-daemon`, service health and peer
+compatibility in `ssh-proxy-service`, deploy/lifecycle command rendering in
+`ssh-proxy-deploy` or `ssh-proxy-lifecycle`, and native/fallback outcome
+contracts in `ssh-proxy-platform`. App tests stay focused on CLI/config
+adapters, daemon JSON-line compatibility, real async probes/listeners, and
+small integration smoke. Larger app tests live under `crates/ssh-proxy/tests`
+and use `tests/support` modules instead of growing single-file harnesses.
+
+Real SSH end-to-end tests are an opt-in operational gate, not a default
+correctness gate. `remote_probe` validates OpenSSH reachability and russh
+`host exec` parity without remote writes. `remote_smoke` uses a release musl
+sidecar, an isolated `/tmp/ssh_proxy-e2e-*` directory, random token, temporary
+remote daemon, and forced cleanup. `remote_full` adds own-binary remote admin
+checksum/status checks. Private target aliases, jump topology, and upstream
+proxy values must come from local environment files; tracked docs and tests use
+only placeholder aliases.
+
 Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
 behavior in the app crate but separates control listening, listener
 orchestration, session scheduling, and active-channel counter guards into

@@ -18,7 +18,8 @@ VS Code extension that can use that binary as its forwarding kernel.
 Machine-specific notes, local tool configuration, benchmark inputs, and
 generated artifacts are ignored by Git and should stay out of public commits.
 Benchmark and E2E configuration belongs in untracked local environment files
-such as `scripts/bench.local.ps1`; commit only sanitized example templates.
+such as `scripts/bench.local.ps1` or `scripts/remote-e2e.local.ps1`; commit
+only sanitized example templates.
 
 ## Rust Workspace Organization
 
@@ -92,6 +93,14 @@ large vertical subsystems are still split by semantic module:
 - `service/`: local service planning, status adapters, and platform execution.
 - `socks/`: app-side SOCKS5H/HTTP listener dispatch, relay helpers, and
   outbound adapters. Protocol parsing lives in `ssh-proxy-transport`.
+
+Integration tests under `crates/ssh-proxy/tests/` are split by runtime surface:
+`node_daemon_control` covers daemon JSON-line/control contracts,
+`node_daemon_routes` covers route persistence/recovery smoke,
+`transport_smoke` covers local data-plane runtime behavior, and `remote_e2e`
+contains ignored real SSH probe/smoke/full gates. Shared test code lives under
+`crates/ssh-proxy/tests/support/`; large harnesses should use submodules rather
+than accumulating long single-file tests.
 
 Intent/runtime layering rules:
 
