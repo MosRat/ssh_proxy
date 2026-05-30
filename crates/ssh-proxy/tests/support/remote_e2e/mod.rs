@@ -61,7 +61,7 @@ fn probe_target(config: &RemoteConfig, target: &str) {
     let openssh = run_output(openssh_command(
         target,
         config.accept_new,
-        "printf 'openssh:ok\n'",
+        "printf '%s\\n' openssh:ok",
     ));
     assert_success(
         "openssh_probe",
@@ -71,7 +71,7 @@ fn probe_target(config: &RemoteConfig, target: &str) {
         "OpenSSH reachability probe failed",
     );
 
-    let script = "printf 'russh:ok\n'";
+    let script = "printf '%s\\n' russh:ok";
     let russh = run_with_stdin(
         russh_host_exec_command(
             target,

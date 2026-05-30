@@ -13,6 +13,7 @@ pub(super) fn openssh_command_for_target(
     accept_new: bool,
     remote_commands: &[&str],
 ) -> Command {
+    let remote_script = remote_commands.join("; ");
     let mut command = Command::new("ssh");
     command
         .arg("-o")
@@ -26,9 +27,7 @@ pub(super) fn openssh_command_for_target(
             "StrictHostKeyChecking=yes"
         })
         .arg(target)
-        .arg("sh")
-        .arg("-lc")
-        .arg(remote_commands.join("; "));
+        .arg(format!("sh -lc {}", sh_quote(&remote_script)));
     command
 }
 
