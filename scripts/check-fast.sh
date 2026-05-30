@@ -121,7 +121,7 @@ if [ "$SKIP_RUST" != "1" ]; then
     # shellcheck disable=SC2086
     cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --bin ssh_proxy node_daemon::handoff
     # shellcheck disable=SC2086
-    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test node_daemon node_daemon_reuses_duplicate_route_start_for_same_spec -- --test-threads=1
+    cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test node_daemon_control node_daemon_reuses_duplicate_route_start_for_same_spec -- --test-threads=1
     if [ "$CONTRACTS" = "1" ]; then
       # shellcheck disable=SC2086
       cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test build_contract
@@ -130,7 +130,7 @@ if [ "$SKIP_RUST" != "1" ]; then
     fi
     if [ "$TRANSPORT" = "1" ]; then
       # shellcheck disable=SC2086
-      cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test node_daemon fixed_tcp_target_can_proxy_to_specific_port -- --test-threads=1
+      cargo $CARGO_CONFIG_ARGS test -p ssh_proxy --test transport_smoke fixed_tcp_target_can_proxy_to_specific_port -- --test-threads=1
     fi
   fi
 
