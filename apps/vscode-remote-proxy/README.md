@@ -4,6 +4,12 @@ VS Code extension that reverse-forwards a local proxy into a remote VS Code wind
 
 The first supported target is Remote SSH. WSL and Dev Containers are detected but intentionally left as extension points because they need different forwarding strategies.
 
+OpenSSH is the default backend for the `0.0.x` release line. Set
+`remoteProxy.backend` to `ssh_proxy` explicitly to use the binary backend, or
+to `auto` to prefer `ssh_proxy` and fall back to OpenSSH when it is unavailable.
+Remote setup also defaults to OpenSSH; set `remoteProxy.sshProxy.remoteSetup`
+to `auto` or `ssh_proxy` only when binary-backed remote commands are desired.
+
 ## What it does
 
 - Detects a local proxy from `remoteProxy.localProxy.url`, `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, or the configured local proxy port list.

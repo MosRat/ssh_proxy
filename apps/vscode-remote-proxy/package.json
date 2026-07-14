@@ -2,7 +2,7 @@
   "name": "vscode-remote-proxy",
   "displayName": "Remote Proxy Auto Forward",
   "description": "Automatically reverse-forward a local proxy into VS Code Remote SSH and apply proxy settings for terminals, extensions, and Git.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "MosRat-2333",
   "license": "MIT",
   "repository": {
@@ -124,8 +124,8 @@
             "ssh_proxy",
             "openssh"
           ],
-          "default": "auto",
-          "description": "Choose the forwarding backend. auto prefers ssh_proxy and falls back to OpenSSH."
+          "default": "openssh",
+          "description": "Choose the forwarding backend. OpenSSH is the default for 0.0.x releases; select ssh_proxy explicitly to use the binary backend."
         },
         "remoteProxy.localProxy.mode": {
           "type": "string",
@@ -339,8 +339,8 @@
             "ssh_proxy",
             "openssh"
           ],
-          "default": "auto",
-          "description": "Choose the remote setup command runner used after a kernel route starts."
+          "default": "openssh",
+          "description": "Choose the remote setup command runner. OpenSSH is the default for 0.0.x releases; select auto or ssh_proxy explicitly to use ssh_proxy host exec."
         },
         "remoteProxy.forward.retryOnExit": {
           "type": "boolean",
@@ -471,7 +471,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "kernel:stage": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/stage-vscode-extension-binaries.ps1",
-    "test": "npm run compile && node --test test/sshProxyRouteArgs.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/proxyLeaseRecord.test.js test/proxyLease.test.js test/portPersistence.test.js test/reliabilityPolicy.test.js test/statusDisplay.test.js test/remoteSetupScripts.test.js test/remoteCommandRunnerUtils.test.js test/remoteSetupRunnerPolicy.test.js test/routeOwnership.test.js test/sshProxyDiscovery.test.js",
+    "test": "npm run compile && node --test test/sshAuthority.test.js test/sshProxyRouteArgs.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/proxyLeaseRecord.test.js test/proxyLease.test.js test/portPersistence.test.js test/reliabilityPolicy.test.js test/statusDisplay.test.js test/remoteSetupScripts.test.js test/remoteCommandRunnerUtils.test.js test/remoteSetupRunnerPolicy.test.js test/routeOwnership.test.js test/sshProxyDiscovery.test.js",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "package:with-kernel": "npm run kernel:stage && vsce package",

@@ -7,7 +7,7 @@ export function readConfig(): RemoteProxyConfig {
   return {
     enabled: config.get<boolean>('enabled', true),
     autoStart: config.get<boolean>('autoStart', true),
-    backend: config.get<'auto' | 'ssh_proxy' | 'openssh'>('backend', 'auto'),
+    backend: config.get<'auto' | 'ssh_proxy' | 'openssh'>('backend', 'openssh'),
     localProxyMode: config.get<'auto' | 'env' | 'manual'>('localProxy.mode', 'auto'),
     localProxyUrl: config.get<string>('localProxy.url', ''),
     localProxyHosts: config.get<readonly string[]>('localProxy.hosts', ['127.0.0.1', 'localhost']),
@@ -26,7 +26,7 @@ export function readConfig(): RemoteProxyConfig {
     sshProxyAutoInstallLocalService: config.get<boolean>('sshProxy.autoInstallLocalService', true),
     sshProxyConnectMode: config.get<'auto' | 'reverse-link' | 'direct'>('sshProxy.connectMode', 'reverse-link'),
     sshProxyRouteVolatile: config.get<boolean>('sshProxy.routeVolatile', true),
-    sshProxyRemoteSetup: config.get<'auto' | 'ssh_proxy' | 'openssh'>('sshProxy.remoteSetup', 'auto'),
+    sshProxyRemoteSetup: config.get<'auto' | 'ssh_proxy' | 'openssh'>('sshProxy.remoteSetup', 'openssh'),
     sshBatchMode: config.get<boolean>('ssh.batchMode', true),
     sshConnectTimeout: config.get<number>('ssh.connectTimeout', 12),
     sshServerAliveInterval: config.get<number>('ssh.serverAliveInterval', 60),

@@ -10,9 +10,9 @@ const ROOT = path.resolve(__dirname, '..');
 const requiredSettings = {
   'remoteProxy.backend': {
     type: 'string',
-    default: 'auto',
+    default: 'openssh',
     enum: ['auto', 'ssh_proxy', 'openssh'],
-    configRead: "config.get<'auto' | 'ssh_proxy' | 'openssh'>('backend', 'auto')",
+    configRead: "config.get<'auto' | 'ssh_proxy' | 'openssh'>('backend', 'openssh')",
     typeField: 'readonly backend: ForwardingBackendKind;',
   },
   'remoteProxy.sshProxy.executable': {
@@ -42,9 +42,9 @@ const requiredSettings = {
   },
   'remoteProxy.sshProxy.remoteSetup': {
     type: 'string',
-    default: 'auto',
+    default: 'openssh',
     enum: ['auto', 'ssh_proxy', 'openssh'],
-    configRead: "config.get<'auto' | 'ssh_proxy' | 'openssh'>('sshProxy.remoteSetup', 'auto')",
+    configRead: "config.get<'auto' | 'ssh_proxy' | 'openssh'>('sshProxy.remoteSetup', 'openssh')",
     typeField: 'readonly sshProxyRemoteSetup: RemoteSetupMode;',
   },
   'remoteProxy.forward.healthCheckFailureThreshold': {
@@ -61,7 +61,7 @@ const requiredSettings = {
   },
 };
 
-test('contributes ssh_proxy kernel settings with stable defaults', () => {
+test('contributes backend settings with OpenSSH as the 0.0.x default', () => {
   const properties = manifest.contributes.configuration.properties;
   for (const [key, expected] of Object.entries(requiredSettings)) {
     const setting = properties[key];
@@ -73,6 +73,13 @@ test('contributes ssh_proxy kernel settings with stable defaults', () => {
     }
     assert.match(setting.description, /\S/, `${key} description`);
   }
+});
+
+test('keeps every 0.0.x default execution path on OpenSSH', () => {
+  assert.match(manifest.version, /^0\.0\./);
+  const properties = manifest.contributes.configuration.properties;
+  assert.equal(properties['remoteProxy.backend'].default, 'openssh');
+  assert.equal(properties['remoteProxy.sshProxy.remoteSetup'].default, 'openssh');
 });
 
 test('reads ssh_proxy kernel settings into the typed config object', () => {
