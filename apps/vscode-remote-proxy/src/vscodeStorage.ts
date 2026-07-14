@@ -1,7 +1,10 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { parseSshAuthority } from './sshAuthority';
 import { SshTargetConfig } from './types';
+
+export { parseSshAuthority } from './sshAuthority';
 
 export interface DetectedSshHost {
   readonly host: string;
@@ -104,25 +107,6 @@ async function findWorkspaceJson(start: string | undefined): Promise<string | un
   }
 
   return undefined;
-}
-
-export function parseSshAuthority(authority: string): { host: string; authority: string } | undefined {
-  const normalized = authority.replace(/^vscode-remote:\/\//, '');
-  const prefix = 'ssh-remote+';
-  if (!normalized.startsWith(prefix)) {
-    return undefined;
-  }
-
-  const raw = normalized.slice(prefix.length).split(/[/?#]/, 1)[0];
-  if (!raw) {
-    return undefined;
-  }
-
-  try {
-    return { host: decodeURIComponent(raw), authority: `ssh-remote+${raw}` };
-  } catch {
-    return { host: raw, authority: `ssh-remote+${raw}` };
-  }
 }
 
 function findAuthorityStrings(value: unknown): Array<{ value: string; source: string }> {

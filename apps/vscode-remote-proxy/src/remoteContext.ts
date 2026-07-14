@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { parseSshHostAuthority } from './sshAuthority';
 import { RemoteContext, SupportedRemoteKind } from './types';
 
 export function getRemoteContext(sshHostOverride: string): RemoteContext {
@@ -61,16 +62,5 @@ function parseSshHost(authority: string | undefined): string | undefined {
   if (!authority) {
     return undefined;
   }
-
-  const prefix = 'ssh-remote+';
-  const raw = authority.startsWith(prefix) ? authority.slice(prefix.length) : authority;
-  if (!raw) {
-    return undefined;
-  }
-
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
+  return parseSshHostAuthority(authority);
 }

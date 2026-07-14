@@ -361,7 +361,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "kernel:stage": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/stage-vscode-extension-binaries.ps1",
-    "test": "npm run compile && node --test test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/commandDefinitions.test.js test/reliabilityPolicy.test.js test/healthMonitor.test.js test/startupCoordinator.test.js test/remoteProxyMenu.test.js test/quickPickItems.test.js test/diagnosticsPresenter.test.js test/statusDisplay.test.js test/sshProxyDiscovery.test.js",
+    "test": "npm run compile && node --test test/sshAuthority.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/commandDefinitions.test.js test/reliabilityPolicy.test.js test/healthMonitor.test.js test/startupCoordinator.test.js test/remoteProxyMenu.test.js test/quickPickItems.test.js test/diagnosticsPresenter.test.js test/statusDisplay.test.js test/sshProxyDiscovery.test.js",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "package:with-kernel": "npm run kernel:stage && vsce package",
