@@ -2,9 +2,10 @@
   "name": "vscode-remote-proxy",
   "displayName": "Remote Proxy Auto Forward",
   "description": "Automatically reverse-forward a local proxy into VS Code Remote SSH and apply proxy settings for terminals, extensions, and Git.",
-  "version": "0.0.5",
+  "version": "0.1.2",
   "publisher": "MosRat-2333",
   "license": "MIT",
+  "icon": "assets/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/MosRat/ssh_proxy.git",
@@ -116,16 +117,6 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically start forwarding when a supported remote window opens."
-        },
-        "remoteProxy.backend": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "ssh_proxy",
-            "openssh"
-          ],
-          "default": "openssh",
-          "description": "Choose the forwarding backend. OpenSSH is the default for 0.0.x releases; select ssh_proxy explicitly to use the binary backend."
         },
         "remoteProxy.localProxy.mode": {
           "type": "string",
@@ -254,11 +245,6 @@
             }
           }
         },
-        "remoteProxy.ssh.executable": {
-          "type": "string",
-          "default": "ssh",
-          "description": "SSH executable used for reverse forwarding and remote setup."
-        },
         "remoteProxy.ssh.host": {
           "type": "string",
           "default": "",
@@ -269,53 +255,10 @@
           "default": false,
           "description": "Allow automatic SSH host detection from VS Code globalStorage when no current-window signal is available. Disabled by default because this storage can be stale in Extension Development Host windows."
         },
-        "remoteProxy.ssh.args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Extra arguments passed to ssh before the host."
-        },
-        "remoteProxy.ssh.batchMode": {
-          "type": "boolean",
-          "default": true,
-          "description": "Pass BatchMode=yes to ssh so background commands fail instead of waiting for an interactive password prompt."
-        },
-        "remoteProxy.ssh.connectTimeout": {
-          "type": "number",
-          "default": 12,
-          "minimum": 1,
-          "description": "SSH ConnectTimeout in seconds."
-        },
-        "remoteProxy.ssh.serverAliveInterval": {
-          "type": "number",
-          "default": 60,
-          "minimum": 1,
-          "maximum": 3600,
-          "description": "SSH ServerAliveInterval in seconds for the background reverse tunnel."
-        },
-        "remoteProxy.ssh.serverAliveCountMax": {
-          "type": "number",
-          "default": 3,
-          "minimum": 1,
-          "maximum": 30,
-          "description": "SSH ServerAliveCountMax for the background reverse tunnel."
-        },
-        "remoteProxy.ssh.tcpKeepAlive": {
-          "type": "boolean",
-          "default": true,
-          "description": "Pass TCPKeepAlive=yes to the background SSH reverse tunnel."
-        },
         "remoteProxy.sshProxy.executable": {
           "type": "string",
           "default": "ssh_proxy",
           "description": "ssh_proxy executable used by the kernel backend."
-        },
-        "remoteProxy.sshProxy.autoInstallLocalService": {
-          "type": "boolean",
-          "default": true,
-          "description": "Install or repair the local ssh_proxy service before creating a kernel route."
         },
         "remoteProxy.sshProxy.connectMode": {
           "type": "string",
@@ -324,35 +267,8 @@
             "reverse-link",
             "direct"
           ],
-          "default": "reverse-link",
-          "description": "Route connect mode used by the ssh_proxy kernel backend."
-        },
-        "remoteProxy.sshProxy.routeVolatile": {
-          "type": "boolean",
-          "default": true,
-          "description": "Create kernel routes as volatile by default."
-        },
-        "remoteProxy.sshProxy.remoteSetup": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "ssh_proxy",
-            "openssh"
-          ],
-          "default": "openssh",
-          "description": "Choose the remote setup command runner. OpenSSH is the default for 0.0.x releases; select auto or ssh_proxy explicitly to use ssh_proxy host exec."
-        },
-        "remoteProxy.forward.retryOnExit": {
-          "type": "boolean",
-          "default": true,
-          "description": "Restart the SSH reverse-forward process if it exits unexpectedly."
-        },
-        "remoteProxy.forward.retryDelaySeconds": {
-          "type": "number",
-          "default": 5,
-          "minimum": 1,
-          "maximum": 300,
-          "description": "Delay before restarting the SSH reverse-forward process after an unexpected exit."
+          "default": "auto",
+          "description": "Route connect mode used by the ssh_proxy kernel backend. Auto lets the daemon prefer the persistent remote peer and fall back when topology requires it."
         },
         "remoteProxy.forward.restartOnHostChange": {
           "type": "boolean",
@@ -362,7 +278,7 @@
         "remoteProxy.forward.verifyAfterStart": {
           "type": "boolean",
           "default": true,
-          "description": "Verify that the remote forwarded port accepts TCP connections after starting ssh -R."
+          "description": "Ask the daemon to verify that the remote forwarded port accepts TCP connections."
         },
         "remoteProxy.forward.healthCheckEnabled": {
           "type": "boolean",
@@ -382,32 +298,6 @@
           "minimum": 1,
           "maximum": 10,
           "description": "Consecutive failed health checks required before restarting an active proxy route."
-        },
-        "remoteProxy.forward.restartBackoffMaxSeconds": {
-          "type": "number",
-          "default": 30,
-          "minimum": 5,
-          "maximum": 600,
-          "description": "Maximum exponential backoff delay before restarting after repeated health check failures."
-        },
-        "remoteProxy.singleton.reuseEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Reuse one local ssh -R proxy tunnel across multiple VS Code windows connected to the same SSH user and server."
-        },
-        "remoteProxy.singleton.leaseTtlSeconds": {
-          "type": "number",
-          "default": 20,
-          "minimum": 5,
-          "maximum": 300,
-          "description": "How long a tunnel lease heartbeat remains fresh before another window may take over."
-        },
-        "remoteProxy.singleton.startLockTimeoutSeconds": {
-          "type": "number",
-          "default": 15,
-          "minimum": 1,
-          "maximum": 120,
-          "description": "How long a window waits for another window's in-progress proxy start before taking over a stale start lock."
         },
         "remoteProxy.apply.vscodeSettings": {
           "type": "boolean",
@@ -471,7 +361,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "kernel:stage": "pwsh -NoProfile -ExecutionPolicy Bypass -File ../../scripts/stage-vscode-extension-binaries.ps1",
-    "test": "npm run compile && node --test test/sshAuthority.test.js test/sshProxyRouteArgs.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/proxyLeaseRecord.test.js test/proxyLease.test.js test/portPersistence.test.js test/reliabilityPolicy.test.js test/statusDisplay.test.js test/remoteSetupScripts.test.js test/remoteCommandRunnerUtils.test.js test/remoteSetupRunnerPolicy.test.js test/routeOwnership.test.js test/sshProxyDiscovery.test.js",
+    "test": "npm run compile && node --test test/sshAuthority.test.js test/sshProxyCli.test.js test/sshProxyKernelStatus.test.js test/packageConfig.test.js test/commandDefinitions.test.js test/reliabilityPolicy.test.js test/healthMonitor.test.js test/startupCoordinator.test.js test/remoteProxyMenu.test.js test/quickPickItems.test.js test/diagnosticsPresenter.test.js test/statusDisplay.test.js test/sshProxyDiscovery.test.js",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "package:with-kernel": "npm run kernel:stage && vsce package",

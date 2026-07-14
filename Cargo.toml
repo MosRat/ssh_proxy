@@ -1,6 +1,10 @@
-[package]
-name = "ssh_proxy"
-version = "0.1.0"
+[workspace]
+members = ["crates/*"]
+default-members = ["crates/ssh-proxy"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.2"
 edition = "2024"
 description = "A peer-oriented SSH bootstrap and proxy routing daemon with SSH fallback, TLS/TCP, and QUIC transports."
 license = "MIT"
@@ -10,7 +14,7 @@ repository = "https://github.com/MosRat/ssh_proxy"
 keywords = ["ssh", "proxy", "tunnel", "quic", "daemon"]
 categories = ["command-line-utilities", "network-programming"]
 
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0.102"
 bytes = "1.11.1"
 clap = { version = "4.6.1", features = ["derive"] }
@@ -19,17 +23,33 @@ dirs = "6.0.0"
 getrandom = "0.4.2"
 mimalloc = "0.1.51"
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = "0.14.8"
 russh = { version = "0.61.0", default-features = false, features = ["ring", "rsa", "flate2"] }
 rustls-pemfile = "2.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
+ssh-proxy-cli = { path = "crates/ssh-proxy-cli" }
+ssh-proxy-config = { path = "crates/ssh-proxy-config" }
+ssh-proxy-control = { path = "crates/ssh-proxy-control" }
+ssh-proxy-core = { path = "crates/ssh-proxy-core" }
+ssh-proxy-daemon = { path = "crates/ssh-proxy-daemon" }
+ssh-proxy-deploy = { path = "crates/ssh-proxy-deploy" }
+ssh-proxy-lifecycle = { path = "crates/ssh-proxy-lifecycle" }
+ssh-proxy-platform = { path = "crates/ssh-proxy-platform" }
+ssh-proxy-protocol = { path = "crates/ssh-proxy-protocol" }
+ssh-proxy-route = { path = "crates/ssh-proxy-route" }
+ssh-proxy-service = { path = "crates/ssh-proxy-service" }
+ssh-proxy-ssh = { path = "crates/ssh-proxy-ssh" }
+ssh-proxy-transport = { path = "crates/ssh-proxy-transport" }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "net", "io-util", "io-std", "sync", "time", "fs"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "logging", "tls12"] }
 toml = "1.1.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 whoami = "2.1.2"
+windows-service = "0.8.1"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Memory", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 opt-level = 3
@@ -47,9 +67,3 @@ codegen-units = 256
 debug = 1
 incremental = true
 codegen-units = 256
-
-[dev-dependencies]
-rcgen = "0.14.8"
-
-[build-dependencies]
-sha2 = "0.11.0"

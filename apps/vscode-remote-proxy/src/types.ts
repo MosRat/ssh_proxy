@@ -1,8 +1,7 @@
 export type LocalProxyMode = 'auto' | 'env' | 'manual';
 export type ProxyScheme = 'http' | 'https' | 'socks4' | 'socks5';
 export type SupportedRemoteKind = 'ssh' | 'wsl' | 'dev-container' | 'none' | 'other';
-export type ForwardingBackendKind = 'auto' | 'ssh_proxy' | 'openssh';
-export type RemoteSetupMode = 'auto' | 'ssh_proxy' | 'openssh';
+export type ForwardingBackendKind = 'ssh_proxy';
 export type SshProxyConnectMode = 'auto' | 'reverse-link' | 'direct';
 
 export interface LocalProxy {
@@ -24,7 +23,6 @@ export interface RemoteContext {
 export interface RemoteProxyConfig {
   readonly enabled: boolean;
   readonly autoStart: boolean;
-  readonly backend: ForwardingBackendKind;
   readonly localProxyMode: LocalProxyMode;
   readonly localProxyUrl: string;
   readonly localProxyHosts: readonly string[];
@@ -35,31 +33,15 @@ export interface RemoteProxyConfig {
   readonly remotePortRangeSize: number;
   readonly remoteBindHost: string;
   readonly noProxy: string;
-  readonly sshExecutable: string;
   readonly sshHostOverride: string;
   readonly sshUseStorageFallback: boolean;
-  readonly sshArgs: readonly string[];
   readonly sshProxyExecutable: string;
-  readonly sshProxyAutoInstallLocalService: boolean;
   readonly sshProxyConnectMode: SshProxyConnectMode;
-  readonly sshProxyRouteVolatile: boolean;
-  readonly sshProxyRemoteSetup: RemoteSetupMode;
-  readonly sshBatchMode: boolean;
-  readonly sshConnectTimeout: number;
-  readonly sshServerAliveInterval: number;
-  readonly sshServerAliveCountMax: number;
-  readonly sshTcpKeepAlive: boolean;
-  readonly retryOnExit: boolean;
-  readonly retryDelaySeconds: number;
   readonly restartOnHostChange: boolean;
   readonly verifyAfterStart: boolean;
   readonly healthCheckEnabled: boolean;
   readonly healthCheckIntervalSeconds: number;
   readonly healthCheckFailureThreshold: number;
-  readonly restartBackoffMaxSeconds: number;
-  readonly singletonReuseEnabled: boolean;
-  readonly singletonLeaseTtlSeconds: number;
-  readonly singletonStartLockTimeoutSeconds: number;
   readonly applyVscodeSettings: boolean;
   readonly applyRemoteMachineSettings: boolean;
   readonly applyTerminalEnv: boolean;
@@ -89,6 +71,8 @@ export interface AppliedProxy {
   readonly remoteUrl: string;
   readonly remotePort: number;
   readonly remoteBindHost: string;
+  readonly sshTarget?: SshTargetConfig;
+  readonly workspaceId?: string;
   readonly routeId?: string;
   readonly routeOwner?: string;
   readonly selectedTransport?: string;
@@ -96,4 +80,15 @@ export interface AppliedProxy {
   readonly fallbackReason?: string;
   readonly backend?: ForwardingBackendKind;
   readonly cleanupCommand?: string;
+}
+
+export interface SshTargetConfig {
+  readonly hostName?: string;
+  readonly user?: string;
+  readonly port?: number;
+  readonly identityFiles?: readonly string[];
+  readonly configFile?: string;
+  readonly knownHostsFile?: string;
+  readonly proxyJump?: readonly string[];
+  readonly acceptNew?: boolean;
 }

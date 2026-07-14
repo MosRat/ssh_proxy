@@ -1,9 +1,12 @@
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import {
-  buildSshProxyServiceStatusArgs,
-  buildSshProxyRoutesArgs,
-  buildSshProxyStopRouteArgs,
+  buildSshProxyDaemonInstallArgs,
+  buildSshProxyDoctorArgs,
+  buildSshProxyDownArgs,
+  buildSshProxyVscodeApplySettingsArgs,
+  buildSshProxyVscodeStatusArgs,
+  buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
   normalizeSshProxyExecutable,
   parseSshProxyJson,
@@ -15,6 +18,7 @@ import {
   SshProxyExecutableDiscovery,
   SshProxyExecutableDiscoveryOptions,
 } from './sshProxyDiscovery';
+import { SshTargetConfig } from './types';
 
 export interface CommandResult {
   readonly exitCode: number;
@@ -24,6 +28,7 @@ export interface CommandResult {
 
 export interface SshProxyRunOptions {
   readonly label?: string;
+  readonly logCommand?: boolean;
   readonly timeoutMs?: number;
 }
 
@@ -35,11 +40,10 @@ export interface AvailableSshProxyCli {
 
 const DEFAULT_RUN_TIMEOUT_MS = 30_000;
 const AVAILABLE_TIMEOUT_MS = 3_000;
-const SERVICE_STATUS_TIMEOUT_MS = 5_000;
-const SERVICE_INSTALL_TIMEOUT_MS = 60_000;
 const ROUTE_TIMEOUT_MS = 60_000;
 const STOP_ROUTE_TIMEOUT_MS = 15_000;
 const ROUTES_STATUS_TIMEOUT_MS = 10_000;
+const DAEMON_INSTALL_TIMEOUT_MS = 180_000;
 
 export class SshProxyCli {
   private readonly executable: string;
@@ -60,69 +64,81 @@ export class SshProxyCli {
     }
   }
 
-  public async serviceStatusJson(): Promise<unknown> {
-    return this.runJson(buildSshProxyServiceStatusArgs(), undefined, {
-      label: 'ssh_proxy service status',
-      timeoutMs: SERVICE_STATUS_TIMEOUT_MS,
-    });
-  }
-
-  public async serviceInstall(scope: 'user' | 'system' = 'user'): Promise<void> {
-    await this.run(['service', '--scope', scope, 'install'], undefined, {
-      label: 'ssh_proxy service install',
-      timeoutMs: SERVICE_INSTALL_TIMEOUT_MS,
-    });
-  }
-
-  public async routeExplainJson(args: readonly string[]): Promise<unknown> {
-    return this.runJson([...args, '--explain', '--json'], undefined, {
-      label: 'ssh_proxy route explain',
+  public async vscodeUpJson(options: {
+    readonly target: string;
+    readonly workspace: string;
+    readonly localProxy: string;
+    readonly remoteBind: string;
+    readonly remotePort: number;
+    readonly remoteAutoPickPort?: boolean;
+    readonly remotePortRangeSize?: number;
+    readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+    readonly sshTarget?: SshTargetConfig;
+    readonly workspacePaths?: readonly string[];
+    readonly serverDir?: string;
+    readonly noProxy?: string;
+    readonly proxySupport?: string;
+    readonly applyRemoteMachineSettings?: boolean;
+    readonly applyTerminalEnv?: boolean;
+    readonly applyServerEnvSetup?: boolean;
+    readonly applyGitConfig?: boolean;
+    readonly applyGitGlobalConfig?: boolean;
+    readonly applyGitWorkspaceConfig?: boolean;
+    readonly applyGitForceOverride?: boolean;
+    readonly applyRemoteStatusFile?: boolean;
+    readonly verifyRemotePort?: boolean;
+  }): Promise<unknown> {
+    return this.runJson(buildSshProxyVscodeUpArgs(options), undefined, {
+      label: 'ssh_proxy vscode up',
       timeoutMs: ROUTE_TIMEOUT_MS,
     });
   }
 
-  public async routeStartJson(args: readonly string[]): Promise<unknown> {
-    return this.runJson([...args, '--json'], undefined, {
-      label: 'ssh_proxy route start',
-      timeoutMs: ROUTE_TIMEOUT_MS,
-    });
-  }
-
-  public async stopRouteJson(id: string): Promise<unknown> {
-    return this.runJson(buildSshProxyStopRouteArgs(id), undefined, {
-      label: 'ssh_proxy stop route',
-      timeoutMs: STOP_ROUTE_TIMEOUT_MS,
-    });
-  }
-
-  public async routesJson(): Promise<unknown> {
-    return this.runJson(buildSshProxyRoutesArgs(), undefined, {
-      label: 'ssh_proxy node routes',
+  public async vscodeStatusJson(options: {
+    readonly workspace?: string;
+    readonly target?: string;
+  }, runOptions: Pick<SshProxyRunOptions, 'logCommand'> = {}): Promise<unknown> {
+    return this.runJson(buildSshProxyVscodeStatusArgs(options), undefined, {
+      label: 'ssh_proxy vscode status',
+      logCommand: runOptions.logCommand,
       timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
     });
   }
 
-  public async hostExecJson(
-    host: string,
-    hostArgs: readonly string[],
-    script: string,
-    label: string,
-    timeoutSecs: number,
-  ): Promise<unknown> {
-    const timeoutMs = hostExecTimeoutMs(timeoutSecs);
-    return this.runJson(
-      ['host', host, ...hostArgs, 'exec', '--stdin', '--label', label, '--timeout-secs', String(timeoutSecs), '--json'],
-      script,
-      { label: `ssh_proxy host exec ${label}`, timeoutMs },
-    );
+  public async vscodeApplySettingsJson(options: {
+    readonly target: string;
+    readonly workspace: string;
+    readonly proxyUrl: string;
+  }): Promise<unknown> {
+    return this.runJson(buildSshProxyVscodeApplySettingsArgs(options), undefined, {
+      label: 'ssh_proxy vscode apply-settings',
+      timeoutMs: ROUTE_TIMEOUT_MS,
+    });
   }
 
-  public async hostExec(host: string, hostArgs: readonly string[], script: string, label: string, timeoutSecs: number): Promise<CommandResult> {
-    return this.run(
-      ['host', host, ...hostArgs, 'exec', '--stdin', '--label', label, '--timeout-secs', String(timeoutSecs), '--json'],
-      script,
-      { label: `ssh_proxy host exec ${label}`, timeoutMs: hostExecTimeoutMs(timeoutSecs) },
-    );
+  public async downJson(options: {
+    readonly routeId?: string;
+    readonly workspace?: string;
+    readonly target?: string;
+  }): Promise<unknown> {
+    return this.runJson(buildSshProxyDownArgs(options), undefined, {
+      label: 'ssh_proxy down',
+      timeoutMs: STOP_ROUTE_TIMEOUT_MS,
+    });
+  }
+
+  public async installDaemonElevated(): Promise<CommandResult> {
+    return this.run(buildSshProxyDaemonInstallArgs({ scope: 'system', elevate: true, json: true }), undefined, {
+      label: 'ssh_proxy daemon install',
+      timeoutMs: DAEMON_INSTALL_TIMEOUT_MS,
+    });
+  }
+
+  public async doctorReportJson(): Promise<unknown> {
+    return this.runJson(buildSshProxyDoctorArgs({ report: true, json: true }), undefined, {
+      label: 'ssh_proxy doctor',
+      timeoutMs: ROUTES_STATUS_TIMEOUT_MS,
+    });
   }
 
   public async run(args: readonly string[], input?: string, options: SshProxyRunOptions = {}): Promise<CommandResult> {
@@ -149,7 +165,9 @@ export class SshProxyCli {
         resolve(result ?? { exitCode: 0, stdout: '', stderr: '' });
       };
 
-      this.output.appendLine(command);
+      if (options.logCommand !== false) {
+        this.output.appendLine(command);
+      }
       const child = spawn(this.executable, [...args], {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -230,6 +248,3 @@ export async function findAvailableSshProxyCli(
   return undefined;
 }
 
-function hostExecTimeoutMs(timeoutSecs: number): number {
-  return Math.max(5, timeoutSecs + 5) * 1000;
-}

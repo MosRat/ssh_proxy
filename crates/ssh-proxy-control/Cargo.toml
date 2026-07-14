@@ -1,0 +1,20 @@
+[package]
+name = "ssh-proxy-control"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+ssh-proxy-config.workspace = true
+tokio.workspace = true
+
+[target."cfg(windows)".dependencies]
+windows-sys.workspace = true

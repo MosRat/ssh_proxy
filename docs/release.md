@@ -15,17 +15,88 @@
 
 ## Check
 
+For testing strategy and day-to-day gate selection, see
+[`docs/testing.md`](testing.md).
+
+For fast local iteration, run the fast gate:
+
+```powershell
+pwsh -NoProfile -File scripts/check-fast.ps1
+```
+
+The fast gate keeps `SSH_PROXY_ALLOW_MISSING_SIDECAR=1` for non-release Rust
+checks, auto-enables `sccache` when it is installed, temporarily disables the
+dev/test incremental profile for cacheable sccache calls, and always runs
+`cargo check --workspace --tests` first.
+
+By default it runs a smoke/core Rust set: handoff unit tests plus one daemon
+route lifecycle integration test. This is the normal edit loop after code
+changes. Add `-Contracts` to include build-contract checks and one CLI
+production-surface test. Add `-Transport` to include a single transport
+data-plane smoke test. Add `-Full` when the smoke set fails, before handoff, or
+before packaging; full mode uses `cargo nextest run --workspace --tests` when
+`cargo-nextest` is available and falls back to single-threaded
+`cargo test --workspace --tests` otherwise to reduce integration-test port and timing
+noise. Without `sccache`, Cargo keeps using the dev/test incremental profiles.
+It finishes with the VS Code extension test suite. The Unix shell variant is:
+
+```sh
+scripts/check-fast.sh
+```
+
+Unix options mirror PowerShell: `--contracts`, `--transport`, `--full`,
+`--skip-rust`, `--skip-vscode`, `--install-node-modules`, `--no-sccache`, and
+`--no-process-cleanup`.
+
+For the full local gate, run:
+
 ```powershell
 pwsh -NoProfile -File scripts/check-all.ps1
 ```
 
 The check script sets `SSH_PROXY_ALLOW_MISSING_SIDECAR=1` for non-release Rust
-checks, then runs:
+checks, stops stale workspace debug test processes before and after Rust tests,
+then runs:
 
 - `cargo fmt -- --check`
-- `cargo check`
-- `cargo test --tests`
+- `cargo check --workspace`
+- `cargo test --workspace --tests`
 - `npm --prefix apps/vscode-remote-proxy test`
+
+For a local production gate before packaging or publishing, run the explicit
+commands as well:
+
+```powershell
+cargo test --workspace --tests
+cargo build -p ssh_proxy --release
+cargo zigbuild -p ssh_proxy --target x86_64-unknown-linux-musl --release
+npm --prefix apps/vscode-remote-proxy test
+npm --prefix apps/vscode-remote-proxy run package:with-kernel
+```
+
+For a single local prerelease pass that keeps the normal edit loop targeted,
+builds both Rust release artifacts, stages extension kernels, runs extension
+tests, packages the VSIX, and optionally opens an Extension Development Host,
+use:
+
+```powershell
+pwsh -NoProfile -File scripts/prerelease-local.ps1
+```
+
+Useful options:
+
+- `-CleanLocalState`: stop/uninstall local daemon services best-effort and
+  remove the default `$HOME\.ssh_proxy` state before staging the extension.
+- `-CleanProgramData`: additionally remove `%ProgramData%\ssh_proxy`; use this
+  only when you explicitly want to discard local installed daemon binaries.
+- `-LaunchVscode`: open VS Code with
+  `apps/vscode-remote-proxy` as `--extensionDevelopmentPath`.
+- `-FullRust`: add `cargo test --workspace --tests -- --test-threads=1`.
+- `-SkipPackage`: leave a staged debug environment without producing a VSIX.
+
+The script uses `sccache` when available, keeps the Linux musl sidecar contract
+by invoking `scripts/build-release.ps1`, and reuses the same packaging scripts as
+the release flow. Staged binaries and VSIX files are ignored by Git.
 
 ## Rust Release Binary
 
@@ -62,6 +133,13 @@ pwsh -NoProfile -File scripts/package-vscode-extension.ps1 -SkipBuild
 ```
 
 The staged binaries are ignored by Git and should not be committed.
+
+To launch the extension development window without rerunning the prerelease
+gate:
+
+```powershell
+pwsh -NoProfile -File scripts/launch-vscode-extension-dev.ps1
+```
 
 ## GitHub Actions Release
 
@@ -128,7 +206,7 @@ The release itself stores the final archives and checksums.
 
 ## Versioning Checklist
 
-- Update `Cargo.toml` package version.
+- Update the workspace package version in `Cargo.toml`.
 - Update `apps/vscode-remote-proxy/package.json` version.
 - Rebuild and retest with `scripts/check-all.ps1`.
 - Build the release binary with `scripts/build-release.ps1`.

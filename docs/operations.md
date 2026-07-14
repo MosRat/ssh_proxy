@@ -1,241 +1,166 @@
 # Operations
 
-This document describes public operational behavior without environment-specific
-test records, host aliases, ports, or private network details.
+This document describes the production operating model for the current v0.3
+daemon architecture. It intentionally avoids older `service`, `node control`,
+session-daemon, lease, and OpenSSH fallback workflows as user-facing paths.
 
-## One Binary Flow
+## Production Model
 
-`ssh_proxy` is one executable with several roles:
+`ssh_proxy daemon serve` is the local authority. CLI commands, the VS Code
+extension, and future remote peers submit allowlisted requests to the daemon over
+a private named pipe or Unix socket.
 
-- CLI for service, host, route, and config operations.
-- Local daemon for control, route supervision, and peer transports.
-- Remote daemon installed through SSH bootstrap.
-- Proxy ingress for SOCKS5H, HTTP CONNECT, and fixed TCP tunnel listeners.
+The daemon owns:
 
-Typical setup:
+- daemon install, start, stop, status, update, and health;
+- proxy session jobs and event history;
+- peer adoption, bootstrap, version checks, and update jobs;
+- route planning, startup, readiness, and metrics;
+- remote VS Code settings, server-env, Git config, status files, cleanup, and drift repair.
 
-```powershell
-ssh_proxy service --scope user install
-ssh_proxy host <remote-host> --accept-new --persist auto start
-ssh_proxy route <remote-host> --direction local-uses-remote --port <local-proxy-port>
-```
-
-For the opposite direction:
+Normal user commands are:
 
 ```powershell
-ssh_proxy route <remote-host> `
-  --direction remote-uses-local `
-  --port <remote-proxy-port> `
-  --connect-mode reverse-link
+ssh_proxy daemon install --scope system --elevate
+ssh_proxy daemon status --json
+ssh_proxy up --target <ssh-host> --local-proxy http://127.0.0.1:10808/ --json
+ssh_proxy status --workspace <workspace-id> --json
+ssh_proxy events --job <job-id> --json
+ssh_proxy down --workspace <workspace-id> --json
+ssh_proxy doctor --json --report
 ```
 
-The `route` command sends an intent to the local daemon. The daemon checks peer
-records, refreshes or bootstraps the remote daemon when needed, selects a
-transport, starts the route owner, and records persistent routes unless
-`--volatile` is used.
-
-## Installing Services
-
-Install the local user daemon:
+VS Code uses the same daemon surface through:
 
 ```powershell
-ssh_proxy service --scope user install
-ssh_proxy service status
+ssh_proxy vscode up --target <ssh-host> --workspace <workspace-id> --local-proxy <url> --json
+ssh_proxy vscode status --workspace <workspace-id> --json
+ssh_proxy vscode apply-settings --target <ssh-host> --workspace <workspace-id> --proxy-url <remote-url> --json
+ssh_proxy vscode diagnose --workspace <workspace-id> --json
 ```
 
-Install or refresh a remote daemon:
+## Permission Behavior
 
-```powershell
-ssh_proxy host <remote-host> --accept-new --persist auto start
-ssh_proxy host <remote-host> node-status
-```
+Windows production installs use a system daemon. Interactive install commands
+use a native elevated worker that writes a structured JSONL install log and
+stages the binary under `%ProgramData%\ssh_proxy\bin\<version-hash>`. The service
+ImagePath points at that versioned binary, so reinstall/update does not copy over
+a running executable. Background and auto-start paths do not pop UAC. They return
+structured blockers and `repair_action`:
 
-`--persist auto` tries a user service manager first and falls back to a user
-supervisor when the platform lacks a service manager. Installs prefer user-level
-locations and avoid requiring root privileges.
+- `requires_elevation`
+- `daemon_unavailable`
+- `daemon_pipe_access_denied`
+- `node_control_token_required`
+- `requires_external_ssh`
 
-## Route Directions
+User-facing repair commands should point at `ssh_proxy daemon install`,
+`ssh_proxy daemon update`, `ssh_proxy status`, or `ssh_proxy doctor`.
 
-`local-uses-remote` binds a listener on this machine and opens outbound targets
-from the remote node:
+## Proxy Session Lifecycle
+
+`up` creates an `ensure_proxy_session` job. The daemon records a session id,
+route id, remote URL, and job id, then advances:
 
 ```text
-local application -> local listener -> remote node -> target
+resolve_target -> validate_local_proxy -> select_remote_port -> ensure_remote_peer
+  -> ensure_transport -> start_route -> wait_route_ready
+  -> verify_remote_port -> apply_remote_settings -> health_monitoring -> healthy
 ```
 
-`remote-uses-local` binds a listener on the remote node and opens outbound
-targets from this machine:
+The initial CLI response is accepted quickly. Long work happens in the daemon job
+engine. Use `status` and `events` for readiness and failure reasons.
 
-```text
-remote application -> remote listener -> local node -> target
-```
+## Remote Setup
 
-When the remote node can connect back to a local peer transport, use
-`--connect-mode direct --local-peer <host>:<port>`. When it cannot, use
-`--connect-mode reverse-link`; the local daemon keeps a long-lived connection to
-the remote side and carries remote flows back through that connection.
+Remote setup is daemon-owned. The VS Code extension no longer uploads or runs
+remote setup scripts. The daemon writes and repairs:
 
-## Transport Selection
+- remote VS Code Machine settings;
+- terminal proxy environment;
+- `~/.vscode-server/server-env-setup`;
+- remote Git proxy config;
+- `~/.vscode-server/remote-proxy-status.json`.
 
-`remote_transport = "auto"` chooses among configured transports:
+`down` stops the route and applies cleanup according to the session policy.
 
-1. QUIC when configured and reachable.
-2. TLS/TCP when configured and reachable.
-3. Explicitly allowed plain TCP for trusted or lab networks.
-4. SSH `direct-tcpip` to a remote daemon transport.
-5. SSH exec helper fallback.
+## Health And Recovery
 
-Route planning explains the decision chain:
+The daemon periodically checks:
 
-```powershell
-ssh_proxy route <remote-host> `
-  --direction local-uses-remote `
-  --port <local-proxy-port> `
-  --explain
-```
+- control socket health;
+- route readiness and listener reachability;
+- peer descriptor freshness;
+- remote setup hash drift;
+- job retry windows and terminal blockers.
 
-Status output includes selected protocol, route owner, pool size, active
-workers, bytes, open failures, fallback reason, degraded reason, and
-protocol-specific health fields.
+If the daemon restarts, it restores `jobs.json`, `sessions.json`, `peers.json`,
+and `routes.json`, quarantines corrupt state files, then reconciles unfinished
+jobs instead of leaving orphaned local state.
 
-## SSH Fallback Modes
+## Target Peer Service
 
-`ssh-native` uses russh `direct-tcpip` channels directly for simple proxy flows.
-It is the lowest-overhead SSH fallback when the remote daemon does not need to
-own route policy or restore state.
+Remote SSH targets run a managed peer service. On Linux, the daemon prefers the
+user systemd unit `ssh-proxy-helper.service`; when user systemd is unavailable,
+it falls back to the managed nohup supervisor under `~/.ssh_proxy/run`.
+macOS remotes use a user LaunchAgent with KeepAlive. Windows remotes use a user
+scheduled task by default; system service install remains an explicit elevated
+compatibility path.
 
-`spx-over-ssh-direct` uses SSH `direct-tcpip` to reach a remote daemon transport
-and keeps SPX framing in the data plane. Use it when remote daemon policy,
-tokens, route restore, UDP behavior, or daemon-owned status must stay involved.
+Bootstrap and update are considered successful only after the remote
+`descriptor` control request succeeds. The descriptor records the real control
+endpoint, transport endpoint, protocol versions, service instance id, remote
+user, data directory, and advertised transports. Re-running bootstrap repairs an
+existing systemd unit, restarts it, then refreshes the descriptor before local
+state is updated.
 
-`ssh-exec` remains an emergency compatibility path for bootstrap and restricted
-targets.
+Remote peer config/state files are generated by Rust and uploaded through the
+Rust SSH channel. The remote shell is not responsible for templating secrets or
+JSON; it only resolves small runtime defaults such as an available loopback
+port, writes stdin to allowlisted files, and invokes the selected service
+manager.
 
-## Peer Records and Authentication
+`ssh_proxy status --json` exposes `peer_store`, `peer_health`, `peer_install`,
+and `transport_decision`. `ssh_proxy doctor --json --report --target <host>`
+adds a redacted target-specific peer report with install state, service manager,
+descriptor state, dependency classification, and matching route decisions.
 
-Each daemon has a node identity and local config under the user's application
-data directory. Peer records store redacted identity metadata, endpoint
-descriptors, transport protocol support, trust source, token metadata, and
-certificate references.
+## OpenSSH Policy
 
-Tokens and private keys are not printed by status or descriptor commands.
-Runtime SSH authentication can use an SSH authentication agent or configured key
-files, but private key material remains outside `ssh_proxy` config.
-
-Certificate material imported through `config cert-import` is copied into the
-project's certificate store with private permissions for key files where the
-platform supports them.
-
-## Existing Remote Daemons
-
-When a target already has a daemon but the local machine has no peer record, use
-descriptor refresh before reinstalling:
-
-```powershell
-ssh_proxy node control peer-refresh <remote-host> --accept-new
-```
-
-Use `peer-diff` to inspect redacted drift without mutating local config:
-
-```powershell
-ssh_proxy node control peer-diff <remote-host> --accept-new
-```
-
-Use `peer-bootstrap --force` only when the remote binary or service should be
-repaired or upgraded.
-
-## Version Compatibility
-
-Daemon descriptors include package version, control API version, peer data
-protocol version, and feature bits. Version checks report the safest next action
-without silently overwriting remote state:
-
-```powershell
-ssh_proxy node control peer-check-version <remote-host> --accept-new
-```
-
-A future remote control API usually means the local binary should be upgraded.
-A missing or incompatible peer data protocol usually means the remote should be
-bootstrapped with the current binary.
-
-## Token Rotation
-
-Rotate a local daemon token:
-
-```powershell
-ssh_proxy node control token-rotate
-```
-
-Rotate a saved peer token through SSH:
-
-```powershell
-ssh_proxy node control peer-rotate-token <remote-host>
-```
-
-Offline descriptor exchange can be used when operators need an explicit
-out-of-band approval step:
-
-```powershell
-ssh_proxy config export-descriptor
-ssh_proxy config import-descriptor <remote-host> descriptor.json --token <out-of-band-token>
-```
-
-## Multi-User Instances
-
-User-scope installs keep control endpoints, config paths, tokens, routes, and
-service definitions scoped to the current OS user. System-scope installs should
-be reserved for environments where a single shared daemon is intentional.
-
-On shared machines, prefer user-scope daemons and explicit peer endpoints. Avoid
-copying route stores or token files between users.
-
-## Cleanup
-
-Stop routes through the daemon that owns them:
-
-```powershell
-ssh_proxy node control stop-route <route-id>
-ssh_proxy host <remote-host> node-stop-route <route-id>
-```
-
-Remove a remote user install only when you own that install:
-
-```powershell
-ssh_proxy host <remote-host> clean
-```
-
-Cleanup commands should remove only `ssh_proxy` resources they created. They
-must not delete unrelated user services, unrelated listeners, or shared peer
-records without operator intent.
+OpenSSH is not a normal fallback. The Rust SSH client and Rust transport engine
+own bootstrap and route setup. External OpenSSH may only appear as explicit
+emergency compatibility when the daemon reports `requires_external_ssh=true`
+with a concrete unsupported capability.
 
 ## Troubleshooting
 
-Useful commands:
+Start with daemon JSON:
 
 ```powershell
-ssh_proxy service status
-ssh_proxy node control status
-ssh_proxy node control routes
-ssh_proxy host <remote-host> doctor
-ssh_proxy host <remote-host> logs --lines <line-count>
+ssh_proxy daemon status --json
+ssh_proxy status --json
+ssh_proxy doctor --json --report
 ```
 
-## Local Run Configuration
+For a VS Code window:
 
-Concrete lab targets, upstream proxy URLs, private ports, key paths, and token
-values should live outside Git. Benchmark scripts load `scripts/bench.local.ps1`
-when it exists, then read environment variables such as
-`SSH_PROXY_BENCH_TARGETS`, `SSH_PROXY_BENCH_UPSTREAM_PROXY`,
-`SSH_PROXY_BENCH_URL`, and `SSH_PROXY_BENCH_READINESS_URL`.
+```powershell
+ssh_proxy vscode status --workspace <workspace-id> --json
+ssh_proxy events --job <job-id> --json
+```
 
-Use `scripts/bench.local.example.ps1` as the template and keep the edited
-`scripts/bench.local.ps1` uncommitted.
+Common cases:
 
-When reporting issues, redact:
+- `502 Bad Gateway`: verify the local proxy URL, scheme, port, and upstream proxy health.
+- `daemon_unavailable`: install or start the system daemon interactively.
+- `requires_elevation`: run the suggested daemon install/update command with `--elevate`.
+- `node_control_token_required`: the running daemon is stale or token-backed; use the interactive repair action to reinstall/migrate the daemon.
+- `remote_port_occupied`: keep automatic port picking enabled or select another preferred port.
+- `starting`, `ensure_remote_peer`, or `bootstrapping_peer`: inspect events; slow bootstrap is not a reason to switch to OpenSSH.
 
-- host aliases and private DNS names;
-- private IP addresses and concrete port assignments;
-- daemon tokens and peer tokens;
-- certificate private keys;
-- SSH private key paths;
-- proxy credentials.
+## Reporting
+
+Prefer `ssh_proxy doctor --json --report` or `Remote Proxy: Diagnose`. Reports
+redact daemon tokens, peer tokens, proxy credentials, and SSH identity paths by
+default, while keeping phases, blockers, install logs, handoff probes, route
+health, peer state, and dependency classification.

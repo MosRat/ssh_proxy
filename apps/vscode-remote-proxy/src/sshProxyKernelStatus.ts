@@ -13,20 +13,18 @@ export interface SshProxyRouteState {
 }
 
 export interface SshProxyKernelStatusSnapshot {
-  readonly serviceStatus: unknown;
-  readonly routeExplain: unknown;
-  readonly routeStart: unknown;
-  readonly routeStop: unknown;
+  readonly daemonStatus: unknown;
+  readonly sessionStart: unknown;
+  readonly sessionStop: unknown;
   readonly routeState: SshProxyRouteState | undefined;
   readonly lastRefreshAt: number | undefined;
 }
 
 export function emptySshProxyKernelStatusSnapshot(): SshProxyKernelStatusSnapshot {
   return {
-    serviceStatus: undefined,
-    routeExplain: undefined,
-    routeStart: undefined,
-    routeStop: undefined,
+    daemonStatus: undefined,
+    sessionStart: undefined,
+    sessionStop: undefined,
     routeState: undefined,
     lastRefreshAt: undefined,
   };
@@ -44,7 +42,9 @@ export function createSshProxyRouteState(
 ): SshProxyRouteState {
   const record = asRecord(started);
   const plan = asRecord(record?.plan);
+  const route = asRecord(record?.route);
   const routeId = asString(record?.route_id ?? record?.id ?? plan?.route_id)
+    ?? asString(route?.route_id ?? route?.id)
     ?? proxy.routeId
     ?? routeIdFrom(proxy.remoteUrl);
   const selectedTransport = asString(
@@ -64,10 +64,10 @@ export function createSshProxyRouteState(
     ?? plan?.mode
     ?? proxy.connectMode,
   ) ?? defaultConnectMode;
-  const remoteUrl = asString(record?.remote_url ?? plan?.remote_url ?? proxy.remoteUrl);
+  const remoteUrl = asString(record?.remote_url ?? route?.remote_url ?? plan?.remote_url ?? proxy.remoteUrl);
   const owner = asString(record?.owner ?? plan?.owner ?? proxy.backend);
   const cleanupCommand = asString(record?.cleanup_command)
-    ?? (routeId ? `ssh_proxy node control stop-route ${routeId}` : undefined);
+    ?? (routeId ? `ssh_proxy down --route-id ${routeId}` : undefined);
 
   return {
     routeId,
@@ -77,8 +77,8 @@ export function createSshProxyRouteState(
     fallbackReason,
     remoteUrl,
     cleanupCommand,
-    health: record?.health ?? plan?.health,
-    liveRoute: undefined,
+    health: record?.health ?? route?.health ?? plan?.health,
+    liveRoute: route,
   };
 }
 

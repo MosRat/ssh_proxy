@@ -2,7 +2,8 @@ param(
     [switch]$SkipRust,
     [switch]$SkipVscode,
     [switch]$SkipFmt,
-    [switch]$InstallNodeModules
+    [switch]$InstallNodeModules,
+    [switch]$NoProcessCleanup
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,16 +24,37 @@ function Invoke-NativeChecked {
     }
 }
 
+function Stop-StaleRustTestProcesses {
+    param([string]$Reason)
+
+    if ($NoProcessCleanup -or $env:OS -ne "Windows_NT") {
+        return
+    }
+
+    $debugBinary = [System.IO.Path]::GetFullPath((Join-Path $root "target\debug\ssh_proxy.exe"))
+    $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "ssh_proxy.exe" -and
+            $_.ExecutablePath -and
+            ([System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $debugBinary)
+        }
+    foreach ($process in $processes) {
+        Write-Host "Stopping stale Rust test process $($process.ProcessId) before $Reason"
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Push-Location $root
 try {
     if (-not $SkipRust) {
         $env:SSH_PROXY_ALLOW_MISSING_SIDECAR = if ($null -ne $oldAllowMissingSidecar) { $oldAllowMissingSidecar } else { "1" }
+        Stop-StaleRustTestProcesses "full check"
 
         if (-not $SkipFmt) {
             Invoke-NativeChecked "cargo fmt" { cargo fmt -- --check }
         }
-        Invoke-NativeChecked "cargo check" { cargo check }
-        Invoke-NativeChecked "cargo test" { cargo test --tests }
+        Invoke-NativeChecked "cargo check" { cargo check --workspace }
+        Invoke-NativeChecked "cargo test" { cargo test --workspace --tests }
     }
 
     if (-not $SkipVscode) {
@@ -43,6 +65,8 @@ try {
     }
 }
 finally {
+    Stop-StaleRustTestProcesses "full check cleanup"
+
     if ($null -eq $oldAllowMissingSidecar) {
         Remove-Item Env:\SSH_PROXY_ALLOW_MISSING_SIDECAR -ErrorAction SilentlyContinue
     } else {

@@ -1,4 +1,8 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { SshTargetConfig } from './types';
 import { DetectedSshHost, parseSshAuthority } from './vscodeStorage';
 
 export async function detectActiveSshRemoteCommand(): Promise<DetectedSshHost | undefined> {
@@ -22,7 +26,7 @@ export async function detectActiveSshRemoteCommand(): Promise<DetectedSshHost | 
   };
 }
 
-function parseCommandResult(value: unknown): { host: string; authority: string } | undefined {
+function parseCommandResult(value: unknown): { host: string; authority: string; sshTarget?: SshTargetConfig } | undefined {
   if (typeof value === 'string') {
     return parseString(value);
   }
@@ -45,11 +49,115 @@ function parseCommandResult(value: unknown): { host: string; authority: string }
   for (const key of ['remoteAuthority', 'authority', 'host', 'hostName', 'hostname', 'remoteHost', 'remoteName']) {
     const parsed = parseCommandResult(record[key]);
     if (parsed) {
-      return parsed;
+      return {
+        ...parsed,
+        sshTarget: parseSshTargetConfig(record.config),
+      };
     }
   }
 
   return undefined;
+}
+
+function parseSshTargetConfig(value: unknown): SshTargetConfig | undefined {
+  const config = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  const identityFiles = normalizePathList(config?.IdentityFile ?? config?.identityFile);
+  const result: SshTargetConfig = {
+    hostName: stringify(config?.HostName ?? config?.hostname),
+    user: stringify(config?.User ?? config?.user),
+    port: parsePort(config?.Port ?? config?.port),
+    identityFiles: identityFiles.length > 0 ? identityFiles : defaultIdentityFiles(),
+    configFile: firstExistingPath([
+      stringify(config?.ConfigFile ?? config?.configFile),
+      vscode.workspace.getConfiguration('remote.SSH').get<string>('configFile', ''),
+      path.join(os.homedir(), '.ssh', 'config'),
+    ]),
+    knownHostsFile: firstExistingPath([
+      stringify(config?.UserKnownHostsFile ?? config?.userKnownHostsFile),
+      path.join(os.homedir(), '.ssh', 'known_hosts'),
+    ]),
+    proxyJump: normalizeStringList(config?.ProxyJump ?? config?.proxyJump)
+      .flatMap((entry) => entry.split(',').map((part) => part.trim()).filter(Boolean)),
+    acceptNew: true,
+  };
+  return hasSshTargetConfig(result) ? result : undefined;
+}
+
+function parsePort(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(normalizeStringList);
+  }
+  const text = stringify(value);
+  return text ? [text] : [];
+}
+
+function normalizePathList(value: unknown): string[] {
+  return normalizeStringList(value).map(expandHome);
+}
+
+function firstExistingPath(candidates: Array<string | undefined>): string | undefined {
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const expanded = expandHome(candidate);
+    if (fs.existsSync(expanded)) {
+      return expanded;
+    }
+  }
+  return undefined;
+}
+
+function defaultIdentityFiles(): string[] {
+  return [
+    'id_rsa',
+    'id_ecdsa',
+    'id_ecdsa_sk',
+    'id_ed25519',
+    'id_ed25519_sk',
+    'id_xmss',
+    'id_dsa',
+  ]
+    .map((name) => path.join(os.homedir(), '.ssh', name))
+    .filter((candidate) => fs.existsSync(candidate));
+}
+
+function expandHome(value: string): string {
+  if (value === '~') {
+    return os.homedir();
+  }
+  if (value.startsWith('~/') || value.startsWith(`~${path.sep}`)) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
+function hasSshTargetConfig(value: SshTargetConfig): boolean {
+  return Boolean(
+    value.hostName
+      || value.user
+      || value.port
+      || value.identityFiles?.length
+      || value.configFile
+      || value.knownHostsFile
+      || value.proxyJump?.length
+      || value.acceptNew,
+  );
 }
 
 function parseString(value: string): { host: string; authority: string } | undefined {

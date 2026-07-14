@@ -1,0 +1,96 @@
+#![recursion_limit = "256"]
+
+use anyhow::Result;
+use clap::Parser;
+use mimalloc::MiMalloc;
+use tracing::warn;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
+mod cli;
+mod control_socket;
+mod diagnostics;
+mod install_report;
+mod logging;
+mod node_daemon;
+mod paths;
+mod peer_lifecycle;
+mod peer_transport;
+mod protocol_core;
+mod repair;
+mod reverse;
+mod service;
+mod sidecar;
+
+fn main() -> Result<()> {
+    let cli = cli::Cli::parse();
+    logging::init(&cli.log)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async_main(cli))
+}
+
+async fn async_main(cli: cli::Cli) -> Result<()> {
+    let app_config = config::AppConfig::load_default().unwrap_or_else(|err| {
+        warn!(error = %err, "failed to load local config; using CLI values only");
+        config::AppConfig::default()
+    });
+
+    match cli.command {
+        cli::Commands::Proxy(mut args) => {
+            config::apply_proxy_defaults(&app_config, &mut args, None)?;
+            controller::run(args).await
+        }
+        cli::Commands::Route(args) => route::run(args, app_config).await,
+        cli::Commands::Reverse(args) => reverse::run(args, app_config).await,
+        cli::Commands::Remote(args) => remote::run(args).await,
+        cli::Commands::Node(args) => node_daemon::run(args, app_config).await,
+        cli::Commands::InstallRemote(mut args) => {
+            config::apply_install_defaults(&app_config, &mut args, None)?;
+            let mut app_config = app_config;
+            let local_identity = app_config.ensure_node_identity()?;
+            args.local_node_id = local_identity.node_id;
+            args.local_node_name = local_identity.node_name;
+            args.local_control_endpoint = app_config.daemon.control_endpoint.clone();
+            args.local_transport = app_config.daemon.transport_listen;
+            app_config.save_default()?;
+            deploy::install_remote(args).await.map(|_| ())
+        }
+        cli::Commands::Config(args) => config::run(args).await,
+        cli::Commands::Control(args) => controller::control(args, app_config).await,
+        cli::Commands::Daemon(args) => daemon::daemon(args, app_config).await,
+        cli::Commands::Up(args) => daemon::up(args, app_config).await,
+        cli::Commands::Down(args) => daemon::down(args, app_config).await,
+        cli::Commands::Status(args) => daemon::status(args, app_config).await,
+        cli::Commands::Events(args) => daemon::events(args, app_config).await,
+        cli::Commands::Doctor(args) => daemon::doctor(args, app_config).await,
+        cli::Commands::Vscode(args) => daemon::vscode(args, app_config).await,
+        cli::Commands::Host(args) => deploy::host(args, app_config).await,
+        cli::Commands::Service(args) => service::run(args, app_config).await,
+        cli::Commands::DaemonInstallWorker(args) => {
+            daemon::daemon_install_worker(args, app_config).await
+        }
+    }
+}
+
+mod config;
+mod data_plane;
+mod protocol;
+mod quic_native;
+mod quic_stream;
+mod route;
+
+mod ssh_client;
+mod ssh_native;
+
+mod bridge;
+mod deploy;
+
+mod controller;
+mod daemon;
+
+mod socks;
+
+mod remote;

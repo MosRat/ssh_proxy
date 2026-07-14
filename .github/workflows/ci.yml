@@ -21,7 +21,7 @@ jobs:
     env:
       SSH_PROXY_ALLOW_MISSING_SIDECAR: "1"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - id: rust
         uses: dtolnay/rust-toolchain@stable
@@ -59,7 +59,7 @@ jobs:
       run:
         working-directory: apps/vscode-remote-proxy
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:

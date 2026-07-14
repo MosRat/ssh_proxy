@@ -1,37 +1,62 @@
 # Remote Proxy Auto Forward
 
-VS Code extension that reverse-forwards a local proxy into a remote VS Code window and applies proxy defaults for Remote SSH terminals, VS Code HTTP clients, remote extensions, and Git.
+Remote Proxy Auto Forward exposes your local proxy inside a VS Code Remote SSH window and applies the matching proxy settings to the remote environment.
 
-The first supported target is Remote SSH. WSL and Dev Containers are detected but intentionally left as extension points because they need different forwarding strategies.
+The extension is useful when a remote shell, remote extension host, Git, or toolchain must reach the network through a proxy that only exists on your local desktop.
 
-OpenSSH is the default backend for the `0.0.x` release line. Set
-`remoteProxy.backend` to `ssh_proxy` explicitly to use the binary backend, or
-to `auto` to prefer `ssh_proxy` and fall back to OpenSSH when it is unavailable.
-Remote setup also defaults to OpenSSH; set `remoteProxy.sshProxy.remoteSetup`
-to `auto` or `ssh_proxy` only when binary-backed remote commands are desired.
+## How It Works
 
-## What it does
+The extension detects a local proxy from:
 
-- Detects a local proxy from `remoteProxy.localProxy.url`, `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, or the configured local proxy port list.
-- Starts an SSH reverse tunnel:
+- `remoteProxy.localProxy.url`
+- `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`
+- configured local proxy probe ports
 
-  ```text
-  remote 127.0.0.1:<remote-proxy-port> -> local 127.0.0.1:<detected-proxy-port>
-  ```
+It then exposes a remote listener:
 
-  If the preferred remote port is already in use, nearby ports are tried automatically and the selected port is written to the remote proxy settings.
+```text
+remote 127.0.0.1:<remote-port> -> local proxy
+```
 
-- Applies remote VS Code settings:
-  - `http.proxy`
-  - `http.proxySupport`
-  - `terminal.integrated.env.*`
-- Optionally patches the remote VS Code server machine settings file.
-- Optionally writes a managed block to `~/.vscode-server/server-env-setup` so remote extension hosts inherit proxy environment variables after reconnect.
-- Optionally force-overwrites remote global Git proxy config and each current remote workspace Git repo config.
-- Adds a status bar menu with start, stop, restart, diagnostics, local proxy selection, SSH host override controls, output, and settings.
-- Reuses one local SSH reverse tunnel across multiple VS Code windows connected to the same SSH user and server. The owning window writes a local heartbeat lease; other windows reuse the remote proxy port and take over automatically if the lease or tunnel goes stale.
+The listener URL is written to remote VS Code settings, terminal environment variables, optional server-env setup, optional Git config, and a remote status file.
 
-## Commands
+## Daemon Path
+
+The extension uses the bundled or configured `ssh_proxy` binary as a thin daemon client:
+
+```text
+VS Code extension
+  -> ssh_proxy vscode up
+  -> local ssh_proxy daemon
+  -> daemon job/readiness/route state
+  -> remote 127.0.0.1:<port>
+  -> local upstream proxy
+```
+
+The daemon owns route ids, job progress, readiness, peer state, update state, remote setup, and health repair. The extension no longer runs the old service/session/OpenSSH fallback chain in the normal path.
+
+Auto-start never prompts for UAC or sudo elevation. Interactive commands can guide the user to install or update the local daemon. OpenSSH is not part of the normal path; it is reserved for explicit compatibility workflows only.
+
+## Daemon Job Readiness
+
+`Remote Proxy: Start` calls `ssh_proxy vscode up` and receives a daemon job id plus the intended remote proxy URL. The extension then polls `ssh_proxy vscode status` and renders the daemon phase instead of starting its own route or service fallback chain.
+
+Typical phases are `resolve_target`, `ensure_remote_peer`, `start_route`, `wait_route_ready`, `verify_remote_port`, `apply_remote_settings`, and `healthy`. A terminal `failed` or `cancelled` job includes a blocker, last error, and next action for Diagnose output.
+
+When no daemon is reachable, auto-start reports the blocker in the status bar.
+Interactive `Remote Proxy: Start` offers an `Install Daemon` action, runs
+`ssh_proxy daemon install --scope system --elevate --json`, then retries the
+daemon session after installation. Background startup does not open an elevation
+prompt.
+
+## Quick Start
+
+1. Install the extension or launch it in Extension Development Host.
+2. Connect a VS Code window through Remote SSH.
+3. Keep `remoteProxy.enabled=true` and `remoteProxy.autoStart=true`.
+4. Run `Remote Proxy: Diagnose` if the status bar does not show a running proxy.
+
+Useful commands:
 
 - `Remote Proxy: Start`
 - `Remote Proxy: Stop`
@@ -40,54 +65,47 @@ to `auto` or `ssh_proxy` only when binary-backed remote commands are desired.
 - `Remote Proxy: Clean Remote Settings`
 - `Remote Proxy: Pick Local Proxy`
 - `Remote Proxy: Pick SSH Host`
-- `Remote Proxy: Clear SSH Host Override`
-- `Remote Proxy: Open Menu`
 - `Remote Proxy: Diagnose`
+- `Remote Proxy: Show Status`
 - `Remote Proxy: Show Output`
 - `Remote Proxy: Open Settings`
-- `Remote Proxy: Show Status`
 
-The status bar item opens the same menu. Its tooltip shows the active SSH host, local proxy, remote proxy URL, and the latest error.
+The status bar menu exposes the same operations.
 
-## Multi-window reuse
+## Applied Remote State
 
-`remoteProxy.singleton.reuseEnabled` is enabled by default. Windows connected to the same SSH user and resolved server share one reverse tunnel instead of racing for the same remote port. If the owner window closes, another window detects the stale or unreachable lease and starts a replacement tunnel.
+When enabled, the extension manages:
 
-Lease files are stored in a per-local-user namespace under the system temp directory, so multiple local OS users do not share ownership records. A per-target start lock serializes route creation when several VS Code windows open the same host at once; after the first window creates and verifies the route, the other windows re-read the lease and reuse it.
+- Remote VS Code Machine settings: `http.proxy`, `http.proxySupport`, and terminal env.
+- `~/.vscode-server/server-env-setup` managed block for remote extension host inheritance.
+- Remote Git proxy config, globally and per current workspace Git repo.
+- `~/.vscode-server/remote-proxy-status.json` for diagnostics and reuse.
 
-Remote port selection is sticky inside a VS Code connection window. Reconnects try the current in-memory port first, then the last successful port, then the local lease port, then the remote `~/.vscode-server/remote-proxy-status.json` port written by this extension, and only then the configured port range. When a preferred port is already listening, the extension checks whether it matches the previous Remote Proxy status and verifies it before reusing the leftover listener.
+`Remote Proxy: Stop` only stops the active route. `Remote Proxy: Clean Remote Settings` removes managed settings and Git/env/status changes.
 
-Health checks are controlled by `remoteProxy.forward.healthCheckEnabled`. When enabled, the extension periodically verifies the remote forwarded port and restarts or takes over if it stops responding.
+## Important Settings
 
-Transient network blips are tolerated through `remoteProxy.forward.healthCheckFailureThreshold`, which defaults to two consecutive failures before restarting. Deterministic remote port conflicts, including `EADDRINUSE` style errors from either OpenSSH or `ssh_proxy`, are treated as retryable when `remoteProxy.remote.autoPickPort` is enabled, so the extension moves through the configured remote port range instead of failing on the first occupied port.
-
-Repeated restart attempts use exponential backoff up to `remoteProxy.forward.restartBackoffMaxSeconds`, which helps during VPN changes, laptop sleep/resume, or temporary SSH outages.
-
-SSH keepalive is configurable through `remoteProxy.ssh.serverAliveInterval`, `remoteProxy.ssh.serverAliveCountMax`, and `remoteProxy.ssh.tcpKeepAlive`. The child tunnel also uses `ExitOnForwardFailure=yes` so failed remote binds are detected instead of silently producing a dead proxy.
-
-## Git Proxy
-
-When `remoteProxy.apply.gitConfig` is enabled, apply writes both:
-
-- global Git config through `git config --global --replace-all`
-- workspace Git config through `git -C <workspace> config --local --replace-all`
-
-Workspace config is applied only for current remote workspace folders that are inside a Git worktree. If the target machine does not have `git`, the extension logs `git not found on remote; skipped Git proxy config` and continues applying VS Code, terminal, and server environment settings.
-
-Use these settings to control the behavior:
-
-- `remoteProxy.apply.gitGlobalConfig`
-- `remoteProxy.apply.gitWorkspaceConfig`
-- `remoteProxy.apply.gitForceOverride`
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `remoteProxy.localProxy.mode` | `auto` | Detect proxy from manual URL, env, then port probes. |
+| `remoteProxy.localProxy.url` | empty | Manual local proxy URL. |
+| `remoteProxy.remote.port` | `17890` | Preferred remote listener port. |
+| `remoteProxy.remote.autoPickPort` | `true` | Try nearby ports if the preferred port is busy. |
+| `remoteProxy.sshProxy.executable` | `ssh_proxy` | Explicit binary, bundled binary, or PATH fallback. |
+| `remoteProxy.sshProxy.connectMode` | `auto` | Let the daemon prefer the persistent remote peer and fall back when topology requires it. |
+| `remoteProxy.forward.verifyAfterStart` | `true` | Verify remote listener readiness after route start. |
+| `remoteProxy.forward.healthCheckEnabled` | `true` | Periodically verify the active listener. |
+| `remoteProxy.apply.gitConfig` | `true` | Apply remote Git proxy config. |
 
 ## Host Profiles
 
-Use `remoteProxy.hostProfiles` for server-specific overrides. Keys can be the SSH alias, such as `office`, or the resolved target key, such as `alice@ssh.example.com`.
+Use `remoteProxy.hostProfiles` for SSH-host specific overrides. Keys can be SSH aliases or resolved target keys.
 
 ```json
 {
   "remoteProxy.hostProfiles": {
     "office": {
+      "localProxyUrl": "http://127.0.0.1:10808/",
       "noProxy": "localhost,127.0.0.1,::1,.cluster.local",
       "applyGitConfig": false
     }
@@ -95,52 +113,65 @@ Use `remoteProxy.hostProfiles` for server-specific overrides. Keys can be the SS
 }
 ```
 
-## Remote Status File
-
-When `remoteProxy.apply.remoteStatusFile` is enabled, the extension writes:
-
-```text
-~/.vscode-server/remote-proxy-status.json
-```
-
-This file records the active proxy URL, remote port, update time, and local proxy source for diagnostics or shell integrations.
-Kernel-mode routes also include backend, route id, selected transport, connect mode, and fallback reason when those fields are available.
-
-## Cleanup
-
-Run `Remote Proxy: Clean Remote Settings` when you want to remove the settings this extension managed on the current SSH host. It stops the owned tunnel, removes the managed `server-env-setup` block, deletes the remote status file, unsets remote global Git proxy values, and removes proxy keys from the remote VS Code machine settings file.
-
-The cleanup command is explicit on purpose: `Remote Proxy: Stop` only stops the current tunnel and leaves proxy defaults in place for the next reconnect.
-
-## Important SSH note
-
-The extension starts a background `ssh -R` process from the local extension host. For this to be non-interactive, your SSH config should use keys, an agent, or an existing control master. By default `remoteProxy.ssh.batchMode` is enabled so the command fails quickly instead of hanging on a password prompt.
-
-By default, the extension writes remote settings through SSH instead of the VS Code configuration API. This avoids accidentally changing local user settings from the local UI extension host.
-
 ## Troubleshooting
 
-If status shows `remote: ssh-remote (no authority)`, the extension first asks Remote - SSH's internal `remote-internal.getActiveSshRemote` command for the active host, then checks current workspace storage. Global `storage.json` fallback is disabled by default because it can be stale in Extension Development Host windows. If you previously used `Remote Proxy: Pick SSH Host`, run `Remote Proxy: Clear SSH Host Override` to return to automatic host detection.
+Run `Remote Proxy: Diagnose` first. It prints the detected SSH host, local proxy, remote proxy URL, daemon job phase, route id, transport, daemon health, route health, blocker, repair action, and latest error, then offers to copy the redacted daemon report.
+
+Common failures:
+
+- `502 Bad Gateway`: the remote listener accepted the request but could not open the upstream path. Check the local proxy URL, including scheme and port, and confirm the local proxy accepts HTTP CONNECT or SOCKS5 traffic.
+- `Access is denied` during daemon install: Windows blocked service registration or named-pipe ACL repair. Auto-start will not pop UAC; run an interactive daemon install/update command or inspect `ssh_proxy doctor --json --report`.
+- `node_control_token_required`: an old token-backed daemon/config is still running. Use the Diagnose repair action or reinstall the system daemon interactively.
+- Remote port already in use: keep `remoteProxy.remote.autoPickPort=true`, or pick a different `remoteProxy.remote.port`.
+- Host unresolved in Extension Development Host: run `Remote Proxy: Pick SSH Host`, or enable storage fallback only if you understand it can be stale.
+- Route stuck in `accepted`, `bootstrapping_peer`, or `starting`: open output, inspect `ssh_proxy vscode status --workspace <id> --json` and `ssh_proxy events --job <job-id> --json`, and verify remote `127.0.0.1:<port>` reachability.
+- Unexpected OpenSSH usage: treat it as an emergency compatibility path. Diagnose should include a daemon reason such as unsupported Rust SSH configuration.
+
+Remote shell smoke test:
+
+```bash
+echo "$http_proxy"
+curl -I www.google.com
+```
 
 ## Development
+
+Install dependencies and compile:
 
 ```bash
 npm install
 npm run compile
-npx @vscode/vsce package
 ```
 
-## Bundled ssh_proxy Kernel
+Run tests:
 
-For kernel-mode packages, stage release binaries before packaging:
+```bash
+npm test
+```
+
+Launch an Extension Development Host:
 
 ```powershell
-npm run kernel:stage
+pwsh -NoProfile -File ..\..\scripts\launch-vscode-extension-dev.ps1
+```
+
+Run the local prerelease build, stage the bundled kernel binaries, package the
+VSIX, and optionally launch the debug host:
+
+```powershell
+pwsh -NoProfile -File ..\..\scripts\prerelease-local.ps1 -LaunchVscode
+```
+
+Package without restaging kernel binaries:
+
+```bash
+npm run package
+```
+
+Package with freshly staged release binaries:
+
+```powershell
 npm run package:with-kernel
 ```
 
-The staging script calls `../../scripts/build-release.ps1`, then copies the
-Windows x64 binary and Linux x64 musl binary into `assets/bin`. At runtime the
-extension uses a non-default explicit `remoteProxy.sshProxy.executable` first,
-then a matching bundled binary, then `ssh_proxy` from `PATH`. Set the executable
-to an empty string when you want PATH-only discovery.
+The staging script builds release binaries, then copies the Windows x64 and Linux x64 musl `ssh_proxy` binaries into `assets/bin`.

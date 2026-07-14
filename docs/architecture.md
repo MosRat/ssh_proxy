@@ -1,476 +1,558 @@
 # Architecture
 
-This document is for maintainers and contributors. It explains how the code is organized and where to extend behavior.
+`ssh_proxy` v0.3 uses a Docker-like daemon model. The daemon is the only
+production control plane. CLI commands and the VS Code extension are thin
+clients that submit allowlisted intents and render daemon state.
 
-## Runtime Shape
-
-One binary has four main personalities:
-
-- `proxy`: local unified SOCKS5H/HTTP proxy listener plus bridge manager.
-- `reverse`: remote SOCKS5H listener; this machine is the TCP/UDP egress side.
-- `node daemon`: symmetric service daemon. It can expose a framed transport, own proxy profile tasks, accept control commands, and report state to peers.
-- `remote`: compatibility framed helper; executes TCP/UDP opens from the target host.
-- `daemon`: legacy local control kernel that owns multiple proxy profile tasks.
-- `host` / `service` / `control`: CLI management commands for remote helpers, local services, and daemon IPC.
-- `route`: high-level route intent command. The CLI submits intent to the local node daemon; the daemon owns peer bootstrap, route planning, and route persistence.
-
-The normal data path is:
+## Control Plane
 
 ```text
-SOCKS5H or HTTP proxy client
-  -> local unified ingress parser
-  -> bridge frames
-  -> direct QUIC, direct TLS/TCP, explicit plain TCP, SSH direct-tcpip to persistent node transport, or SSH exec stdio
-  -> remote node daemon
-  -> target TCP/UDP destination
+VS Code extension / CLI
+  -> private named pipe or Unix socket
+  -> ssh_proxy daemon
+  -> job engine, session store, peer registry, route runtime, remote setup
 ```
 
-Reverse mode swaps the SOCKS listener and egress:
+Windows production uses a system daemon with a private named pipe. Linux and
+macOS use a daemon with a private Unix socket. TCP control is legacy or explicit
+development mode and requires token authentication.
+
+The daemon owns these persistent stores:
+
+- `daemon_state.json`: daemon identity, schema version, update state.
+- `jobs.json`: job snapshots plus recent event summaries.
+- `sessions.json`: workspace, target, route, remote URL, ownership, health.
+- `peers.json`: peer descriptors, versions, transports, last-seen state.
+- `routes.json`: route specs, readiness, transport, and metrics.
+
+State writes use atomic temp-file plus rename. Startup reconciliation adopts
+known sessions and routes, refreshes peers, and resumes unfinished jobs.
+
+## Protocol Layers
+
+v0.3 keeps existing wire formats stable while sharing the protocol vocabulary:
+
+- `protocol_core::version` owns control API version, peer protocol version,
+  feature sets, and compatibility classification.
+- `protocol_core::envelope` owns `ControlEnvelope`, `ControlResponse`, and
+  `ControlError`. Daemon JSON-line control responses are generated through this
+  shape while keeping existing public fields such as `api_version`, `ok`,
+  `code`, `message`, `error`, and `data`.
+- `protocol_core::control` owns daemon command alias normalization and typed
+  dispatch names. Legacy wide `NodeRequest` JSON still parses, but command
+  matching does not live in the socket server.
+- `ssh-proxy-daemon::control` owns the command-neutral `NodeRequestIntent` and
+  payload summaries derived from legacy daemon JSON. The app control protocol
+  is responsible for backward-compatible deserialization only; daemon runtime
+  code should consume the typed view before dispatch.
+- `protocol_core::descriptor` owns the typed peer descriptor DTO used by config
+  import/export, descriptor refresh, compatibility checks, remote install
+  endpoint adoption, and doctor output. Subsystems should parse descriptors once
+  into `PeerDescriptor` instead of re-reading endpoint and protocol fields from
+  raw JSON.
+- `protocol_core::codec` wraps the SPX data frame codec and the generic
+  `magic + version + length + JSON` control-frame shell used by QUIC-native
+  control. The SPX 9-byte header and the `QNC1` outer frame remain unchanged.
+- `protocol_core::report` owns shared health state, dependency
+  classification, repair-action references, and runtime decision DTOs.
+  Daemon-owned reports such as peer descriptors, route status, and route
+  readiness should materialize typed report structs first, then serialize to the
+  legacy-compatible public JSON shape.
+- `protocol_core::redaction` delegates to the lifecycle redaction rules so
+  token, credential, identity path, and `known_hosts` handling stays consistent
+  across status, doctor, daemon events, and VS Code diagnose.
+
+The protocol boundary is intentionally split by layer:
+
+- Control plane: JSON-line daemon control and remote peer control use shared
+  envelopes, version checks, command names, error fields, blockers, and repair
+  actions.
+- Data plane: SPX frames keep their binary format and are addressed through the
+  shared `DataFrame`/`SpxFrameCodec` contract.
+- Native QUIC control: `QNC1` still frames JSON route-control messages, but the
+  framing helper is shared with other control-plane transports.
+- Reports: status, doctor, events, and VS Code diagnose should render shared
+  DTOs instead of rebuilding health, dependency, connection, and redaction
+  fields in each subsystem.
+  Route runtime output keeps the legacy transport fields and `decision_chain`,
+  but also publishes the shared `connection_decision` DTO so daemon status,
+  doctor reports, and UI rendering can consume one decision surface.
+
+Peer compatibility has one production source. `ssh-proxy-service` consumes the
+protocol version helpers from `ssh-proxy-protocol` and renders service health,
+saved-peer compatibility, and fresh descriptor version-check reports. App
+modules pass local package/control/peer versions, recorded descriptor fields,
+and runtime probe results into those DTOs; they do not rebuild
+`protocol_compatibility_report`, binary-version checks, duplicate route IDs, or
+health JSON shapes themselves.
+
+OpenSSH subprocess compatibility and remote shell TCP probes are not part of
+the normal protocol stack. They remain explicit compatibility or diagnostic
+paths and must surface `requires_external_ssh`, dependency classification, and a
+repair action when used.
+
+## Workspace Layers
+
+The workspace uses horizontal core crates plus one vertical application crate.
+Dependencies should flow upward only:
 
 ```text
-remote SOCKS client
-  -> remote helper SOCKS5H listener
-  -> bridge frames over SSH stdio
-  -> local reverse transport
-  -> destination from the local machine
+core
+  <- protocol
+  <- lifecycle / config / control / ssh / transport / route / deploy / service / daemon
+  <- cli command contracts and app adapters in crates/ssh-proxy
+  <- binary bootstrap
 ```
 
-## Source Layout
+The first extraction pass keeps compatibility shims in `crates/ssh-proxy/src`
+so existing module paths can migrate gradually. New shared DTOs, codecs,
+lifecycle models, control socket helpers, SSH primitives, transport adapters,
+and CLI command contracts should live in the appropriate workspace crate rather
+than expanding the binary crate. `ssh-proxy-route` owns route decision, route
+conflict policy, preflight classification/fallback policy, remote-use policy,
+route plan, route status, and `decision_chain` rendering DTOs.
+`ssh-proxy-deploy` owns remote install, remote admin intents, remote setup
+artifact intents, and remote setup script rendering. `ssh-proxy-service` owns
+service-management contracts, service health DTOs, endpoint/binary/route-store
+reports, peer compatibility reports, status summaries, selected-control
+summaries, candidate summaries, and fallback recommendations.
+`ssh-proxy-daemon` owns command-neutral daemon/job/session/peer/state DTOs,
+proxy session specs, and daemon-unavailable fallback response builders.
+`ssh-proxy-cli` is a
+command-contract crate; command dispatch still lives in the app crate until the
+remaining runtime orchestration is promoted.
+Lower crates must not depend on app, CLI dispatch, SSH executors, or platform
+service runtimes unless the dependency direction is explicitly promoted in a
+separate architecture change.
 
-- `src/main.rs`
-  - Thin binary entrypoint only.
-  - Owns the global allocator, logging initialization, config loading, and top-level CLI dispatch.
-  - Runtime behavior belongs in explicit `src/*.rs` modules.
+Command-neutral intent models sit below CLI parsing and above runtime adapters:
 
-- `src/cli.rs`
-  - Clap/serde command and argument definitions.
-  - Shared by the thin CLI entrypoint, daemon control requests, route planning, and persisted route specs.
+- `ssh-proxy-core::intent` owns SSH target, route endpoint, route runtime,
+  remote install, peer bootstrap, deployment, and tuning intents. These types
+  use core enums and serde only; they do not depend on Clap, Tokio, Russh, the
+  app crate, or platform service crates.
+- `ssh-proxy-cli` owns Clap structs and implements conversion into core
+  intents. CLI help text, aliases, and hidden compatibility commands remain in
+  this crate, while lower layers consume the command-neutral form.
+- `ssh-proxy-config` plans profile/default values into core enums, endpoint
+  defaults, path-expanded artifacts, and runtime tuning before the app shim
+  applies them to legacy CLI-shaped structs.
+- `ssh-proxy-route` owns pool sizing, route conflict, preflight result
+  classification, fallback selection, remote-use decisions, and runtime
+  decision policy in terms of core route inputs. It also renders route plan
+  reports from typed route context instead of forcing app modules to re-read
+  their own JSON. The app route modules adapt CLI/config data, run async
+  TCP/TLS/QUIC probes, and send daemon requests, but pure policy should not grow
+  in the app crate.
+- `ssh-proxy-deploy` owns command-neutral remote install plans, remote admin
+  intents, remote setup artifact intents, and remote setup shell fallback
+  scripts. The app crate keeps SSH execution and lifecycle adapters.
+- Lifecycle provider selection uses core `RemotePlatform` and
+  `PersistenceMode`; CLI enums are compatibility wrappers at the edge.
+- `ssh-proxy-ssh` is the only crate that exposes Rust SSH behavior. It hides
+  `russh` behind `SshStream`, `connect_intent`, and `resolve_intent_target` so
+  app runtimes can use `AsyncRead + AsyncWrite` streams without depending on
+  `russh` types.
+- `ssh-proxy-transport` owns transport-facing protocol adapters: peer
+  transport TLS/QUIC helpers, QUIC stream wrappers, remote helper stream/error
+  models, remote helper opener runtime, peer listener bind/accept loops, and
+  SOCKS5/HTTP parser primitives. The app crate adapts CLI/config into typed
+  transport intents and supplies daemon/SSH callbacks, but it should not grow
+  new TLS or QUIC setup code.
+- `ssh-proxy-platform` owns local OS command plans, command outcomes, and
+  external action classification for service-provider commands. Service
+  adapters should route systemd, launchd, scheduled task, Windows SCM, and UAC
+  execution through this layer before rendering reports.
+- Self-update and service-provider subprocesses must be represented as
+  `PlatformCommandPlan` or `PlatformScriptPlan` with an
+  `ExternalActionClass`. Daemon runtime modules should call platform
+  `capture_command`/`spawn_command` helpers instead of constructing raw
+  subprocesses.
 
-- `src/ssh_client.rs`
-  - `russh` session setup, OpenSSH-style target parsing, ProxyJump connection chaining, host-key
-    checks, SSH exec, upload, and direct-tcpip streams.
-  - Authentication itself lives in `src/ssh_auth.rs`.
+Native execution is preferred over shell execution whenever it can preserve the
+same public behavior:
 
-- `src/deploy.rs`
-  - SSH bootstrap and remote host management orchestration.
-  - Connects through `ssh_client`, applies config defaults, records peer install metadata, and
-    dispatches host management commands.
-  - Delegates detailed behavior to focused submodules:
-    - `src/deploy/remote_commands.rs`: remote shell command builders for config writing,
-      systemd/nohup service management, node control forwarding, logs, clean, and doctor.
-    - `src/deploy/helper.rs`: helper probing, sidecar/current-binary selection, upload, and helper
-      exec command construction.
-    - `src/deploy/transport.rs`: direct QUIC, TLS/TCP, plain TCP, SSH direct-tcpip, SSH exec, and
-      `auto` peer transport opener.
+- Linux local systemd actions try `ssh-proxy-platform::systemd` D-Bus plans for
+  start, stop, restart, enable, reload, and linger before falling back to
+  `systemctl` or `loginctl`.
+- Windows system service status uses `windows-service`; user scheduled-task
+  install uses Task Scheduler COM through `ssh-proxy-platform::windows_tasks`
+  before falling back to `schtasks`.
+- macOS launchd plists render tokenized `ProgramArguments` for
+  `ssh_proxy daemon serve`; `launchctl` remains the provider command, but the
+  daemon is not launched through `/bin/sh -lc`.
+- Remote helpers expose `ssh_proxy remote admin` JSON intents for checksum,
+  defaults, status, doctor, and Git config edits. Deploy and remote setup try
+  this own-binary path first, then fall back to legacy bootstrap or diagnostic
+  scripts when the helper is absent or incompatible. Own-binary and native
+  provider reports include `execution_backend`, `fallback_used`, and an
+  `external_action` block; shell fallback scripts are classified as fallback
+  providers rather than normal success paths.
 
-- `src/bridge.rs`
-  - Local bridge manager for the framed `SPX1` proxy stream.
-  - Presents per-flow TCP/UDP handles to ingress code and maps them to `protocol::Frame`.
+External dependencies are limited to explicit execution boundaries:
 
-- `src/controller.rs`
-  - Legacy local proxy/control kernel and bridge reconnect loop.
-  - Kept as an implementation detail for `proxy` and compatibility commands while new workflows
-    move toward `node daemon` + `route`.
+- Linux local service fallback may use `systemctl` and `loginctl` after native
+  D-Bus planning fails or is unavailable.
+- macOS service management uses `launchctl` provider commands, but daemon
+  launch arguments stay tokenized in the plist and do not run through a shell.
+- Windows compatibility fallback may use `sc.exe`, `schtasks.exe`, or
+  `powershell.exe`; native SCM, scheduled-task COM, UAC, and ProgramData
+  behavior remain the preferred production path.
+- Remote bootstrap may use POSIX shell or PowerShell only as fallback around
+  stdin-backed artifact writes, Git cleanup/apply scripts, or service-provider
+  commands.
+- OpenSSH and `ssh-exec` are explicit emergency compatibility paths. They are
+  never part of the default route/session success chain.
 
-- `src/socks.rs`
-  - Unified SOCKS5H and HTTP proxy ingress parser.
-  - Converts client TCP/UDP proxy requests into bridge operations.
+Operational reports and logs should make fallback behavior observable. Success
+and failure paths that touch native providers, own-binary helpers, provider
+commands, self-update scripts, or remote shell bootstrap must surface
+`execution_backend`, `fallback_used`, and `external_action` when rendered as
+JSON, and logs should include the relevant `job_id`, `session_id`, `route_id`,
+`peer`, `execution_backend`, and `fallback_used` fields. Production runtime
+paths return structured errors or compatibility reports instead of adding
+`unwrap`, `expect`, `panic`, `todo`, or `unimplemented`; test helpers and
+`#[cfg(test)]` modules are the exception.
 
-- `src/remote.rs`
-  - SSH exec fallback/helper runtime.
-  - Runs stdio framed transport, direct TCP framed transport, or a remote reverse SOCKS listener.
+Test ownership follows the same layer map. Pure policy and report assertions
+live in the crate that owns the type: route policy in `ssh-proxy-route`, daemon
+session and control DTOs in `ssh-proxy-daemon`, service health and peer
+compatibility in `ssh-proxy-service`, deploy/lifecycle command rendering in
+`ssh-proxy-deploy` or `ssh-proxy-lifecycle`, and native/fallback outcome
+contracts in `ssh-proxy-platform`. App tests stay focused on CLI/config
+adapters, daemon JSON-line compatibility, real async probes/listeners, and
+small integration smoke. Larger app tests live under `crates/ssh-proxy/tests`
+and use `tests/support` modules instead of growing single-file harnesses.
 
-- `src/protocol.rs`
-  - Compact framed protocol shared by normal proxy and reverse proxy.
-  - Defines `Frame`, `UdpDatagram`, frame size limits, binary encode/decode, and protocol unit tests.
+Real SSH end-to-end tests are an opt-in operational gate, not a default
+correctness gate. `remote_probe` validates OpenSSH reachability and russh
+`host exec` parity without remote writes. `remote_smoke` uses a release musl
+sidecar, an isolated `/tmp/ssh_proxy-e2e-*` directory, random token, temporary
+remote daemon, and forced cleanup. `remote_full` adds own-binary remote admin
+checksum/status checks. Private target aliases, jump topology, and upstream
+proxy values must come from local environment files; tracked docs and tests use
+only placeholder aliases.
 
-- `src/peer_transport.rs`
-  - Transport selection model for the daemon-to-daemon data plane.
-  - Defines the target fallback order: QUIC, TLS-over-TCP, optional plain TCP, SSH direct-tcpip, SSH exec.
-  - The current implemented auto path tries configured QUIC, configured TLS/TCP, optional plain TCP when explicitly allowed, then SSH direct-tcpip to daemon TCP transport, then SSH exec helper fallback.
+Protocol/transport matrix tests are the opt-in performance and stability layer
+above remote E2E. They use the same local-only target configuration, then write
+sanitized JSON/CSV/Markdown artifacts that join connection strategy, selected
+transport, fallback classification, workload, payload size, correctness, scoped
+throughput samples, median/p95 throughput, median/p95 first-byte latency,
+median/p95 duration, sample/request/concurrency counts, run window, lost
+requests, reconnect count, and cleanup status. The matrix is report-first for
+speed numbers: correctness and cleanup are hard gates, while throughput and
+latency become thresholded only after repeated lab baselines. Workloads are
+normalized across the same transport cases:
+`control`, `large-download`, `large-upload`, `long-connection`, and
+`high-concurrency`. Control scopes are `control-status-through-proxy` and
+`control-status-through-openssh-forward`; payload scopes use the same proxy vs.
+OpenSSH local-forward split through a temporary remote TCP bench server. Bench
+setup is start/probe classified, and payload rows are preflight-skipped when the
+target cannot provide that server. The summary Markdown table filters out
+successful setup rows, hides control-plane throughput as `n/a`, and favors
+median/p95 values so a single matrix run can be pasted as release evidence
+without leaking target details.
+ProxyJump/no-login topology requires OpenSSH/russh/SPX-over-SSH success; direct
+topology additionally attempts direct plain/TLS/QUIC/QUIC-native and classifies
+unreachable candidates as preflight skips or runtime failures.
 
-- `src/control_socket.rs`
-  - Cross-OS daemon control IPC.
-  - Supports TCP, Unix domain sockets, and Windows named pipes.
-  - Applies shared request/response byte limits and 30-second IO timeouts so control clients cannot
-    hold daemon tasks or memory indefinitely.
+Runtime files follow the same boundary rule. `ssh_native` keeps direct-tcpip
+behavior in the app crate but separates control listening, listener
+orchestration, session scheduling, and active-channel counter guards into
+focused submodules. `controller` keeps SPX behavior stable while splitting
+command dispatch, control-client requests, and SOCKS listener orchestration
+from shared state and status accounting. SPX worker status is materialized
+through `ssh-proxy-transport::spx::SpxBridgeWorkerSnapshot`, so status
+renderers classify connected/degraded/reconnecting state from a typed transport
+DTO. `socks::tunnel` centralizes app-side backend selection for SPX, ssh-native,
+and QUIC-native tunnels while protocol parsing remains in
+`ssh-proxy-transport`.
 
-- `src/route.rs`
-  - High-level route intent planner.
-  - Builds route intent JSON for the CLI and exposes pure planning helpers used by `node_daemon`.
-  - Expands saved target profiles, chooses route owner by direction, validates reachable local peer addresses for remote-owned routes, and emits daemon route JSON.
+## Symmetric Peer Lifecycle
 
-- `src/config.rs`
-  - Local config management.
-  - Owns `config init/show/profiles`, `profile-set/profile-remove`, `token`, and `cert-import`.
-  - Persists node identity, peer registry records, SSH auth references, known_hosts policy, ProxyJump chains, peer transport defaults, saved remote tokens, and TLS/mTLS certificate paths.
-
-- `src/config/diagnostics.rs`
-  - Redacted config diagnostics and offline descriptor exchange.
-  - Owns `config inspect`, `config export-descriptor`, and `config import-descriptor` materialization
-    so config presentation and peer adoption logic do not keep growing the core config model file.
-
-- `src/ssh_auth.rs`
-  - SSH authentication strategy for `russh` sessions.
-  - Tries SSH agent/Pageant/OpenSSH agent first, then configured or default unencrypted identity files, then `none`.
-  - Keeps private key material outside `~/.ssh_proxy/config.toml`; profiles store only paths and policy references.
-
-- `src/node_daemon.rs`
-  - Symmetric node service shell.
-  - Owns daemon startup/shutdown, shared `NodeManager` state, status/link JSON, and legacy profile
-    connect/disconnect.
-  - Delegates node behavior to focused submodules:
-    - `src/node_daemon/control_client.rs`: CLI-side `node control` request construction.
-    - `src/node_daemon/control_protocol.rs`: typed node control request model and JSON line
-      materialization shared by the CLI, route planner, SSH-mediated remote host control, reporter,
-      and control server. New JSON requests carry `api_version = 1`; legacy text commands and older
-      JSON without a version remain accepted during the current reshaping phase.
-    - `src/node_daemon/control_server.rs`: daemon control socket listener, request parsing, and
-      dispatch.
-    - `src/node_daemon/args.rs`: route/control CLI argument materialization.
-    - `src/node_daemon/transport.rs`: plain TCP, TLS/TCP, and QUIC peer transport listeners.
-    - `src/node_daemon/routes.rs`: daemon-owned route specs, persistent route store, route
-      start/stop/restart/restore, and route supervision.
-    - `src/node_daemon/peers.rs`: peer registry output, peer bootstrap/forget, peer status reports,
-      route-intent planning, and bootstrap-before-route behavior.
-
-- `src/service.rs`
-  - Local service command orchestration.
-  - `service print/install/uninstall/start/stop/status` now delegates shared planning and
-    platform execution to focused submodules.
-  - `service install` copies the current executable into a stable user install directory by
-    default, writes missing daemon defaults to `~/.ssh_proxy/config.toml`, generates a secure
-    transport token, auto-selects an available user transport port, then points the service at
-    `ssh_proxy node daemon`.
-  - `service status` now prints a redacted project-level JSON summary before delegating to the
-    platform status command. It includes config/route-store/binary paths, selected endpoints,
-    token/cert presence, report targets, config schema health, route-store version/duplicate-ID
-    checks, saved peer endpoint diagnostics, and a best-effort daemon status query.
-
-- `src/service/plan.rs`
-  - Service install plan and daemon command materialization.
-  - Resolves user/system scope, stable install path, daemon control endpoint, peer transport
-    listeners, token/config materialization, TLS/mTLS paths, and binary copy behavior.
-
-- `src/service/platform.rs`
-  - OS-specific service execution.
-  - Linux: systemd user/system.
-  - macOS: launchd user/system.
-  - Windows: schtasks for user scope, sc.exe for system scope.
-
-- `src/sidecar.rs`
-  - Embedded Linux musl helper extraction.
-  - Used when a Windows/macOS binary needs to upload a Linux helper.
-
-- `src/logging.rs`
-  - Tracing subscriber initialization.
-
-- `build.rs`
-  - Enforces Linux musl sidecar availability for every non-musl build.
-  - Copies the helper into `OUT_DIR/linux-musl-sidecar.bin`, then `sidecar.rs` embeds it with `include_bytes!`.
-
-## Build Contract
-
-The build contract is intentionally strict:
+Local daemons and remote peer servers share the same lifecycle vocabulary:
 
 ```text
-cargo zigbuild --target x86_64-unknown-linux-musl
-cargo build
+prepare -> inspect_descriptor -> dependency_check -> stage_binary
+  -> write_config -> install_service -> start_service -> health_probe
+  -> record -> healthy | repairing | rollback | failed
 ```
 
-The first command builds the Linux helper. The second command embeds that helper into the current OS binary.
+The implementation keeps platform differences behind small adapters:
 
-For release, build the musl release helper before building the host release binary. `SSH_PROXY_LINUX_MUSL_BIN` can override the sidecar path.
+- `PeerLifecycleSpec` is the shared model for `local_daemon` and `remote_peer`
+  roles; legacy CLI/daemon entrypoints convert into this model before reporting
+  service state.
+- `PeerLifecycleContext` carries the current role, platform, scope, provider,
+  executor, store, and report sink. Entrypoints should pass this context across
+  same-layer helpers instead of threading loosely related arguments.
+- `LocalExecutor` and `SshExecutor` run the same lifecycle against local files
+  or Rust SSH exec/upload/direct-tcpip.
+- `LifecyclePlan` contains executable actions (`StageBinary`, `WriteArtifact`,
+  `ReadArtifact`, `RunCommand`, `ProbeTcp`, `ServiceControl`) so daemon jobs and
+  remote peer bootstrap use one execution path instead of parallel scripts.
+- `LifecycleEventSink` streams phase reports while work is running; job records,
+  peer status, events, and doctor output are derived from the same report stream.
+- Service providers render platform operations for Windows SCM, Windows user
+  scheduled tasks, systemd, launchd, and the managed nohup supervisor.
+- Remote install no longer executes service-manager commands as an ad hoc SSH
+  call. `install_remote` builds a `PeerLifecycleSpec(remote_peer)` and runs the
+  provider command plan through `SshExecutor` and the lifecycle workflow, so
+  command failure, phase reporting, and redaction use the same path as daemon
+  jobs.
+- Rust materializes peer `config.toml`, `peer_state.json`,
+  `install_report.json`, `health.json`, and `routes.json`; remote shell usage is
+  limited to minimal file writes and platform service commands.
+- `peer_lifecycle::store` validates and redacts peer state, install report,
+  health, and routes documents before they are written or surfaced in reports.
+- `PeerLifecycleReport` is reused by local service install reports and remote
+  peer status so doctor/status output has the same state, phase, provider,
+  blocker, retry, and recovery vocabulary.
 
-Compile-time choices:
+`service-manager` is useful as an interface reference, but the production path
+keeps the existing `windows-service` + elevated worker transaction until a
+separate compatibility pass proves it can preserve versioned binaries, UAC
+logging, rollback behavior, and remote provider command rendering.
+See `docs/service-provider-evaluation.md` for the provider contract and adoption
+gate.
 
-- `tokio` is feature-scoped to `macros`, `rt-multi-thread`, `net`, `io-util`, `io-std`, `sync`, `time`, and `fs`. Avoid returning to `full` unless a new subsystem genuinely needs the extra APIs.
-- `profile.dev` and `profile.test` keep incremental builds on, reduce debug info, and use many codegen units. This improves local iteration while release keeps `opt-level = 3`, fat LTO, one codegen unit, aborting panics, and stripping.
-- `scripts/cargo-sccache.ps1` and `scripts/cargo-sccache.sh` opt into `sccache` without making it mandatory. Do not hard-code `rustc-wrapper = "sccache"` in `.cargo/config.toml` unless the deployment environment guarantees that binary exists.
+## Component Boundaries
 
-## SSH Layer
+The v0.3 lifecycle code is the execution authority. Other subsystems translate
+user intent into lifecycle specs, route specs, or setup artifacts and then hand
+execution to shared modules.
 
-`ssh_client` uses `russh` directly:
+- `peer_lifecycle` owns shared specs, lifecycle actions, event sinks, executor
+  traits, service-provider contracts, connection decision metadata, stores,
+  reports, and redaction. It should not know VS Code command text or daemon RPC
+  framing.
+- `service` owns local CLI option parsing and platform permission boundaries.
+  `service.rs` is the thin command entrypoint; `service::report`,
+  `service::status`, `service::health`, and `service::labels` adapt install
+  reports, daemon status JSON, local health probes, and user-visible labels.
+  Pure health report shapes, peer compatibility reports, manager summaries,
+  candidate summaries, selected-control summaries, service state names, and
+  fallback recommendations live in `ssh-proxy-service`. The app service modules
+  build `PeerLifecycleSpec(local_daemon)`, call the lifecycle runner, query
+  runtime daemon state, and execute platform adapters. Platform behavior is
+  split behind provider adapters for systemd, launchd, Windows SCM, and Windows
+  user scheduled tasks; Windows SCM FFI, UAC worker behavior, versioned
+  ProgramData binaries, and rollback stay in the Windows SCM adapter.
+- `deploy` owns remote bootstrap inputs, descriptor refresh, token/config
+  materialization, and compatibility helpers. Remote peer installation runs as
+  `PeerLifecycleSpec(remote_peer)` through `SshExecutor`.
+- `node_daemon::remote_peer` owns daemon RPC/job glue, retry/adopt policy, and
+  peer registry updates. It streams lifecycle events instead of rebuilding
+  install phase reports. The public RPC wrapper stays in `remote_peer.rs`;
+  `remote_peer::job_runner` sequences descriptor adoption, install fallback,
+  and terminal failure recording; `remote_peer::report` and `phase_mapping`
+  own status DTOs and lifecycle/job phase conversion.
+- `node_daemon::control_protocol` owns legacy JSON-line wire DTOs only.
+  `control_protocol::payload_adapter` maps wide legacy fields into
+  `ssh-proxy-daemon::control::NodeRequestIntent`, while
+  `control_protocol::response` renders shared control envelopes back into the
+  additive public JSON shape.
+- `node_daemon::peers` owns peer command dispatch and peer registry operations.
+  Route intent orchestration lives in `peers::route_intent`, which builds route
+  plans, ensures peer prerequisites, and preserves the daemon route response
+  shape before returning to the control server.
+- `node_daemon::proxy_session` owns the session state machine that sequences
+  remote peer ensure, route creation, Rust-native handoff, remote setup, and
+  health monitoring. `ssh-proxy-daemon` owns `ProxySessionSpec`, SSH target
+  details, apply policy, URL/key helpers, and pure session reuse matching; the
+  app `spec` submodule only adapts CLI args into that stable intent model.
+  Status rendering helpers live in the `status` submodule;
+  `apply_settings` owns the direct VS Code apply-settings command path, and
+  `route_ready` owns route readiness, handoff probing, remote setup, and final
+  health transition. `job_runner` sequences these modules and owns route
+  conflict repair, so `proxy_session.rs` remains the daemon RPC surface.
+- `node_daemon::remote_setup` owns SSH execution for VS Code and shell
+  environment artifacts. Rust renders payloads through deploy-owned DTOs and
+  uses `SshExecutor.write_artifact`; shell remains limited to stdin file writes,
+  fallback Git config, cleanup, and platform commands. `ssh-proxy-deploy` owns
+  `RemoteArtifactIntent`, remote setup payload rendering, and fallback script
+  rendering. The app crate adapts those intents to `SshExecutor`, so deploy
+  models do not depend on SSH runtime code. `remote_setup::executor` is the only
+  app-side module that opens SSH for this flow.
+- `ssh-proxy-deploy::RemoteSetupExecutionPlan` groups remote setup payloads,
+  artifact intents, and optional script intents. It is the planning boundary for
+  VS Code settings, server-env, and remote status updates; app modules execute
+  the plan and map outcomes back into the legacy session/status JSON.
+- `quic_native::runtime` owns connection-pool state and data-flow accounting.
+  Listener and local control-port orchestration live in `runtime::listener`;
+  connection establishment lives in `runtime::connection`; status rendering
+  lives in `runtime::status` with `snapshot`, `profile`, and `render`
+  submodules; worker metric mutation lives in `runtime::worker_metrics`, while
+  status-only worker snapshots live in `runtime::metrics_snapshot`. Control
+  keepalive and stream I/O stay in their existing focused modules. `QNC1`
+  control framing and stream behavior remain compatibility-owned by the
+  protocol modules, not by status rendering.
+- `node_daemon::management` owns daemon update transactions and the preview node
+  control surface. User/report JSON for nodes, jobs, job events, and peer
+  ensure/update wrappers lives in `management::report`; staged self-update
+  orchestration lives in `management::update`. Pure update DTOs live in
+  `ssh-proxy-daemon::update`, while switch-script launch and version probing go
+  through `ssh-proxy-platform` plans classified as `self_update`.
+- `node_daemon::state` owns daemon state file orchestration. The serialized job,
+  session, peer, remote setup, and daemon records live in `ssh-proxy-daemon`;
+  app-side store modules keep file I/O, async locking, schema compatibility, and
+  corrupt-file quarantine behavior.
+- `route` owns user-visible route plans and runtime probe execution. Transport
+  names, direct-policy labels, SSH-mode labels, data-plane reasons, preflight
+  classification, fallback decisions, and remote-use decisions come from
+  `ssh-proxy-route` so status, doctor, daemon, and route output use one
+  vocabulary. Route plan JSON is rendered from `RoutePlanReport`; daemon route
+  status consumes `RouteRuntimeDecision` instead of rebuilding selected
+  transport, preflight, and SSH-mode metadata. The app route modules should only
+  adapt CLI/config inputs, run real TCP/TLS/QUIC probes, and send daemon
+  requests before feeding typed DTOs back into `ssh-proxy-route`. New consumers
+  should prefer `connection_decision` for typed transport selection and read the
+  older route metadata only for compatibility or detailed diagnostics.
 
-- Resolves OpenSSH-ish target syntax: `host`, `user@host`, `host:port`.
-- Reads `~/.ssh/config` for HostName, User, Port, IdentityFile, UserKnownHostsFile, StrictHostKeyChecking, and ProxyJump.
-- Implements ProxyJump with SSH `direct-tcpip`; no OpenSSH subprocess is required for the data path.
-- Auth order: agent first, then identity files, then `none`.
-- Windows agent failures are non-fatal; the code falls through to identity files.
+## Public CLI Surface
 
-Known limitation: encrypted private keys require an agent.
-
-Profile/auth storage:
-
-- `~/.ssh_proxy/config.toml` carries `schema_version = 1`. Missing schema versions are accepted as
-  legacy v1-compatible configs; future schema versions are rejected with an upgrade hint instead of
-  being interpreted silently.
-- Every node now has an `[identity]` block with `node_id`, `node_name`, and `secret`. `config init` and `service install` generate it automatically.
-- Peer nodes are tracked under `[peers.<alias>]`. A peer record stores the peer node identity, target alias, selected control endpoint, selected peer transport, token, trust source, and last-seen timestamp.
-- Daemon and peer tokens can carry redacted `TokenMetadata`: creation time, rotation time, scope,
-  and optional expiry. Old configs with only `token = "..."` still load; metadata is populated when
-  a token is generated, rotated, or recorded through bootstrap/refresh.
-- `config inspect` is the redacted configuration view. It exposes schema, endpoint, identity,
-  profile, peer, token metadata, certificate path, and trust-source presence without printing node
-  secrets, daemon tokens, profile remote tokens, or peer tokens.
-- `config export-descriptor` and `config import-descriptor` support offline or one-way adoption.
-  Exported descriptors are redacted and contain endpoints, protocol versions/features, auth
-  presence, and token metadata but not token values. Import can attach an out-of-band token and
-  records the peer/profile with `trust = "descriptor-import"` by default.
-- SSH bootstrap records every configured remote peer listener it knows about: plain TCP,
-  TLS-over-TCP, and QUIC. Profiles mirror the same endpoints so later route planning can prefer
-  private transports without repeating install-time flags.
-- Peer records also maintain a `transport_protocols` summary ordered by preferred data-plane
-  attempt order: `quic`, `tls-tcp`, then `plain-tcp`. Older configs without that field derive the
-  same list from stored endpoints when displayed.
-- SSH bootstrap is considered a trust event. When `host <target> start` succeeds, the local config records the remote peer and the remote config records the local node as `peers.bootstrap-local`.
-- Profiles store references to SSH identity files, not private key material. This keeps OpenSSH-compatible key management outside the config.
-- Agent auth is runtime state and is never persisted; the profile records only the target/user/port/jump/known_hosts values needed to resolve the connection.
-- `accept_new` can be persisted per profile, but should be treated as a bootstrap convenience rather than a long-term strict host-key policy.
-
-Certificate storage:
-
-- `config cert-import` copies TLS and mTLS files into `~/.ssh_proxy/certs/<name>/`.
-- Remote verification material attaches to a profile with `remote_ca`, `remote_client_cert`, and `remote_client_key`.
-- Local listener material attaches to daemon config with `tls_cert`, `tls_key`, and `tls_client_ca`.
-- On Unix, imported key files are chmod `0600`; cert/CA files are chmod `0644`.
-
-## Bridge Protocol
-
-`protocol::Frame` is a compact framed protocol over any async read/write stream:
-
-- `OpenTcp`
-- `OpenTcpResult`
-- `Data`
-- `Close`
-- `UdpPacket`
-- `Log`
-
-The local side multiplexes accepted proxy flows over one bridge. SOCKS5H and HTTP `CONNECT` become TCP streams; HTTP absolute-form requests are rewritten to origin-form and then sent as TCP data. SOCKS UDP associate maps to framed UDP datagrams. The remote side maps frames to outbound `TcpStream` and `UdpSocket` operations.
-
-Frame IO is bounded by `MAX_FRAME` (16 MiB). Writers reject oversized payloads before emitting a
-header, readers reject oversized length headers, and structured frame decoders reject trailing bytes
-so protocol drift or corrupted payloads fail loudly instead of being silently accepted.
-
-## Peer Transport Roadmap
-
-The application-layer protocol should remain one framed route/data/control protocol. Transport selection sits below it.
-
-Preferred order for new environments:
-
-1. `quic`: implemented primary data plane. It gives UDP-native behavior, QUIC transport recovery, lower head-of-line blocking at the transport layer, and better adaptation to lossy networks. Current runtime uses one bidirectional QUIC stream carrying the existing `SPX1 + Frame` protocol.
-2. `tls-tcp`: implemented conservative fallback for networks that block QUIC but allow normal TCP. It uses rustls with pinned roots and optional mTLS.
-3. `plain-tcp`: implemented local-only or explicitly trusted environments. It stays opt-in because it lacks transport security.
-4. `ssh-direct`: current stable fallback through SSH `direct-tcpip` into the remote daemon transport.
-5. `ssh-exec`: bootstrap/fallback helper path when no daemon transport is reachable.
-
-`remote_transport=auto` currently tries the implemented stable subset: configured QUIC first, configured TLS/TCP second, explicit plain TCP third when `allow_plain_tcp` is true, SSH direct-tcpip to the remote daemon transport fourth, then SSH exec helper. The module is deliberately test-driven so QUIC stream-per-flow and QUIC mTLS can be added without changing route semantics.
-
-Implemented daemon transport handshake:
-
-1. Optional shared token prefix, retained for current deployments.
-2. `PeerHello` JSON packet with magic `SPX1`, version, node name, candidate protocol, and feature list.
-3. `PeerWelcome` JSON packet with accepted protocol and remote feature list.
-4. Existing `protocol::Frame` stream.
-
-The handshake is intentionally below route semantics and above the physical stream. TLS/TCP, SSH direct-tcpip, and future QUIC should all converge on the same hello/welcome capability exchange before data frames begin.
-
-Direct Peer Transport Status:
-
-- `node daemon --quic-transport --tls-cert --tls-key` exposes a direct QUIC peer listener.
-- `proxy --remote-transport quic --remote-quic --remote-ca --remote-name` opens a direct QUIC daemon stream without establishing SSH.
-- `tokio-rustls` is added with the `ring` backend, not aws-lc.
-- `peer_transport` can build client/server TLS configs from PEM material.
-- `node daemon --tls-transport --tls-cert --tls-key` exposes a direct TLS peer listener.
-- `node daemon --tls-client-ca` requires connecting TLS peers to present a client certificate rooted in that PEM bundle.
-- `proxy --remote-transport tls-tcp --remote-tls --remote-ca --remote-name` opens a direct daemon stream without establishing SSH.
-- `proxy --remote-client-cert --remote-client-key` presents a client certificate for mTLS.
-- `proxy --remote-transport plain-tcp --remote-tcp` opens the daemon's normal TCP transport directly without SSH. This is insecure unless the network is already trusted.
-- `auto` uses QUIC first when `--remote-quic` is configured, TLS/TCP next when `--remote-tls` is configured, can use plain TCP only with `--allow-plain-tcp`, then falls back to SSH transports.
-- Tests prove explicit QUIC and `auto` QUIC can carry normal SOCKS traffic without the SSH client path.
-- Tests prove explicit TLS/TCP and `auto` TLS/TCP can carry normal SOCKS traffic without the SSH client path.
-- Tests prove mTLS accepts clients with a trusted certificate and rejects clients that omit it.
-- Tests prove explicit plain TCP and `auto + allow_plain_tcp` can carry normal SOCKS traffic without the SSH client path, including the optional transport token prefix.
-
-## Reconnect and Recovery
-
-`controller::run_bridge_manager` owns the SSH bridge lifecycle:
-
-- Tracks attempts, success/failure counters, active/total TCP counts, generation, and last error.
-- Uses exponential backoff with `reconnect_delay_secs` and `reconnect_max_delay_secs`.
-- Wraps bridge connect in `connect_timeout_secs`.
-- On bridge loss, clears the active bridge handle so new SOCKS requests wait for reconnect or fail if reconnect is disabled.
-
-`reverse` uses the same timeout and exponential backoff shape, but its remote SOCKS listener is tied to the SSH exec session. If the SSH session drops, local `reverse` reconnects and starts a fresh remote SOCKS listener.
-
-Before starting reverse mode, `deploy` probes an explicit remote helper path in `auto` mode. The probe verifies that the helper supports `remote --reverse-socks` and checks the requested remote listen port with `ss` when available. This catches stale helpers and common port conflicts before the framed stream starts.
-
-The node control API exposes status, descriptor, shutdown, connect/disconnect profile operations,
-route start/stop, peer bootstrap/registry management, transport/link counters, and peer reports.
-The legacy daemon control API remains for compatibility.
-
-Node control requests now have a single typed construction path:
-
-- local `node control` commands;
-- short `route` intent requests;
-- `host <target> node-*` commands tunneled through SSH to the remote node CLI;
-- daemon peer status reports.
-
-`node control descriptor` returns the local node's peer descriptor: node identity, binary version,
-OS/arch, control API version, peer protocol version, advertised protocol features, control/data
-endpoints, transport protocol summary, token/certificate presence, route store path, and autostart
-setting. It is intentionally redacted: token values and private key paths are not exposed.
-`node control token-rotate` rotates the daemon control/transport token after authenticating the
-current request, updates the daemon's in-memory token and config file, and returns the new token plus
-metadata to the caller. Dual-token grace windows are still future work.
-`node control peer-rotate-token <target>` performs the remote half through SSH: it calls the peer's
-`token-rotate`, parses the new remote token, refreshes the descriptor when possible, and records the
-updated token/metadata in the local profile and peer registry.
-
-`node control peer-refresh <target>` is the first adoption path. The local daemon connects through
-SSH, runs the remote node's `descriptor` command, and records the returned identity/endpoints
-without uploading a new binary or restarting the service. `route` uses the same refresh attempt
-before bootstrap when no usable peer record exists, so an already-running remote daemon can be
-adopted into the local registry instead of being overwritten.
-
-`node control peer-diff <target>` uses the same SSH descriptor query but does not mutate local
-configuration. It returns a redacted comparison of the saved profile/peer record against the remote
-descriptor, including node identity, control/data endpoints, transport protocol set, token presence
-and token metadata scope. The response includes `changed` and `next_action` so the CLI can point the
-operator toward `peer-refresh` for stale descriptors or `peer-rotate-token` for token-only drift.
-
-`node control peer-check-version <target>` is the explicit compatibility diagnostic. It queries the
-remote descriptor over SSH and compares the remote control API version, peer data protocol version,
-advertised features, and package version with the local binary. A remote control API newer than the
-local binary or a future peer data protocol reports `next_action = "upgrade-local"`. Missing,
-older, or feature-incomplete peer protocol metadata reports `next_action = "peer-bootstrap --force"`.
-Package-version differences are advisory when protocol checks still pass.
-
-The server rejects requests with a future `api_version`, while still accepting missing versions for
-older bootstrap helpers. Responses now preserve their existing top-level fields while adding
-`api_version = 1`; common success/error replies use the shared response envelope and include stable
-error `code` values. Rich status/list responses still expose domain fields at the top level for CLI
-and script ergonomics.
-
-Control IPC has bounded IO. Requests larger than 1 MiB are rejected with `bad_request`, responses
-larger than 16 MiB are rejected by the client, and connect/read/write operations time out after 30
-seconds. These limits are intentionally generous for route and peer descriptors while preventing
-accidental unbounded reads.
-
-TCP control endpoints are token-protected when the daemon has a configured token. Local
-`node control` injects `--token` when provided, otherwise it falls back to `[daemon].token` from the
-local config. Unix sockets and Windows named pipes continue to rely on their user-scoped OS
-boundary. This keeps local service installs ergonomic while preventing an unauthenticated localhost
-TCP control socket from accepting lifecycle commands.
-
-SSH-mediated `host <target> node-*` commands also pass the recorded remote token explicitly to the
-remote `node control` CLI. This keeps remote management working even when the remote user's home or
-config discovery differs between interactive SSH sessions, systemd user services, and nohup
-supervisors.
-
-Route task semantics:
-
-- `forward`: local node binds a local SOCKS5H/HTTP listener and connects through an SSH target. With `remote_transport=tcp`, it uses the remote node daemon transport.
-- `reverse`: local node owns the task and SSH session, while the target binds the remote SOCKS5H listener. Traffic egresses from the local node.
-- Route IDs are unique within a node daemon. Starting a duplicate ID fails.
-- Forward routes preflight the local listen address to catch port conflicts before spawning; the route table also rejects duplicate local listener ownership.
-- Reverse routes reject duplicate `target + remote_listen` ownership inside one daemon. Remote OS port conflicts are still surfaced through the route task's SSH/session logs.
-- Route starts are persistent by default. The daemon writes durable route specs to `~/.ssh_proxy/routes.json` unless the route was created with `--volatile`.
-- Route store writes use the same private temp-file replacement path as config writes, avoiding
-  partially written JSON after a process crash or disk error.
-- Route-start success responses include the route ID, owner, direction, listener, peer, detail, and
-  persistence fields so daemon-first commands can render useful output without scraping route
-  tables.
-- Startup restores persistent routes by default. `node daemon --no-route-autostart` disables that restore pass.
-- Each route has an internal supervisor. Task exit/error updates route stats (`state`, `attempts`, `restart_count`, `last_error`, `last_event`) and then restarts with capped backoff.
-- `stop-route` aborts the task and removes it from the route store. `restart-route` aborts and respawns from the in-memory spec, then rewrites the route store if the route is persistent.
-- `routes` returns route state without unrelated profile/transport detail; `status` and `links` include the same route array.
-- `host node-forward`, `host node-reverse`, `host node-routes`, `host node-restart-route`, and `host node-stop-route` send the same route JSON to a remote installed node daemon through SSH. This keeps service-installed operation daemon-owned even when the management path is SSH.
-
-## Remote Host Management
-
-Remote node management lives in `deploy` for now. It should eventually move to `src/remote_host.rs`.
-
-Supported remote management commands:
-
-- `start`
-- `status`
-- `node-status`
-- `node-links`
-- `node-descriptor`
-- `node-forward`
-- `node-reverse`
-- `node-routes`
-- `node-restart-route`
-- `node-stop-route`
-- `node-connect`
-- `node-disconnect`
-- `logs`
-- `doctor`
-- `restart`
-- `stop`
-- `clean`
-
-Persistence:
-
-- `auto`: try systemd user; fallback to nohup supervisor.
-- `systemd`: user-level systemd service that runs `node daemon`; best-effort `loginctl enable-linger` for logout/reboot survival on Linux.
-- `nohup`: small supervisor script plus pidfile, child pidfile, and logfile under `~/.ssh_proxy`; runs `node daemon` and restarts it with capped backoff.
-
-Persistent remote installs default to a user software path. The resolver prefers a directory already present on the remote `PATH` (`~/.local/bin`, `~/bin`, then `~/.ssh_proxy/bin`), otherwise creates `~/.local/bin/ssh_proxy`. This keeps the node CLI discoverable for interactive remote management without requiring root.
-
-Control endpoints are user-scoped by default to avoid multi-user collisions:
-
-- Windows: named pipe includes the username.
-- Linux: `$XDG_RUNTIME_DIR/ssh_proxy.sock`, falling back to `~/.ssh_proxy/control.sock`.
-- macOS: `~/.ssh_proxy/control.sock`, falling back to `/tmp/ssh_proxy-<user>.sock`.
-
-Local `service install` enables a per-user localhost transport by default. It is derived from the username to reduce collisions on shared machines; if that port is unavailable during first install, the planner scans the next 200 ports and saves the selected value. Operators can pin a stable transport with `service --transport <addr> install`, disable it with `service --no-transport install`, or add `transport_listen` under `[daemon]` in `~/.ssh_proxy/config.toml`.
-
-The daemon now treats config as a first-class source for transport listeners. If CLI flags omit them, `node daemon` reads `transport_listen`, `tls_transport_listen`, `quic_transport_listen`, `tls_cert`, `tls_key`, `tls_client_ca`, `token`, and `report_to` from the local config. This keeps installed services short while preserving explicit CLI overrides for tests and one-off runs.
-
-Persistent remote installs run a small discovery script before service creation. The script:
-
-- creates `~/.ssh_proxy`;
-- generates or receives the shared token from the local controller;
-- preserves an existing remote `node_id` and `node_name` when re-bootstrap updates a node;
-- scans for available control and transport ports near the requested defaults;
-- writes the selected values into the remote `~/.ssh_proxy/config.toml`;
-- returns the selected ports to the local installer so the systemd/nohup command matches the recorded config.
-
-`route` command behavior:
-
-- The CLI never creates the route directly. It sends `{"cmd":"route_intent","route":...}` to the local node daemon.
-- Before planning, the daemon checks `[peers.<target>]`. If the peer lacks usable control/transport metadata, the daemon uses russh to upload or update the remote node daemon, writes remote config, starts persistence, and saves the returned node identity/endpoints locally.
-- Before falling back to install/update, the daemon first tries descriptor refresh over SSH. If the
-  remote already has a working `ssh_proxy node daemon` and remote CLI config can authenticate to
-  its local control endpoint, the local node adopts the descriptor and records the peer without
-  reinstalling.
-- `node control peer-bootstrap <target>` is the same SSH bootstrap/update path without creating a route. It is useful for provisioning, token refresh, and explicit remote binary upgrades.
-- `node control peer-refresh <target>` is the non-installing descriptor refresh/adoption path.
-- `route <target> --direction local-uses-remote --port <listen-port>` becomes a persistent `forward` route owned by the local daemon. The local daemon owns the listener, and the egress side is the remote node.
-- `route <target> --direction remote-uses-local --port <listen-port> --connect-mode auto` first tries the symmetric direct plan when `--local-peer` or a non-loopback local daemon transport is available. That direct plan asks the remote daemon to own a persistent `forward` listener, and the egress side is this node through the supplied reachable peer transport address.
-- If direct peer transport is unavailable in `auto`, the planner submits a persistent `reverse` route to the local daemon. The local daemon owns a long-lived data tunnel initiated from the local side, the remote side owns the SOCKS5H/HTTP listener, and proxy flows return over that established tunnel. This handles the same NAT shape as SSH reverse tunneling without reusing the control connection for data.
-- For private/local peer addresses, the route planner permits plain `SPX1` TCP because the network is assumed trusted. Public routes should use TLS/TCP or QUIC with certificates.
-- `--connect-mode direct` keeps the old strict behavior and fails early when no reachable local peer exists.
-- `--connect-mode reverse-link` skips direct peer planning and always creates the local-initiated reverse route.
-- Every high-level `route_intent` response now includes a structured `plan` object. The shape is shared across local-forward, remote-direct, and reverse-link plans: route ID, owner, mode, listener, egress, transport candidates, selected transport, fallback reason, next action, and persistence.
-
-The `doctor` command is intended for troubleshooting container-like targets. It reports user, uid, home, pid 1, systemd availability, helper binary status, pidfile/logfile status, and listening socket state.
-
-## Testing Notes
-
-Local:
+Production commands are:
 
 ```text
-cargo fmt -- --check
-cargo check
-cargo test
+ssh_proxy daemon install|uninstall|start|stop|status|update|serve
+ssh_proxy up|down|status|events|doctor
+ssh_proxy vscode up|status|diagnose|apply-settings
 ```
 
-Musl sidecar:
+Older `service`, `node control`, `route`, and `host` entrypoints are hidden or
+internal compatibility tools. They should not appear in user repair hints,
+README workflows, or VS Code normal diagnostics.
+
+## Job Engine
+
+Long work is represented as daemon jobs:
+
+- `ensure_proxy_session`
+- `apply_remote_settings`
+- `self_update`
+- `remote_peer_update`
+- `ensure_remote_peer`
+- `doctor_collect`
+
+Jobs move through `queued`, `running`, `waiting_retry`, `healthy`, `failed`, and
+`cancelled`. Each job records `phase`, `progress`, `blocker`, `next_action`,
+structured `repair_action`, `last_error`, retry timing, recovery attempts,
+timestamps, and recent events.
+
+## Proxy Sessions
+
+`ssh_proxy up` and `ssh_proxy vscode up` create an `ensure_proxy_session` job.
+The daemon state machine is:
 
 ```text
-cargo zigbuild --target x86_64-unknown-linux-musl
-cargo build
+resolve_target -> validate_local_proxy -> select_remote_port -> ensure_remote_peer
+  -> ensure_transport -> start_route -> wait_route_ready
+  -> verify_remote_port -> apply_remote_settings -> health_monitoring -> healthy
 ```
+
+The command returns accepted state quickly. The daemon continues work in the
+background and clients poll `status` or `events`.
+
+## Peer And Transport Model
+
+`ensure_remote_peer` is the default path for `up` and `vscode up`. It uses this
+order:
+
+1. Adopt an existing compatible peer descriptor.
+2. Inspect dependency and service-manager capability.
+3. Stage the remote binary and materialize peer config/state artifacts.
+4. Install and start the peer service through the shared provider command plan.
+5. Health-check the remote descriptor and transport.
+6. Record local `peers.json` state and continue the proxy session.
+
+Normal transport preference is:
+
+1. Explicit CLI or profile transport.
+2. Existing reachable TLS/TCP peer transport.
+3. Existing reachable QUIC peer transport.
+4. Explicitly trusted plain TCP peer transport.
+5. Rust SSH `direct-tcpip` to the persistent peer transport.
+6. Rust reverse-link when topology requires it.
+7. Explicit `ssh-exec` compatibility only when requested.
+8. Explicit emergency external SSH only when the daemon reports why it is required.
+
+OpenSSH subprocess fallback is not part of the normal VS Code path.
+
+Route runtime metadata uses the shared transport helpers for transport names,
+direct transport policy, SSH mode labels, and SSH data-plane reasons. The daemon
+does not maintain a second copy of those user-facing decisions.
+
+Remote peer service management follows the local daemon model where possible:
+Linux prefers user systemd and falls back to a managed nohup supervisor; macOS
+uses a LaunchAgent; Windows remotes use a user scheduled task unless an explicit
+elevated compatibility path is requested.
+
+## Remote Setup
+
+Remote setup is daemon-owned. The daemon applies and repairs:
+
+- VS Code Machine `http.proxy` and `http.proxySupport`;
+- terminal proxy environment;
+- `~/.vscode-server/server-env-setup`;
+- remote Git proxy config;
+- `~/.vscode-server/remote-proxy-status.json`.
+
+The VS Code extension calls `ssh_proxy vscode apply-settings` rather than
+running remote setup scripts itself. VS Code Machine settings, server-env, and
+remote status JSON are read or rendered by Rust, then written through
+`SshExecutor.write_artifact` with stdin-backed file operations. Remote `node` is
+diagnostic-only and is not required for the normal settings path.
+
+## Updates
+
+Daemon self-update is an allowlisted job:
+
+```text
+stage_update -> verify_update -> switch_binary -> restart_daemon
+  -> health_check -> healthy | rollback | failed
+```
+
+System daemon update requires daemon authority. Non-interactive clients return
+`requires_elevation` and a concrete `next_action`; they do not trigger UAC or
+sudo prompts on their own.
+
+Remote peer update uses the same staged-copy, verify, switch, health-check, and
+rollback pattern.
+
+## VS Code Extension
+
+The extension does only five things:
+
+1. Detect the current Remote SSH target.
+2. Detect or read the local proxy URL.
+3. Call `ssh_proxy vscode up`.
+4. Poll `ssh_proxy vscode status` and job events.
+5. Render phase, blocker, next action, and remote URL.
+
+It does not own service install, local leases, session daemon fallback,
+OpenSSH fallback, route readiness loops, or remote setup scripts.
+
+## Error Shape
+
+JSON errors and blockers use:
+
+- `blocker`
+- `next_action`
+- `repair_action`
+- `last_error`
+- `requires_elevation`
+- `requires_external_ssh`
+- `retry_after_ms`
+
+Clients should display these fields directly and avoid inventing their own
+fallback chain.
+
+`ssh_proxy doctor --json --report` adds dependency classification, redacted daemon
+state, recent install logs, handoff probes, route health, peer state, and remote
+setup state for issue reports.
+
+## Build Notes
+
+The project is Rust-first and avoids C FFI unless a future plan documents why a
+Rust-native option is not viable. Release builds use the configured allocator
+and optimized profile. Linux musl artifacts are built through `cargo zigbuild`.

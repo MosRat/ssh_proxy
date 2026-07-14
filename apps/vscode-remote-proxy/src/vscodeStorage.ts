@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { parseSshAuthority } from './sshAuthority';
+import { SshTargetConfig } from './types';
 
 export { parseSshAuthority } from './sshAuthority';
 
@@ -11,6 +12,7 @@ export interface DetectedSshHost {
   readonly source: string;
   readonly confidence: 'high' | 'low';
   readonly targetKey?: string;
+  readonly sshTarget?: SshTargetConfig;
 }
 
 export async function detectSshHostFromVsCodeStorage(

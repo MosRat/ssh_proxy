@@ -11,7 +11,6 @@ export interface ForwardingBackend {
   readonly onDidChange: (listener: () => void) => vscode.Disposable;
   fail(message: string): void;
   start(config: RemoteProxyConfig, sshHost: string, proxy: AppliedProxy): Promise<void> | void;
-  adoptShared(sshHost: string, proxy: AppliedProxy): void;
   startAndWait(config: RemoteProxyConfig, sshHost: string, proxy: AppliedProxy, waitMs: number): Promise<void>;
   stop(clearIntent?: boolean): void;
   dispose(): void;

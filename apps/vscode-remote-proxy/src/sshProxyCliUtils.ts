@@ -22,16 +22,218 @@ export function normalizeSshProxyExecutable(configured: string | undefined | nul
   return trimmed;
 }
 
-export function buildSshProxyServiceStatusArgs(): string[] {
-  return ['service', '--json', 'status'];
+export function buildSshProxyVscodeUpArgs(options: {
+  readonly target: string;
+  readonly workspace: string;
+  readonly localProxy: string;
+  readonly remoteBind: string;
+  readonly remotePort: number;
+  readonly remoteAutoPickPort?: boolean;
+  readonly remotePortRangeSize?: number;
+  readonly connectMode: 'auto' | 'reverse-link' | 'direct';
+  readonly sshTarget?: {
+    readonly hostName?: string;
+    readonly user?: string;
+    readonly port?: number;
+    readonly identityFiles?: readonly string[];
+    readonly configFile?: string;
+    readonly knownHostsFile?: string;
+    readonly proxyJump?: readonly string[];
+    readonly acceptNew?: boolean;
+  };
+  readonly workspacePaths?: readonly string[];
+  readonly serverDir?: string;
+  readonly noProxy?: string;
+  readonly proxySupport?: string;
+  readonly applyRemoteMachineSettings?: boolean;
+  readonly applyTerminalEnv?: boolean;
+  readonly applyServerEnvSetup?: boolean;
+  readonly applyGitConfig?: boolean;
+  readonly applyGitGlobalConfig?: boolean;
+  readonly applyGitWorkspaceConfig?: boolean;
+  readonly applyGitForceOverride?: boolean;
+  readonly applyRemoteStatusFile?: boolean;
+  readonly verifyRemotePort?: boolean;
+}): string[] {
+  const args = [
+    'vscode',
+    'up',
+    '--target',
+    options.target,
+    '--workspace',
+    options.workspace,
+    '--local-proxy',
+    options.localProxy,
+    '--remote-bind',
+    options.remoteBind,
+    '--remote-port',
+    String(options.remotePort),
+  ];
+  if (options.remoteAutoPickPort === false) {
+    args.push('--no-remote-auto-pick');
+  }
+  if (options.remotePortRangeSize && Number.isFinite(options.remotePortRangeSize)) {
+    args.push('--remote-port-range-size', String(Math.max(1, Math.trunc(options.remotePortRangeSize))));
+  }
+  args.push('--connect-mode', options.connectMode);
+  if (options.sshTarget?.hostName) {
+    args.push('--ssh-host-name', options.sshTarget.hostName);
+  }
+  if (options.sshTarget?.user) {
+    args.push('--ssh-user', options.sshTarget.user);
+  }
+  if (options.sshTarget?.port) {
+    args.push('--ssh-port', String(options.sshTarget.port));
+  }
+  for (const identity of options.sshTarget?.identityFiles ?? []) {
+    args.push('--ssh-identity', identity);
+  }
+  if (options.sshTarget?.configFile) {
+    args.push('--ssh-config', options.sshTarget.configFile);
+  }
+  if (options.sshTarget?.knownHostsFile) {
+    args.push('--ssh-known-hosts', options.sshTarget.knownHostsFile);
+  }
+  for (const jump of options.sshTarget?.proxyJump ?? []) {
+    args.push('--ssh-jump', jump);
+  }
+  if (options.sshTarget?.acceptNew) {
+    args.push('--ssh-accept-new');
+  }
+  for (const workspacePath of options.workspacePaths ?? []) {
+    args.push('--workspace-path', workspacePath);
+  }
+  if (options.serverDir) {
+    args.push('--server-dir', options.serverDir);
+  }
+  if (options.noProxy) {
+    args.push('--no-proxy', options.noProxy);
+  }
+  if (options.proxySupport) {
+    args.push('--proxy-support', options.proxySupport);
+  }
+  if (options.applyRemoteMachineSettings === false) {
+    args.push('--no-remote-machine-settings');
+  }
+  if (options.applyTerminalEnv === false) {
+    args.push('--no-terminal-env');
+  }
+  if (options.applyServerEnvSetup === false) {
+    args.push('--no-server-env');
+  }
+  if (options.applyGitConfig === false) {
+    args.push('--no-git');
+  }
+  if (options.applyGitGlobalConfig === false) {
+    args.push('--no-git-global');
+  }
+  if (options.applyGitWorkspaceConfig === false) {
+    args.push('--no-git-workspace');
+  }
+  if (options.applyGitForceOverride === false) {
+    args.push('--no-git-force-override');
+  }
+  if (options.applyRemoteStatusFile === false) {
+    args.push('--no-remote-status-file');
+  }
+  if (options.verifyRemotePort === false) {
+    args.push('--no-verify-remote-port');
+  }
+  args.push('--json');
+  return args;
 }
 
-export function buildSshProxyStopRouteArgs(routeId: string): string[] {
-  return ['node', 'control', '--json', 'stop-route', routeId];
+export function buildSshProxyVscodeStatusArgs(options: {
+  readonly workspace?: string;
+  readonly target?: string;
+}): string[] {
+  const args = ['vscode', 'status'];
+  if (options.workspace) {
+    args.push('--workspace', options.workspace);
+  }
+  if (options.target) {
+    args.push('--target', options.target);
+  }
+  args.push('--json');
+  return args;
 }
 
-export function buildSshProxyRoutesArgs(): string[] {
-  return ['node', 'control', '--json', 'routes'];
+export function buildSshProxyVscodeApplySettingsArgs(options: {
+  readonly target: string;
+  readonly workspace: string;
+  readonly proxyUrl: string;
+}): string[] {
+  return [
+    'vscode',
+    'apply-settings',
+    '--target',
+    options.target,
+    '--workspace',
+    options.workspace,
+    '--proxy-url',
+    options.proxyUrl,
+    '--json',
+  ];
+}
+
+export function buildSshProxyDaemonInstallArgs(options: {
+  readonly scope: 'system' | 'user';
+  readonly elevate?: boolean;
+  readonly json?: boolean;
+}): string[] {
+  const args = ['daemon', 'install', '--scope', options.scope];
+  if (options.elevate) {
+    args.push('--elevate');
+  }
+  if (options.json) {
+    args.push('--json');
+  }
+  return args;
+}
+
+export function buildSshProxyDoctorArgs(options: {
+  readonly report?: boolean;
+  readonly json?: boolean;
+} = {}): string[] {
+  const args = ['doctor'];
+  if (options.report) {
+    args.push('--report');
+  }
+  if (options.json) {
+    args.push('--json');
+  }
+  return args;
+}
+
+export function isSshProxyDaemonInstallCancelledMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('0xc000013a')
+    || lower.includes('cancelled_by_user')
+    || lower.includes('exit code 1223')
+    || lower.includes('code 1223')
+    || lower.includes('operation was canceled')
+    || lower.includes('operation was cancelled')
+    || lower.includes('the operation was canceled by the user')
+    || lower.includes('用户取消');
+}
+
+export function buildSshProxyDownArgs(options: {
+  readonly routeId?: string;
+  readonly workspace?: string;
+  readonly target?: string;
+}): string[] {
+  const args = ['down'];
+  if (options.routeId) {
+    args.push('--route-id', options.routeId);
+  }
+  if (options.workspace) {
+    args.push('--workspace', options.workspace);
+  }
+  if (options.target) {
+    args.push('--target', options.target);
+  }
+  args.push('--json');
+  return args;
 }
 
 export function redactSshProxyArgs(args: readonly string[]): string[] {

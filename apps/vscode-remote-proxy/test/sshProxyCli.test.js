@@ -2,10 +2,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-  buildSshProxyServiceStatusArgs,
-  buildSshProxyRoutesArgs,
-  buildSshProxyStopRouteArgs,
+  buildSshProxyDaemonInstallArgs,
+  buildSshProxyDownArgs,
+  buildSshProxyVscodeApplySettingsArgs,
+  buildSshProxyVscodeStatusArgs,
+  buildSshProxyVscodeUpArgs,
   formatSshProxyCommand,
+  isSshProxyDaemonInstallCancelledMessage,
   normalizeSshProxyExecutable,
   parseSshProxyJson,
   redactSshProxyArgs,
@@ -18,9 +21,147 @@ test('normalizes an empty ssh_proxy executable to the PATH command', () => {
 });
 
 test('builds JSON command shapes consumed by the extension', () => {
-  assert.deepEqual(buildSshProxyServiceStatusArgs(), ['service', '--json', 'status']);
-  assert.deepEqual(buildSshProxyRoutesArgs(), ['node', 'control', '--json', 'routes']);
-  assert.deepEqual(buildSshProxyStopRouteArgs('route-1'), ['node', 'control', '--json', 'stop-route', 'route-1']);
+  assert.deepEqual(
+    buildSshProxyVscodeUpArgs({
+      target: '126',
+      workspace: 'window-a',
+      localProxy: 'http://127.0.0.1:10808/',
+      remoteBind: '127.0.0.1',
+      remotePort: 17890,
+      connectMode: 'reverse-link',
+    }),
+    [
+      'vscode',
+      'up',
+      '--target',
+      '126',
+      '--workspace',
+      'window-a',
+      '--local-proxy',
+      'http://127.0.0.1:10808/',
+      '--remote-bind',
+      '127.0.0.1',
+      '--remote-port',
+      '17890',
+      '--connect-mode',
+      'reverse-link',
+      '--json',
+    ],
+  );
+  assert.deepEqual(
+    buildSshProxyVscodeStatusArgs({ workspace: 'window-a', target: '126' }),
+    ['vscode', 'status', '--workspace', 'window-a', '--target', '126', '--json'],
+  );
+  assert.deepEqual(
+    buildSshProxyVscodeUpArgs({
+      target: '126',
+      workspace: 'window-a',
+      localProxy: 'http://127.0.0.1:10808/',
+      remoteBind: '127.0.0.1',
+      remotePort: 17890,
+      remoteAutoPickPort: false,
+      remotePortRangeSize: 3,
+      connectMode: 'reverse-link',
+    }),
+    [
+      'vscode',
+      'up',
+      '--target',
+      '126',
+      '--workspace',
+      'window-a',
+      '--local-proxy',
+      'http://127.0.0.1:10808/',
+      '--remote-bind',
+      '127.0.0.1',
+      '--remote-port',
+      '17890',
+      '--no-remote-auto-pick',
+      '--remote-port-range-size',
+      '3',
+      '--connect-mode',
+      'reverse-link',
+      '--json',
+    ],
+  );
+  assert.deepEqual(
+    buildSshProxyVscodeUpArgs({
+      target: '102',
+      workspace: 'user@10.10.100.71',
+      localProxy: 'http://127.0.0.1:10808/',
+      remoteBind: '127.0.0.1',
+      remotePort: 17890,
+      connectMode: 'reverse-link',
+      sshTarget: {
+        hostName: '10.10.100.71',
+        user: 'wenhongli',
+        port: 10022,
+        identityFiles: ['C:/Users/whl/.ssh/id_rsa'],
+        configFile: 'C:/Users/whl/.ssh/config',
+        knownHostsFile: 'C:/Users/whl/.ssh/known_hosts',
+        proxyJump: ['hub'],
+        acceptNew: true,
+      },
+    }),
+    [
+      'vscode',
+      'up',
+      '--target',
+      '102',
+      '--workspace',
+      'user@10.10.100.71',
+      '--local-proxy',
+      'http://127.0.0.1:10808/',
+      '--remote-bind',
+      '127.0.0.1',
+      '--remote-port',
+      '17890',
+      '--connect-mode',
+      'reverse-link',
+      '--ssh-host-name',
+      '10.10.100.71',
+      '--ssh-user',
+      'wenhongli',
+      '--ssh-port',
+      '10022',
+      '--ssh-identity',
+      'C:/Users/whl/.ssh/id_rsa',
+      '--ssh-config',
+      'C:/Users/whl/.ssh/config',
+      '--ssh-known-hosts',
+      'C:/Users/whl/.ssh/known_hosts',
+      '--ssh-jump',
+      'hub',
+      '--ssh-accept-new',
+      '--json',
+    ],
+  );
+  assert.deepEqual(
+    buildSshProxyVscodeApplySettingsArgs({
+      target: '126',
+      workspace: 'window-a',
+      proxyUrl: 'http://127.0.0.1:17890/',
+    }),
+    [
+      'vscode',
+      'apply-settings',
+      '--target',
+      '126',
+      '--workspace',
+      'window-a',
+      '--proxy-url',
+      'http://127.0.0.1:17890/',
+      '--json',
+    ],
+  );
+  assert.deepEqual(
+    buildSshProxyDownArgs({ routeId: 'v3-window-a', workspace: 'window-a', target: '126' }),
+    ['down', '--route-id', 'v3-window-a', '--workspace', 'window-a', '--target', '126', '--json'],
+  );
+  assert.deepEqual(
+    buildSshProxyDaemonInstallArgs({ scope: 'system', elevate: true }),
+    ['daemon', 'install', '--scope', 'system', '--elevate'],
+  );
 });
 
 test('redacts token flags and proxy URL credentials', () => {
@@ -43,6 +184,25 @@ test('redacts token flags and proxy URL credentials', () => {
       '--egress-proxy',
       'http://<redacted>@127.0.0.1:18080',
     ],
+  );
+});
+
+test('classifies cancelled elevated daemon installs', () => {
+  assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('powershell.exe exited with status exit code: 0xc000013a'),
+    true,
+  );
+  assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('ssh_proxy daemon install failed with code 1223'),
+    true,
+  );
+  assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('ssh_proxy daemon install cancelled_by_user'),
+    true,
+  );
+  assert.equal(
+    isSshProxyDaemonInstallCancelledMessage('failed to copy binary because it is in use'),
+    false,
   );
 });
 
