@@ -251,10 +251,36 @@ fn xml_escape(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::service::plan::ServicePlan;
+    use crate::{cli, config};
+
+    fn user_plan() -> ServicePlan {
+        ServicePlan::new(
+            cli::ServiceArgs {
+                scope: cli::ServiceScope::User,
+                control: None,
+                transport: None,
+                no_transport: false,
+                token: None,
+                tls_transport: None,
+                quic_transport: None,
+                tls_cert: None,
+                tls_key: None,
+                tls_client_ca: None,
+                report_to: Vec::new(),
+                install_dir: None,
+                no_copy: true,
+                json: false,
+                elevate: false,
+                command: cli::ServiceCommand::Print,
+            },
+            config::AppConfig::default(),
+        )
+        .expect("plan")
+    }
 
     #[test]
     fn launchd_plist_tokenizes_daemon_command_without_shell() {
-        let plan = ServicePlan::new(ServiceScope::User, false).expect("plan");
+        let plan = user_plan();
         let plist = plist(&plan);
 
         assert!(plist.contains("<key>ProgramArguments</key>"));
