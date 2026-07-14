@@ -65,7 +65,7 @@ jobs:
           ln -sf "$(command -v python-zig)" "$HOME/.local/bin/zig"
           zig version
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin
@@ -152,7 +152,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin
@@ -234,7 +234,7 @@ jobs:
       - id: rust
         uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin
@@ -247,7 +247,7 @@ jobs:
             release-rust-${{ runner.os }}-${{ runner.arch }}-vscode-kernel-${{ steps.rust.outputs.cachekey }}-
             release-rust-${{ runner.os }}-${{ runner.arch }}-vscode-kernel-
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -374,7 +374,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
