@@ -185,3 +185,48 @@ fn node_daemon_persists_restores_and_forgets_routes() {
     stop_child(child, &endpoint);
     let _ = fs::remove_file(routes_path);
 }
+
+#[test]
+fn concurrent_start_and_stop_restore_only_the_remaining_route() {
+    let endpoint = format!("tcp://{}", free_addr());
+    let path = route_store_path("concurrent-routes");
+    let daemon = start_daemon(&endpoint, free_addr(), &path);
+    wait_for_status(&endpoint);
+    let start = |id: &str| {
+        let result = run_control(
+            &endpoint,
+            &[
+                "forward",
+                "127.0.0.1",
+                "--id",
+                id,
+                "--listen",
+                &free_addr().to_string(),
+                "--deploy",
+                "never",
+            ],
+        );
+        let reply: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+    };
+    start("old");
+    std::thread::scope(|threads| {
+        threads.spawn(|| start("new"));
+        threads.spawn(|| {
+            let result = run_control(&endpoint, &["stop-route", "old"]);
+            let reply: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(reply["ok"], true, "{reply}");
+        });
+    });
+    stop_child(daemon, &endpoint);
+    let endpoint = format!("tcp://{}", free_addr());
+    let restored = start_daemon(&endpoint, free_addr(), &path);
+    wait_for_status(&endpoint);
+    let result = run_control(&endpoint, &["routes"]);
+    let reply: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let routes = reply["routes"].as_array().unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0]["id"], "new");
+    stop_child(restored, &endpoint);
+    fs::remove_file(path).unwrap();
+}

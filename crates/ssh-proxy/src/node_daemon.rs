@@ -95,34 +95,34 @@ pub(crate) async fn run_daemon_inner(
     let endpoint = control_socket::ControlEndpoint::parse(&args.control)?;
     let manager = Arc::new(NodeManager::new(args, endpoint.clone(), config)?);
 
-    let mut tasks = Vec::new();
-    tasks.push(tokio::spawn(control_server::run_control_server(
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(control_server::run_control_server(
         endpoint,
         manager.clone(),
-    )));
+    ));
 
     if let Some(transport) = manager.transport {
-        tasks.push(tokio::spawn(transport::run_transport_listener(
+        tasks.spawn(transport::run_transport_listener(
             transport,
             manager.clone(),
-        )));
+        ));
     }
 
     if let Some(transport) = manager.tls_transport {
-        tasks.push(tokio::spawn(transport::run_tls_transport_listener(
+        tasks.spawn(transport::run_tls_transport_listener(
             transport,
             manager.clone(),
-        )));
+        ));
     }
     if let Some(transport) = manager.quic_transport {
-        tasks.push(tokio::spawn(transport::run_quic_transport_listener(
+        tasks.spawn(transport::run_quic_transport_listener(
             transport,
             manager.clone(),
-        )));
+        ));
     }
 
     if !manager.report_to.is_empty() {
-        tasks.push(tokio::spawn(run_reporter(manager.clone())));
+        tasks.spawn(run_reporter(manager.clone()));
     }
 
     if manager.route_autostart {
@@ -143,19 +143,25 @@ pub(crate) async fn run_daemon_inner(
         "node daemon started"
     );
 
-    if let Some(external_shutdown) = external_shutdown {
-        tokio::select! {
-            _ = manager.shutdown_notified() => {}
-            _ = external_shutdown => {
-                manager.request_shutdown();
+    let external_stop = async {
+        match external_shutdown {
+            Some(signal) => {
+                let _ = signal.await;
+            }
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        _ = manager.shutdown_notified() => {}
+        _ = external_stop => manager.request_shutdown(),
+        Some(completed) = tasks.join_next() => {
+            completed??;
+            if !manager.shutdown.load(Ordering::Relaxed) {
+                bail!("daemon background service exited unexpectedly");
             }
         }
-    } else {
-        manager.shutdown_notified().await;
     }
-    for task in tasks {
-        task.abort();
-    }
+    tasks.shutdown().await;
     Ok(())
 }
 
@@ -181,6 +187,7 @@ struct NodeManager {
     instances: Mutex<HashMap<String, JoinHandle<()>>>,
     routes: Mutex<HashMap<String, RouteTask>>,
     route_store_path: PathBuf,
+    route_store_writer: Arc<Mutex<()>>,
     route_autostart: bool,
     jobs: JobRegistry,
     state: ProductionState,
@@ -206,7 +213,7 @@ impl NodeManager {
             .unwrap_or(config::routes_path()?);
         let route_autostart =
             !args.no_route_autostart && config.daemon.route_autostart.unwrap_or(true);
-        let jobs = JobRegistry::load(config::jobs_path()?);
+        let jobs = JobRegistry::load(config::jobs_path()?)?;
         let state = ProductionState::load()?;
         let transport = args.transport.or(config.daemon.transport_listen);
         let tls_transport = args.tls_transport.or(config.daemon.tls_transport_listen);
@@ -271,6 +278,7 @@ impl NodeManager {
             instances: Mutex::new(HashMap::new()),
             routes: Mutex::new(HashMap::new()),
             route_store_path,
+            route_store_writer: Arc::default(),
             route_autostart,
             jobs,
             state,
@@ -615,10 +623,10 @@ impl NodeManager {
     }
 
     async fn shutdown_notified(&self) {
-        if self.shutdown.load(Ordering::Relaxed) {
-            return;
+        let notified = self.shutdown_notify.notified();
+        if !self.shutdown.load(Ordering::Relaxed) {
+            notified.await;
         }
-        self.shutdown_notify.notified().await;
     }
 }
 

@@ -335,14 +335,14 @@ impl client::Handler for ClientHandler {
 
     fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::ssh_key::PublicKey,
+        server_public_key: &keys::PublicKeyOrCertificate,
     ) -> impl std::future::Future<Output = std::result::Result<bool, Self::Error>> + Send {
         let host = self.host.clone();
         let port = self.port;
         let known_hosts = self.known_hosts.clone();
         let accept_new = self.accept_new;
         let insecure_ignore_host_key = self.insecure_ignore_host_key;
-        let key = server_public_key.clone();
+        let key = server_public_key;
         async move {
             if insecure_ignore_host_key {
                 warn!(
@@ -359,6 +359,10 @@ impl client::Handler for ClientHandler {
                 warn!(host = %host, port, "accepting SSH host key because known_hosts is disabled");
                 return Ok(true);
             }
+            let keys::PublicKeyOrCertificate::PublicKey { key, .. } = key else {
+                error!(%host, port, "host certificate requires certificate authority verification");
+                return Ok(false);
+            };
             let check = match known_hosts {
                 Some(ref path) => keys::check_known_hosts_path(&host, port, &key, path),
                 None => keys::check_known_hosts(&host, port, &key),

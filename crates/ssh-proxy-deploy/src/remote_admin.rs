@@ -159,7 +159,7 @@ pub fn cleanup_git_proxy_config(config_path: &Path) -> Result<RemoteAdminGitConf
     })
 }
 
-fn load_git_config(path: &Path) -> Result<gix_config::File<'static>, String> {
+fn load_git_config(path: &Path) -> Result<gix_config::File, String> {
     if !path.exists() {
         return Ok(gix_config::File::default());
     }
@@ -167,7 +167,7 @@ fn load_git_config(path: &Path) -> Result<gix_config::File<'static>, String> {
         .map_err(|err| err.to_string())
 }
 
-fn write_git_config(path: &Path, config: &gix_config::File<'_>) -> Result<Vec<u8>, String> {
+fn write_git_config(path: &Path, config: &gix_config::File) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     config.write_to(&mut bytes).map_err(|err| err.to_string())?;
     if let Some(parent) = path.parent() {

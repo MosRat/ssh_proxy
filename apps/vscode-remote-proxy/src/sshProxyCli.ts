@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import * as vscode from 'vscode';
+import type * as vscode from 'vscode';
 import {
   buildSshProxyDaemonInstallArgs,
   buildSshProxyDoctorArgs,
@@ -172,14 +172,21 @@ export class SshProxyCli {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let outputBytes = 0;
+      const collect = (chunks: Buffer[], chunk: Buffer): void => {
+        if (settled) return;
+        outputBytes += chunk.length;
+        if (outputBytes > 8 * 1024 * 1024) {
+          child.kill();
+          finish(new Error(`${label} exceeded the 8 MiB output limit`));
+          return;
+        }
+        chunks.push(chunk);
+      };
+      child.stdout.on('data', (chunk: Buffer) => collect(stdoutChunks, chunk));
+      child.stderr.on('data', (chunk: Buffer) => collect(stderrChunks, chunk));
 
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
@@ -193,7 +200,7 @@ export class SshProxyCli {
       child.once('error', (error) => {
         finish(new Error(`${label} failed to start: ${error.message}: ${command}`));
       });
-      child.once('exit', (code, signal) => {
+      child.once('close', (code, signal) => {
         if (settled) {
           return;
         }
@@ -201,6 +208,8 @@ export class SshProxyCli {
           finish(new Error(`${label} timed out after ${timeoutMs} ms: ${command}`));
           return;
         }
+        const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+        const stderr = Buffer.concat(stderrChunks).toString('utf8');
         const exitCode = code ?? (signal ? 128 : 0);
         if (exitCode !== 0) {
           const stderrSummary = summarizeSshProxyOutput(stderr);

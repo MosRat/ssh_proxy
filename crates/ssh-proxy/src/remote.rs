@@ -13,9 +13,8 @@ use tracing::{debug, info, warn};
 use crate::{
     bridge, cli, controller, peer_transport,
     protocol::{
-        FRAME_CHANNEL_CAPACITY, Frame, FrameReader, TCP_DATA_CHUNK,
-        TCP_STREAM_BACKPRESSURE_TIMEOUT, TCP_STREAM_CHANNEL_CAPACITY,
-        UDP_ASSOC_BACKPRESSURE_TIMEOUT, UdpDatagram, write_frame_batch,
+        FRAME_CHANNEL_CAPACITY, Frame, FrameReader, TCP_DATA_CHUNK, TCP_STREAM_CHANNEL_CAPACITY,
+        UdpDatagram, write_frame_batch,
     },
     socks,
 };
@@ -32,7 +31,7 @@ pub async fn run(args: cli::RemoteArgs) -> Result<()> {
         }
     }
     if let Some(addr) = args.reverse_socks {
-        run_reverse_socks(addr).await
+        run_reverse_socks(addr, args.tcp_target).await
     } else if let Some(addr) = args.tcp_listen {
         run_tcp(addr, args.token).await
     } else {
@@ -46,7 +45,7 @@ async fn run_stdio() -> Result<()> {
     run_transport(stdin, stdout).await
 }
 
-async fn run_reverse_socks(addr: SocketAddr) -> Result<()> {
+async fn run_reverse_socks(addr: SocketAddr, target: Option<cli::TcpTarget>) -> Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let bridge = bridge::connect_io(stdin, stdout).await?;
@@ -57,10 +56,10 @@ async fn run_reverse_socks(addr: SocketAddr) -> Result<()> {
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind remote reverse SOCKS listener {addr}"))?;
-    info!(%addr, "remote reverse SOCKS5H listener ready");
+    info!(%addr, "remote reverse listener ready");
     bridge
         .handle
-        .send_log(format!("remote reverse SOCKS5H listener ready at {addr}"))
+        .send_log(format!("remote reverse listener ready at {addr}"))
         .await;
 
     loop {
@@ -69,8 +68,13 @@ async fn run_reverse_socks(addr: SocketAddr) -> Result<()> {
                 let (stream, peer) = accept?;
                 let _ = stream.set_nodelay(true);
                 let state = state.clone();
+                let target = target.clone();
                 tokio::spawn(async move {
-                    if let Err(err) = socks::handle_client(stream, peer, state).await {
+                    let result = match target {
+                        Some(target) => socks::handle_fixed_target(stream, peer, target, state).await,
+                        None => socks::handle_client(stream, peer, state).await,
+                    };
+                    if let Err(err) = result {
                         debug!(%peer, error = %err, "remote reverse SOCKS client failed");
                     }
                 });
@@ -168,18 +172,23 @@ where
     let tcp_streams = Arc::new(RwLock::new(HashMap::<u32, mpsc::Sender<Bytes>>::new()));
     let udp_streams = Arc::new(RwLock::new(HashMap::<u32, mpsc::Sender<UdpDatagram>>::new()));
 
-    let writer_task = tokio::spawn(async move {
+    let write_frames = async move {
         let mut writer = writer;
         while let Some(frame) = rx.recv().await {
-            if let Err(err) = write_frame_batch(&mut writer, frame, &mut rx).await {
-                warn!(error = %err, "remote writer stopped");
-                break;
-            }
+            write_frame_batch(&mut writer, frame, &mut rx).await?;
         }
-    });
-
+        Ok(())
+    };
+    tokio::pin!(write_frames);
+    let mut flows = tokio::task::JoinSet::new();
     let mut frame_reader = FrameReader::new();
-    while let Some(frame) = frame_reader.read_from(&mut reader).await? {
+    loop {
+        let frame = tokio::select! {
+            result = &mut write_frames => return result,
+            frame = frame_reader.read_from(&mut reader) => frame?,
+        };
+        let Some(frame) = frame else { break };
+        while flows.try_join_next().is_some() {}
         match frame {
             Frame::OpenTcp {
                 id,
@@ -190,35 +199,25 @@ where
                 let tx = tx.clone();
                 let tcp_streams = tcp_streams.clone();
                 let egress_proxy = egress_proxy.or_else(|| default_egress_proxy.clone());
-                tokio::spawn(async move {
+                flows.spawn(async move {
                     handle_open_tcp(id, host, port, egress_proxy, tx, tcp_streams).await;
                 });
             }
             Frame::Data { id, data } => {
                 let stream_tx = tcp_streams.read().await.get(&id).cloned();
                 if let Some(stream_tx) = stream_tx {
-                    match time::timeout(TCP_STREAM_BACKPRESSURE_TIMEOUT, stream_tx.send(data)).await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(_)) => {
+                    match stream_tx.try_send(data) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
                             tcp_streams.write().await.remove(&id);
                         }
-                        Err(_) => {
-                            warn!(
-                                id,
-                                timeout_secs = TCP_STREAM_BACKPRESSURE_TIMEOUT.as_secs(),
-                                "remote TCP stream receiver backpressure timed out"
-                            );
+                        Err(mpsc::error::TrySendError::Full(_)) => {
                             tcp_streams.write().await.remove(&id);
-                            let _ = tx
-                                .send(Frame::Close {
-                                    id,
-                                    reason: format!(
-                                        "remote receiver backpressure timed out after {}s",
-                                        TCP_STREAM_BACKPRESSURE_TIMEOUT.as_secs()
-                                    ),
-                                })
-                                .await;
+                            tx.try_send(Frame::Close {
+                                id,
+                                reason: "remote TCP receiver queue full".into(),
+                            })
+                            .context("cannot signal overloaded remote TCP stream")?;
                         }
                     }
                 }
@@ -240,37 +239,14 @@ where
                     } else {
                         let (stream_tx, stream_rx) = mpsc::channel(TCP_STREAM_CHANNEL_CAPACITY);
                         streams.insert(id, stream_tx.clone());
-                        spawn_udp_assoc(id, tx.clone(), stream_rx);
+                        flows.spawn(run_udp_assoc(id, tx.clone(), stream_rx));
                         stream_tx
                     }
                 };
-                match time::timeout(
-                    UDP_ASSOC_BACKPRESSURE_TIMEOUT,
-                    stream_tx.send(UdpDatagram { host, port, data }),
-                )
-                .await
+                if let Err(mpsc::error::TrySendError::Closed(_)) =
+                    stream_tx.try_send(UdpDatagram { host, port, data })
                 {
-                    Ok(Ok(())) => {}
-                    Ok(Err(_)) => {
-                        udp_streams.write().await.remove(&id);
-                    }
-                    Err(_) => {
-                        warn!(
-                            id,
-                            timeout_secs = UDP_ASSOC_BACKPRESSURE_TIMEOUT.as_secs(),
-                            "remote UDP association receiver backpressure timed out"
-                        );
-                        udp_streams.write().await.remove(&id);
-                        let _ = tx
-                            .send(Frame::Close {
-                                id,
-                                reason: format!(
-                                    "remote UDP receiver backpressure timed out after {}s",
-                                    UDP_ASSOC_BACKPRESSURE_TIMEOUT.as_secs()
-                                ),
-                            })
-                            .await;
-                    }
+                    udp_streams.write().await.remove(&id);
                 }
             }
             Frame::Log { message } => info!(target: "remote", %message),
@@ -278,7 +254,7 @@ where
         }
     }
 
-    writer_task.abort();
+    flows.shutdown().await;
     Ok(())
 }
 
@@ -304,7 +280,7 @@ async fn handle_open_tcp(
             let (mut reader, mut writer) = stream.into_split();
 
             let tx_reader = tx.clone();
-            let mut remote_to_local = tokio::spawn(async move {
+            let remote_to_local = async move {
                 let mut buf = BytesMut::with_capacity(TCP_DATA_CHUNK);
                 loop {
                     if buf.capacity() < TCP_DATA_CHUNK {
@@ -323,23 +299,19 @@ async fn handle_open_tcp(
                         .ok();
                 }
                 Ok::<_, anyhow::Error>(())
-            });
+            };
 
-            let mut local_to_remote = tokio::spawn(async move {
+            let local_to_remote = async move {
                 while let Some(data) = stream_rx.recv().await {
                     writer.write_all(&data).await?;
                 }
                 writer.shutdown().await?;
                 Ok::<_, anyhow::Error>(())
-            });
+            };
 
             tokio::select! {
-                _ = &mut remote_to_local => {
-                    local_to_remote.abort();
-                }
-                _ = &mut local_to_remote => {
-                    remote_to_local.abort();
-                }
+                _ = remote_to_local => {}
+                _ = local_to_remote => {}
             }
             tcp_streams.write().await.remove(&id);
             let _ = tx
@@ -362,42 +334,42 @@ async fn handle_open_tcp(
     }
 }
 
-fn spawn_udp_assoc(id: u32, tx: mpsc::Sender<Frame>, mut rx: mpsc::Receiver<UdpDatagram>) {
-    tokio::spawn(async move {
-        let socket = match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await {
-            Ok(socket) => socket,
-            Err(err) => {
-                let _ = tx
-                    .send(Frame::Close {
-                        id,
-                        reason: format!("udp bind failed: {err}"),
-                    })
-                    .await;
-                return;
-            }
-        };
+async fn run_udp_assoc(id: u32, tx: mpsc::Sender<Frame>, mut rx: mpsc::Receiver<UdpDatagram>) {
+    let socket = match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))).await {
+        Ok(socket) => socket,
+        Err(err) => {
+            let _ = tx
+                .send(Frame::Close {
+                    id,
+                    reason: format!("udp bind failed: {err}"),
+                })
+                .await;
+            return;
+        }
+    };
 
-        let socket = Arc::new(socket);
-        let reader_socket = socket.clone();
-        let reader_tx = tx.clone();
-        let reader = tokio::spawn(async move {
-            let mut buf = vec![0_u8; 65535];
-            loop {
-                let (n, from) = reader_socket.recv_from(&mut buf).await?;
-                reader_tx
-                    .send(Frame::UdpPacket {
-                        id,
-                        host: from.ip().to_string(),
-                        port: from.port(),
-                        data: buf[..n].to_vec(),
-                    })
-                    .await
-                    .ok();
-            }
-            #[allow(unreachable_code)]
-            Ok::<_, anyhow::Error>(())
-        });
+    let socket = Arc::new(socket);
+    let reader_socket = socket.clone();
+    let reader_tx = tx.clone();
+    let reader = async move {
+        let mut buf = vec![0_u8; 65535];
+        loop {
+            let (n, from) = reader_socket.recv_from(&mut buf).await?;
+            reader_tx
+                .send(Frame::UdpPacket {
+                    id,
+                    host: from.ip().to_string(),
+                    port: from.port(),
+                    data: buf[..n].to_vec(),
+                })
+                .await
+                .ok();
+        }
+        #[allow(unreachable_code)]
+        Ok::<_, anyhow::Error>(())
+    };
 
+    let outgoing = async {
         while let Some(packet) = rx.recv().await {
             if let Err(err) = socket
                 .send_to(&packet.data, (packet.host.as_str(), packet.port))
@@ -406,6 +378,6 @@ fn spawn_udp_assoc(id: u32, tx: mpsc::Sender<Frame>, mut rx: mpsc::Receiver<UdpD
                 warn!(error = %err, "remote UDP send failed");
             }
         }
-        reader.abort();
-    });
+    };
+    tokio::select! { _ = reader => {}, _ = outgoing => {} }
 }

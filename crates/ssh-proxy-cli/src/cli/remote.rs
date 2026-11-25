@@ -16,6 +16,10 @@ pub struct RemoteArgs {
     )]
     pub reverse_socks: Option<SocketAddr>,
 
+    /// Forward raw connections from the reverse listener to this fixed target.
+    #[arg(long, requires = "reverse_socks")]
+    pub tcp_target: Option<super::TcpTarget>,
+
     #[arg(long, help = "Experimental TCP framed transport listen address")]
     pub tcp_listen: Option<SocketAddr>,
 

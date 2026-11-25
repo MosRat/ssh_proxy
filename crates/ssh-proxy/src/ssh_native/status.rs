@@ -34,6 +34,7 @@ pub(super) async fn status_value(state: &State) -> Value {
             let score_components = state.session_score_components(session, now_ms);
             json!({
                 "session_id": session.id,
+                "active_bulk_channels": session.bulk_channels.load(Ordering::Relaxed),
                 "active_channels": session.active_channels.load(Ordering::Relaxed),
                 "opened_channels": session.opened_channels.load(Ordering::Relaxed),
                 "open_failures": session.open_failures.load(Ordering::Relaxed),
@@ -147,7 +148,8 @@ pub(super) async fn status_value(state: &State) -> Value {
         object.insert(
             "ssh_session_scheduler".to_string(),
             json!({
-                "policy": "warm-primary until active-channel pressure reaches growth threshold; otherwise choose the lowest scored healthy session",
+                "policy": "reuse warm sessions during background pool growth",
+                "bulk_threshold_bytes": state.track_bulk().then_some(super::BULK_THRESHOLD),
                 "growth_active_threshold": SSH_SESSION_GROWTH_MIN_ACTIVE_CHANNELS,
                 "score_components": [
                     "active_channels",

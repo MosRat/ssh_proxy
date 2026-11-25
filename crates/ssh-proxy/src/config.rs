@@ -37,6 +37,7 @@ pub fn apply_proxy_defaults(
     args: &mut cli::ProxyArgs,
     profile_name: Option<&str>,
 ) -> Result<()> {
+    let requested_workload = args.workload_hint;
     profile::apply_profile(args, &config.defaults, "defaults")?;
     if let Some(profile) = profile_name
         .and_then(|name| config.profiles.get(name))
@@ -49,6 +50,7 @@ pub fn apply_proxy_defaults(
         }
         profile::apply_profile(args, profile, "profile")?;
     }
+    args.workload_hint = requested_workload.or(args.workload_hint);
     if args.control_listen.is_none() {
         args.control_listen = config.daemon.control_listen;
     }
@@ -436,6 +438,18 @@ mod tests {
             profile.workload_hint,
             Some(ssh_proxy_core::model::WorkloadHint::Mixed)
         );
+    }
+
+    #[test]
+    fn explicit_workload_hint_overrides_profile() {
+        let mut config = AppConfig::default();
+        let mut profile = profile_args("office");
+        profile.workload_hint = Some(cli::RouteWorkloadHint::Large);
+        super::profile::apply_profile_set(&mut config, profile).unwrap();
+        let mut args = super::profile::default_proxy_args("office".into());
+        args.workload_hint = Some(cli::RouteWorkloadHint::Mixed);
+        apply_proxy_defaults(&config, &mut args, Some("office")).unwrap();
+        assert_eq!(args.workload_hint, Some(cli::RouteWorkloadHint::Mixed));
     }
 
     #[test]

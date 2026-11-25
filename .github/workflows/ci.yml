@@ -17,7 +17,10 @@ env:
 
 jobs:
   rust:
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
     env:
       SSH_PROXY_ALLOW_MISSING_SIDECAR: "1"
     steps:
@@ -39,12 +42,13 @@ jobs:
             rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-
             rust-${{ runner.os }}-${{ runner.arch }}-
 
-      - run: cargo fmt -- --check
-      - run: cargo check
-      - run: cargo test --tests
+      - run: cargo fmt --all -- --check
+      - run: cargo check --locked --workspace --tests
+      - run: cargo test --locked --workspace --tests -- --test-threads=1
 
       - name: Write summary
         if: always()
+        shell: bash
         run: |
           {
             echo "## Rust CI"
@@ -52,6 +56,13 @@ jobs:
             echo "- Runner: ${{ runner.os }} ${{ runner.arch }}"
             echo "- Result: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  cargo-advisories:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
 
   vscode:
     runs-on: ubuntu-24.04
@@ -68,10 +79,12 @@ jobs:
           cache-dependency-path: apps/vscode-remote-proxy/package-lock.json
 
       - run: npm ci
+      - run: npm audit --audit-level=high
       - run: npm test
 
       - name: Write summary
         if: always()
+        shell: bash
         run: |
           {
             echo "## VS Code Extension CI"

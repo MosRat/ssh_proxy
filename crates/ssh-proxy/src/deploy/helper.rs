@@ -13,7 +13,7 @@ use super::remote_commands::sh_quote;
 #[derive(Debug, Clone, Copy)]
 pub enum HelperCapability {
     Stdio,
-    ReverseSocks { listen: SocketAddr },
+    ReverseSocks { listen: SocketAddr, fixed: bool },
 }
 
 pub async fn ensure_helper(
@@ -76,8 +76,13 @@ fn helper_probe_command(
     match remote_os {
         cli::RemoteOs::Windows => match capability {
             HelperCapability::Stdio => format!("{remote_path} remote --help >NUL"),
-            HelperCapability::ReverseSocks { .. } => {
-                format!("{remote_path} remote --help | findstr /C:\"--reverse-socks\" >NUL")
+            HelperCapability::ReverseSocks { fixed, .. } => {
+                let flag = if fixed {
+                    "--tcp-target"
+                } else {
+                    "--reverse-socks"
+                };
+                format!("{remote_path} remote --help | findstr /C:\"{flag}\" >NUL")
             }
         },
         cli::RemoteOs::Unix | cli::RemoteOs::Auto => {
@@ -86,10 +91,15 @@ fn helper_probe_command(
                 HelperCapability::Stdio => {
                     format!("{path} remote --help >/dev/null")
                 }
-                HelperCapability::ReverseSocks { listen } => {
+                HelperCapability::ReverseSocks { listen, fixed } => {
+                    let flag = if fixed {
+                        "--tcp-target"
+                    } else {
+                        "--reverse-socks"
+                    };
                     let port = listen.port();
                     format!(
-                        "set -eu; {path} remote --help 2>&1 | grep -q -- '--reverse-socks'; if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{{print $4}}' | grep -Eq '(:|\\]){port}$'; then echo 'remote reverse listen port {port} is already in use' >&2; exit 75; fi"
+                        "set -eu; {path} remote --help 2>&1 | grep -q -- '{flag}'; if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | awk '{{print $4}}' | grep -Eq '(:|\\]){port}$'; then echo 'remote reverse listen port {port} is already in use' >&2; exit 75; fi"
                     )
                 }
             }
@@ -301,17 +311,30 @@ pub fn remote_reverse_socks_command(
     remote_path: &str,
     remote_os: cli::RemoteOs,
     remote_listen: SocketAddr,
-) -> String {
-    match remote_os {
-        cli::RemoteOs::Windows => {
-            format!("{remote_path} remote --stdio --reverse-socks {remote_listen}")
-        }
-        _ => format!(
-            "{} remote --stdio --reverse-socks {}",
-            sh_quote(remote_path),
-            remote_listen
-        ),
+    target: Option<&cli::TcpTarget>,
+) -> Result<String> {
+    let path = match remote_os {
+        cli::RemoteOs::Windows => remote_path.to_owned(),
+        _ => sh_quote(remote_path),
+    };
+    let mut command = format!("{path} remote --stdio --reverse-socks {remote_listen}");
+    if let Some(target) = target {
+        let argument = match remote_os {
+            cli::RemoteOs::Windows => {
+                anyhow::ensure!(
+                    target
+                        .host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || ".:_-".contains(c)),
+                    "unsupported hostname for Windows reverse TCP target"
+                );
+                target.to_string()
+            }
+            _ => sh_quote(&target.to_string()),
+        };
+        command.push_str(&format!(" --tcp-target={argument}"));
     }
+    Ok(command)
 }
 
 #[cfg(test)]

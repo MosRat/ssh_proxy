@@ -77,6 +77,13 @@ pub async fn run_with_state(args: cli::ProxyArgs, state: Arc<SharedState>) -> Re
             "proxy may use a temporary SSH exec helper; for production prefer `ssh_proxy daemon install --scope system --elevate` locally and `ssh_proxy up ...` for daemon-owned sessions"
         );
     }
+    struct ShutdownOnDrop(Arc<SharedState>);
+    impl Drop for ShutdownOnDrop {
+        fn drop(&mut self) {
+            self.0.request_shutdown();
+        }
+    }
+    let _shutdown = ShutdownOnDrop(state.clone());
     let tcp_target = args.tcp_target.clone();
     let manager_state = state.clone();
     let manager_args = args.clone();

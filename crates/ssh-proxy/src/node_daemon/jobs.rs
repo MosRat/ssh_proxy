@@ -1,16 +1,13 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use anyhow::{Context, Result};
+use super::state::PersistentStore;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 pub(super) use ssh_proxy_daemon::job::{
     DaemonJobEvent as JobEvent, DaemonJobPhase as JobPhase, DaemonJobRecord as JobRecord,
     DaemonJobState as JobState, now_unix,
 };
-use tokio::sync::Mutex;
-use tracing::warn;
-
-use crate::config;
 
 const JOB_STORE_VERSION: u32 = 1;
 const MAX_EVENTS: usize = 256;
@@ -34,27 +31,14 @@ impl Default for JobStore {
 }
 
 pub(super) struct JobRegistry {
-    path: PathBuf,
-    store: Mutex<JobStore>,
+    store: PersistentStore<JobStore>,
 }
 
 impl JobRegistry {
-    pub(super) fn load(path: PathBuf) -> Self {
-        let store = match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|err| {
-                warn!(path = %path.display(), error = %err, "failed to parse daemon job store");
-                JobStore::default()
-            }),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => JobStore::default(),
-            Err(err) => {
-                warn!(path = %path.display(), error = %err, "failed to read daemon job store");
-                JobStore::default()
-            }
-        };
-        Self {
-            path,
-            store: Mutex::new(store),
-        }
+    pub(super) fn load(path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            store: PersistentStore::load(path)?,
+        })
     }
 
     pub(super) async fn upsert(
@@ -62,25 +46,27 @@ impl JobRegistry {
         record: JobRecord,
         message: impl Into<String>,
     ) -> Result<JobRecord> {
-        let mut store = self.store.lock().await;
-        store.jobs.insert(record.id.clone(), record.clone());
-        push_event(&mut store, &record, message.into());
-        prune_store(&mut store);
-        save_store(&self.path, &store)?;
-        Ok(record)
+        self.store
+            .update(|store| {
+                store.jobs.insert(record.id.clone(), record.clone());
+                push_event(store, &record, message.into());
+                prune_store(store);
+                record
+            })
+            .await
     }
 
     pub(super) async fn get(&self, id: &str) -> Option<JobRecord> {
-        self.store.lock().await.jobs.get(id).cloned()
+        self.store.read().await.jobs.get(id).cloned()
     }
 
     pub(super) async fn list(&self) -> Vec<JobRecord> {
-        self.store.lock().await.jobs.values().cloned().collect()
+        self.store.read().await.jobs.values().cloned().collect()
     }
 
     pub(super) async fn events(&self, job_id: Option<&str>) -> Vec<JobEvent> {
         self.store
-            .lock()
+            .read()
             .await
             .events
             .iter()
@@ -206,12 +192,6 @@ fn prune_store(store: &mut JobStore) {
     }
 }
 
-fn save_store(path: &PathBuf, store: &JobStore) -> Result<()> {
-    let text = serde_json::to_string_pretty(store).context("failed to encode daemon job store")?;
-    config::save_text_file_private(path, &text)
-        .with_context(|| format!("failed to save daemon job store {}", path.display()))
-}
-
 fn privilege_boundary() -> Value {
     json!({
         "arbitrary_shell": false,
@@ -228,6 +208,21 @@ fn privilege_boundary() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_commit_does_not_publish_job_or_event() {
+        let path =
+            std::env::temp_dir().join(format!("ssh-proxy-jobs-directory-{}", std::process::id()));
+        let registry = JobRegistry::load(path.clone()).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let result = registry
+            .upsert(JobRecord::new("failed", "test"), "queued")
+            .await;
+        std::fs::remove_dir(path).unwrap();
+        assert!(result.is_err());
+        assert!(registry.get("failed").await.is_none());
+        assert!(registry.events(None).await.is_empty());
+    }
 
     #[test]
     fn job_record_transitions_keep_timestamps_monotonic() {

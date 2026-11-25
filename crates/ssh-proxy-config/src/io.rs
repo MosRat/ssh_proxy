@@ -56,22 +56,18 @@ pub fn save_text_file_private(path: &Path, text: &str) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let temp = temp_save_path(path);
-    {
-        let mut file = create_private_file(&temp)
-            .with_context(|| format!("failed to create temp file {}", temp.display()))?;
+    let mut file = create_private_file(&temp)
+        .with_context(|| format!("failed to create temp file {}", temp.display()))?;
+    let result = (move || -> Result<()> {
         file.write_all(text.as_bytes())
-            .with_context(|| format!("failed to write temp file {}", temp.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync temp file {}", temp.display()))?;
+            .context("write temporary state")?;
+        file.sync_all().context("sync temporary state")
+    })()
+    .and_then(|()| replace_file(&temp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
     }
-    replace_file(&temp, path).with_context(|| {
-        format!(
-            "failed to replace {} with {}",
-            path.display(),
-            temp.display()
-        )
-    })?;
-    Ok(())
+    result.with_context(|| format!("failed to save {}", path.display()))
 }
 
 fn temp_save_path(path: &Path) -> PathBuf {
@@ -104,13 +100,7 @@ fn create_private_file(path: &Path) -> Result<File> {
 }
 
 fn replace_file(temp: &Path, target: &Path) -> Result<()> {
-    #[cfg(windows)]
-    {
-        if target.exists() {
-            fs::remove_file(target)
-                .with_context(|| format!("failed to remove {}", target.display()))?;
-        }
-    }
+    set_file_private(temp, true)?;
     fs::rename(temp, target).with_context(|| {
         format!(
             "failed to rename {} to {}",
@@ -118,7 +108,6 @@ fn replace_file(temp: &Path, target: &Path) -> Result<()> {
             target.display()
         )
     })?;
-    set_file_private(target, true)?;
     Ok(())
 }
 
@@ -150,6 +139,7 @@ mod tests {
         save_text_file_private(&path, "first").unwrap();
         save_text_file_private(&path, "second").unwrap();
 
+        assert!(replace_file(&dir.join("missing.tmp"), &path).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
         let _ = std::fs::remove_dir_all(dir);
     }

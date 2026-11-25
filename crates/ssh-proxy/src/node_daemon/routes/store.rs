@@ -23,6 +23,7 @@ struct RouteStore {
 
 impl NodeManager {
     pub(in crate::node_daemon) async fn save_routes(&self) -> Result<()> {
+        let writer = self.route_store_writer.clone().lock_owned().await;
         let routes = self.routes.lock().await;
         let store = RouteStore {
             version: 1,
@@ -38,13 +39,15 @@ impl NodeManager {
                 .collect(),
         };
         drop(routes);
-        let text = serde_json::to_string_pretty(&store)?;
-        config::save_text_file_private(&self.route_store_path, &text).with_context(|| {
-            format!(
-                "failed to write persistent route store {}",
-                self.route_store_path.display()
-            )
-        })?;
+        let path = self.route_store_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let _writer = writer;
+            let text = serde_json::to_string_pretty(&store)?;
+            config::save_text_file_private(&path, &text).with_context(|| {
+                format!("failed to write persistent route store {}", path.display())
+            })
+        })
+        .await??;
         Ok(())
     }
 

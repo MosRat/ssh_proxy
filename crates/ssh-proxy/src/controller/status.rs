@@ -463,13 +463,15 @@ impl SharedState {
             "spx_frame_read_data_bytes".to_string(),
             bridge_metrics.frame_read_data_bytes.into(),
         );
+        status.insert("spx_tcp_stream_backpressure_timeouts".to_string(), 0.into());
         status.insert(
-            "spx_tcp_stream_backpressure_timeouts".to_string(),
-            bridge_metrics.tcp_stream_backpressure_timeouts.into(),
+            "spx_tcp_queue_overflow_closes".to_string(),
+            bridge_metrics.tcp_queue_overflow_closes.into(),
         );
+        status.insert("spx_udp_assoc_backpressure_timeouts".to_string(), 0.into());
         status.insert(
-            "spx_udp_assoc_backpressure_timeouts".to_string(),
-            bridge_metrics.udp_assoc_backpressure_timeouts.into(),
+            "spx_udp_queue_overflow_drops".to_string(),
+            bridge_metrics.udp_queue_overflow_drops.into(),
         );
         status.insert(
             "read_buffer_size".to_string(),

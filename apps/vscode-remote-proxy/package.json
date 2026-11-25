@@ -367,10 +367,15 @@
     "package:with-kernel": "npm run kernel:stage && vsce package",
     "vscode:prepublish": "npm run compile"
   },
+  "overrides": {
+    "@vscode/vsce": {
+      "minimatch": "^11.0.1"
+    }
+  },
   "devDependencies": {
     "@types/node": "^20.11.30",
     "@types/vscode": "^1.86.0",
-    "@vscode/vsce": "^3.9.1",
+    "@vscode/vsce": "^4.1.1",
     "typescript": "^5.4.5"
   }
 }

@@ -25,7 +25,10 @@ The daemon owns these persistent stores:
 - `peers.json`: peer descriptors, versions, transports, last-seen state.
 - `routes.json`: route specs, readiness, transport, and metrics.
 
-State writes use atomic temp-file plus rename. Startup reconciliation adopts
+Job, session, peer, and daemon updates serialize commits per file and publish
+the new in-memory value after the synced temporary file replaces its destination.
+Readers can access the previous value during disk I/O. Route writes acquire a
+per-file writer lock before taking a snapshot of live routes. Startup reconciliation adopts
 known sessions and routes, refreshes peers, and resumes unfinished jobs.
 
 ## Protocol Layers
@@ -90,6 +93,13 @@ OpenSSH subprocess compatibility and remote shell TCP probes are not part of
 the normal protocol stack. They remain explicit compatibility or diagnostic
 paths and must surface `requires_external_ssh`, dependency classification, and a
 repair action when used.
+
+An SPX bridge supervises its reader and writer together. A full inbound TCP
+queue closes that flow because discarding a frame would corrupt the byte stream.
+A full UDP queue drops the incoming datagram. The shared reader continues to
+dispatch other flows. If the writer cannot queue a required close, the bridge
+disconnects so the peer can reclaim the flow. Controller status reports these
+events as `spx_tcp_queue_overflow_closes` and `spx_udp_queue_overflow_drops`.
 
 ## Workspace Layers
 
@@ -556,3 +566,9 @@ setup state for issue reports.
 The project is Rust-first and avoids C FFI unless a future plan documents why a
 Rust-native option is not viable. Release builds use the configured allocator
 and optimized profile. Linux musl artifacts are built through `cargo zigbuild`.
+
+### Native SSH session scheduling
+
+Each proxied TCP flow uses one SSH channel and stays on that session until it closes. The pool starts with one authenticated session. When each session already has two active channels, a new request can start one background handshake within the configured pool limit. Requests continue using warm sessions while authentication is in progress.
+
+For a mix of bulk transfers and short requests, use `--workload-hint mixed --ssh-session-pool-size 2` with the native SSH transport. With this hint and room for multiple sessions, a channel that transfers 1 MiB across both directions counts as bulk until it closes. When every session carries bulk traffic, a new request can trigger growth. Among sessions without recent failures the scheduler prefers the one with fewer bulk channels. The control status exposes this count as `active_bulk_channels` per session.

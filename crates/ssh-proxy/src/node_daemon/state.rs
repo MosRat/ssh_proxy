@@ -11,7 +11,6 @@ use ssh_proxy_daemon::job::{enum_value, job_health};
 pub(super) use ssh_proxy_daemon::{
     DaemonStateRecord, PeerStatusRecord, ProxySessionRecord, RemoteSetupStatus,
 };
-use tokio::sync::Mutex;
 
 use crate::config;
 
@@ -28,6 +27,8 @@ mod file_store;
 mod peer_store;
 mod session_store;
 
+pub(super) use file_store::PersistentStore;
+#[cfg(test)]
 use file_store::load_store;
 
 pub(super) trait ProxySessionRecordExt {
@@ -188,12 +189,9 @@ impl Default for DaemonStateStore {
 }
 
 pub(super) struct ProductionState {
-    daemon_path: std::path::PathBuf,
-    sessions_path: std::path::PathBuf,
-    _peers_path: std::path::PathBuf,
-    daemon: Mutex<DaemonStateStore>,
-    sessions: Mutex<SessionStore>,
-    peers: Mutex<PeerStore>,
+    daemon: PersistentStore<DaemonStateStore>,
+    sessions: PersistentStore<SessionStore>,
+    peers: PersistentStore<PeerStore>,
 }
 
 impl ProductionState {
@@ -202,12 +200,9 @@ impl ProductionState {
         let sessions_path = config::sessions_path()?;
         let peers_path = config::peers_path()?;
         Ok(Self {
-            daemon: Mutex::new(load_store(&daemon_path)?),
-            sessions: Mutex::new(load_store(&sessions_path)?),
-            peers: Mutex::new(load_store(&peers_path)?),
-            daemon_path,
-            sessions_path,
-            _peers_path: peers_path,
+            daemon: PersistentStore::load(daemon_path)?,
+            sessions: PersistentStore::load(sessions_path)?,
+            peers: PersistentStore::load(peers_path)?,
         })
     }
 }

@@ -112,19 +112,26 @@ impl SystemdDbusPlan {
 
 #[cfg(unix)]
 pub fn run_systemd_plan(plan: &SystemdDbusPlan) -> anyhow::Result<NativeProviderOutcome> {
+    zbus::block_on(run_systemd_plan_async(plan))
+}
+
+#[cfg(unix)]
+async fn run_systemd_plan_async(plan: &SystemdDbusPlan) -> anyhow::Result<NativeProviderOutcome> {
     use anyhow::{Context, bail};
-    use zbus::blocking::{Connection, Proxy};
+    use zbus::{Connection, Proxy};
 
     let connection = if plan.operation == SystemdOperation::SetUserLinger {
-        Connection::system().context("failed to connect to system D-Bus for logind")?
+        Connection::system()
+            .await
+            .context("failed to connect to system D-Bus for logind")?
     } else {
         match plan.scope {
-            SystemdScope::User => {
-                Connection::session().context("failed to connect to user/session D-Bus")?
-            }
-            SystemdScope::System => {
-                Connection::system().context("failed to connect to system D-Bus")?
-            }
+            SystemdScope::User => Connection::session()
+                .await
+                .context("failed to connect to user/session D-Bus")?,
+            SystemdScope::System => Connection::system()
+                .await
+                .context("failed to connect to system D-Bus")?,
         }
     };
 
@@ -138,9 +145,11 @@ pub fn run_systemd_plan(plan: &SystemdDbusPlan) -> anyhow::Result<NativeProvider
             "/org/freedesktop/login1",
             "org.freedesktop.login1.Manager",
         )
+        .await
         .context("failed to create logind D-Bus proxy")?;
         proxy
             .call_method("SetUserLinger", &(uid, true, false))
+            .await
             .context("failed to call logind SetUserLinger")?;
         return Ok(native_outcome(plan, true).with_status("linger_enabled"));
     }
@@ -151,12 +160,14 @@ pub fn run_systemd_plan(plan: &SystemdDbusPlan) -> anyhow::Result<NativeProvider
         "/org/freedesktop/systemd1",
         "org.freedesktop.systemd1.Manager",
     )
+    .await
     .context("failed to create systemd D-Bus proxy")?;
 
     match plan.operation {
         SystemdOperation::Reload => {
             proxy
                 .call_method("Reload", &())
+                .await
                 .context("failed to reload systemd manager through D-Bus")?;
         }
         SystemdOperation::Start | SystemdOperation::Stop | SystemdOperation::Restart => {
@@ -167,24 +178,28 @@ pub fn run_systemd_plan(plan: &SystemdDbusPlan) -> anyhow::Result<NativeProvider
             let mode = plan.mode.as_deref().unwrap_or("replace");
             proxy
                 .call_method(plan.method_name(), &(unit, mode))
+                .await
                 .with_context(|| format!("failed to call {} for {unit}", plan.method_name()))?;
         }
         SystemdOperation::Enable => {
             let unit = plan.unit.as_deref().context("enable requires unit")?;
             proxy
                 .call_method("EnableUnitFiles", &(vec![unit], false, true))
+                .await
                 .with_context(|| format!("failed to enable {unit} through D-Bus"))?;
         }
         SystemdOperation::Disable => {
             let unit = plan.unit.as_deref().context("disable requires unit")?;
             proxy
                 .call_method("DisableUnitFiles", &(vec![unit], false))
+                .await
                 .with_context(|| format!("failed to disable {unit} through D-Bus"))?;
         }
         SystemdOperation::Status => {
             let unit = plan.unit.as_deref().context("status requires unit")?;
             proxy
                 .call_method("GetUnit", &(unit))
+                .await
                 .with_context(|| format!("failed to query {unit} through D-Bus"))?;
         }
         SystemdOperation::SetUserLinger => bail!("SetUserLinger is handled through logind"),

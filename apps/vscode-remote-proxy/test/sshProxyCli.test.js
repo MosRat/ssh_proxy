@@ -228,3 +228,22 @@ test('parses ssh_proxy JSON output and reports invalid JSON with context', () =>
     /route explain did not return valid JSON:.*http:\/\/<redacted>@example\.test/s,
   );
 });
+
+test('collects complete UTF-8 JSON across writes before resolving', async () => {
+  const { SshProxyCli } = require('../out/sshProxyCli');
+  const cli = new SshProxyCli(process.execPath, { appendLine() {} });
+  const script = `
+    const bytes = Buffer.from(JSON.stringify({ text: '界' + 'a'.repeat(512 * 1024) }));
+    const split = bytes.indexOf(Buffer.from('界')) + 1;
+    process.stdout.write(bytes.subarray(0, split));
+    setTimeout(() => process.stdout.end(bytes.subarray(split)), 25);
+  `;
+  const value = await cli.runJson(['-e', script]);
+  assert.equal(value.text, '界' + 'a'.repeat(512 * 1024));
+});
+
+test('rejects CLI output over the combined byte limit', async () => {
+  const { SshProxyCli } = require('../out/sshProxyCli');
+  const cli = new SshProxyCli(process.execPath, { appendLine() {} });
+  await assert.rejects(cli.run(['-e', "process.stderr.end(Buffer.alloc(9 * 1024 * 1024))"]), /output limit/);
+});

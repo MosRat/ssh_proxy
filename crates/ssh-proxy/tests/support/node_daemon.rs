@@ -137,6 +137,20 @@ pub fn wait_for_status_with_token(endpoint: &str, token: &str) {
     panic!("node daemon did not become ready");
 }
 
+pub fn wait_child_listener(child: &mut Child, addr: SocketAddr) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("poll proxy process") {
+            panic!("proxy exited with {status} before binding {addr}");
+        }
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("proxy {} did not bind {addr} before deadline", child.id());
+}
+
 pub fn wait_tcp(addr: SocketAddr) {
     for _ in 0..40 {
         if std::net::TcpStream::connect(addr).is_ok() {

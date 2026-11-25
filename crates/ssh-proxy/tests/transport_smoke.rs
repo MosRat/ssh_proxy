@@ -43,7 +43,10 @@ fn run_quic_proxy_case(remote_transport: &str, body: &'static str) {
     fs::write(&key_path, certified.signing_key.serialize_pem()).expect("write key");
 
     let control = free_addr();
-    let quic = free_addr();
+    let quic = std::net::UdpSocket::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap();
     let routes_path = route_store_path("quic-routes");
     let endpoint = format!("tcp://{control}");
     let daemon = ssh_proxy_command()
@@ -66,7 +69,7 @@ fn run_quic_proxy_case(remote_transport: &str, body: &'static str) {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .map(ChildGuard::new)
         .expect("start quic daemon");
@@ -106,11 +109,11 @@ fn run_quic_proxy_case(remote_transport: &str, body: &'static str) {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .map(ChildGuard::new)
         .expect("start quic proxy");
-    wait_tcp(socks);
+    wait_child_listener(&mut proxy, socks);
 
     let (http, http_handle) = start_http_server_many(body, 20);
     let response = socks_get(socks, http);
@@ -155,7 +158,10 @@ fn run_quic_proxy_fixed_target_case(remote_transport: &str, body: &'static str) 
     fs::write(&key_path, certified.signing_key.serialize_pem()).expect("write key");
 
     let control = free_addr();
-    let quic = free_addr();
+    let quic = std::net::UdpSocket::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap();
     let routes_path = route_store_path("quic-fixed-routes");
     let endpoint = format!("tcp://{control}");
     let daemon = ssh_proxy_command()
@@ -178,7 +184,7 @@ fn run_quic_proxy_fixed_target_case(remote_transport: &str, body: &'static str) 
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .map(ChildGuard::new)
         .expect("start quic fixed daemon");
@@ -212,11 +218,11 @@ fn run_quic_proxy_fixed_target_case(remote_transport: &str, body: &'static str) 
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .map(ChildGuard::new)
         .expect("start quic fixed proxy");
-    wait_tcp(socks);
+    wait_child_listener(&mut proxy, socks);
 
     let mut response = String::new();
     for _ in 0..20 {

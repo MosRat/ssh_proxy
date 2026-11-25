@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use ssh_proxy_transport::peer_transport;
+use ssh_proxy_core::quic_defaults;
 
 use super::{DeployMode, RemoteOs, RemoteTransport, RouteWorkloadHint, TcpTarget};
 
@@ -148,28 +148,29 @@ pub struct ProxyArgs {
     #[serde(default)]
     pub pool_policy: Option<String>,
 
-    #[arg(skip)]
+    /// Prefer separate SSH sessions for new requests during bulk transfers with mixed workloads.
+    #[arg(long, value_enum)]
     #[serde(default)]
     pub workload_hint: Option<RouteWorkloadHint>,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_MAX_BIDI_STREAMS)]
-    #[serde(default = "peer_transport::default_quic_max_bidi_streams")]
+    #[arg(long, default_value_t = quic_defaults::QUIC_MAX_BIDI_STREAMS)]
+    #[serde(default = "quic_defaults::default_quic_max_bidi_streams")]
     pub quic_max_bidi_streams: u32,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_STREAM_RECEIVE_WINDOW)]
-    #[serde(default = "peer_transport::default_quic_stream_receive_window")]
+    #[arg(long, default_value_t = quic_defaults::QUIC_STREAM_RECEIVE_WINDOW)]
+    #[serde(default = "quic_defaults::default_quic_stream_receive_window")]
     pub quic_stream_receive_window: u32,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_RECEIVE_WINDOW)]
-    #[serde(default = "peer_transport::default_quic_receive_window")]
+    #[arg(long, default_value_t = quic_defaults::QUIC_RECEIVE_WINDOW)]
+    #[serde(default = "quic_defaults::default_quic_receive_window")]
     pub quic_receive_window: u32,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_KEEP_ALIVE_INTERVAL_SECS)]
-    #[serde(default = "peer_transport::default_quic_keep_alive_interval_secs")]
+    #[arg(long, default_value_t = quic_defaults::QUIC_KEEP_ALIVE_INTERVAL_SECS)]
+    #[serde(default = "quic_defaults::default_quic_keep_alive_interval_secs")]
     pub quic_keep_alive_interval_secs: u64,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_IDLE_TIMEOUT_SECS)]
-    #[serde(default = "peer_transport::default_quic_idle_timeout_secs")]
+    #[arg(long, default_value_t = quic_defaults::QUIC_IDLE_TIMEOUT_SECS)]
+    #[serde(default = "quic_defaults::default_quic_idle_timeout_secs")]
     pub quic_idle_timeout_secs: u64,
 
     #[arg(

@@ -433,10 +433,10 @@ impl State {
     }
 
     async fn shutdown_notified(&self) {
-        if self.shutdown.load(Ordering::Relaxed) {
-            return;
+        let notified = self.shutdown_notify.notified();
+        if !self.shutdown.load(Ordering::Relaxed) {
+            notified.await;
         }
-        self.shutdown_notify.notified().await;
     }
 }
 

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use ssh_proxy_control as control_socket;
-use ssh_proxy_transport::peer_transport;
+use ssh_proxy_core::quic_defaults;
 
 use super::{DeployMode, RemoteOs, RemoteTransport, RouteArgs, RouteWorkloadHint, TcpTarget};
 
@@ -287,19 +287,19 @@ pub struct NodeForwardArgs {
     #[arg(skip)]
     pub workload_hint: Option<RouteWorkloadHint>,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_MAX_BIDI_STREAMS)]
+    #[arg(long, default_value_t = quic_defaults::QUIC_MAX_BIDI_STREAMS)]
     pub quic_max_bidi_streams: u32,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_STREAM_RECEIVE_WINDOW)]
+    #[arg(long, default_value_t = quic_defaults::QUIC_STREAM_RECEIVE_WINDOW)]
     pub quic_stream_receive_window: u32,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_RECEIVE_WINDOW)]
+    #[arg(long, default_value_t = quic_defaults::QUIC_RECEIVE_WINDOW)]
     pub quic_receive_window: u32,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_KEEP_ALIVE_INTERVAL_SECS)]
+    #[arg(long, default_value_t = quic_defaults::QUIC_KEEP_ALIVE_INTERVAL_SECS)]
     pub quic_keep_alive_interval_secs: u64,
 
-    #[arg(long, default_value_t = peer_transport::QUIC_IDLE_TIMEOUT_SECS)]
+    #[arg(long, default_value_t = quic_defaults::QUIC_IDLE_TIMEOUT_SECS)]
     pub quic_idle_timeout_secs: u64,
 
     #[arg(

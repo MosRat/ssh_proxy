@@ -10,7 +10,7 @@ use tokio::{
 };
 use tokio_rustls::rustls::{
     ClientConfig, RootCertStore, ServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer},
+    pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
     server::WebPkiClientVerifier,
 };
 
@@ -22,11 +22,7 @@ pub use ssh_proxy_protocol::protocol_core::peer::{
 const HANDSHAKE_MAGIC: &[u8; 4] = b"SPX1";
 const MAX_HANDSHAKE: usize = 64 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-pub const QUIC_MAX_BIDI_STREAMS: u32 = 256;
-pub const QUIC_STREAM_RECEIVE_WINDOW: u32 = 2 * 1024 * 1024;
-pub const QUIC_RECEIVE_WINDOW: u32 = 16 * 1024 * 1024;
-pub const QUIC_KEEP_ALIVE_INTERVAL_SECS: u64 = 10;
-pub const QUIC_IDLE_TIMEOUT_SECS: u64 = 60;
+pub use ssh_proxy_core::quic_defaults::*;
 pub const QUIC_UDP_RUNTIME: &str = "quinn-udp";
 pub const QUIC_PACKETIZATION: &str = "quinn-managed-udp";
 pub const QUIC_UDP_GSO_SOURCE: &str =
@@ -67,26 +63,6 @@ impl Default for QuicTransportOptions {
             idle_timeout_secs: QUIC_IDLE_TIMEOUT_SECS,
         }
     }
-}
-
-pub fn default_quic_max_bidi_streams() -> u32 {
-    QUIC_MAX_BIDI_STREAMS
-}
-
-pub fn default_quic_stream_receive_window() -> u32 {
-    QUIC_STREAM_RECEIVE_WINDOW
-}
-
-pub fn default_quic_receive_window() -> u32 {
-    QUIC_RECEIVE_WINDOW
-}
-
-pub fn default_quic_keep_alive_interval_secs() -> u64 {
-    QUIC_KEEP_ALIVE_INTERVAL_SECS
-}
-
-pub fn default_quic_idle_timeout_secs() -> u64 {
-    QUIC_IDLE_TIMEOUT_SECS
 }
 
 impl QuicTransportOptions {
@@ -332,7 +308,7 @@ pub fn load_cert_chain(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
     let file = File::open(path)
         .with_context(|| format!("failed to open certificate PEM {}", path.display()))?;
     let mut reader = BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader)
+    let certs = CertificateDer::pem_reader_iter(&mut reader)
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| format!("failed to read certificate PEM {}", path.display()))?;
     if certs.is_empty() {
@@ -348,9 +324,8 @@ pub fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
     let file = File::open(path)
         .with_context(|| format!("failed to open private key PEM {}", path.display()))?;
     let mut reader = BufReader::new(file);
-    rustls_pemfile::private_key(&mut reader)
-        .with_context(|| format!("failed to read private key PEM {}", path.display()))?
-        .ok_or_else(|| anyhow::anyhow!("private key PEM {} contained no key", path.display()))
+    PrivateKeyDer::from_pem_reader(&mut reader)
+        .with_context(|| format!("failed to read private key PEM {}", path.display()))
 }
 
 pub async fn client_handshake<S>(

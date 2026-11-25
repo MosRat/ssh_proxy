@@ -39,6 +39,7 @@ use scheduler::{
 pub struct State {
     args: cli::ProxyArgs,
     sessions: Mutex<Vec<Arc<Session>>>,
+    connect_gate: Arc<Mutex<Option<Instant>>>,
     pool_size: usize,
     started: Instant,
     shutdown: AtomicBool,
@@ -76,6 +77,7 @@ struct Session {
     id: u32,
     client: Client,
     active_channels: AtomicU32,
+    bulk_channels: AtomicU32,
     opened_channels: AtomicU64,
     open_failures: AtomicU64,
     last_open_latency_ms: AtomicU64,
@@ -99,6 +101,7 @@ pub struct Stream {
     state: Arc<State>,
     session: Arc<Session>,
     opened_at: Instant,
+    bytes_until_bulk: Option<usize>,
     first_byte_recorded: bool,
     close_recorded: bool,
 }
@@ -110,6 +113,7 @@ impl State {
             .unwrap_or_else(|| if args.tcp_target.is_some() { 1 } else { 2 })
             .max(1);
         Arc::new(Self {
+            connect_gate: Arc::new(Mutex::new(None)),
             pool_size,
             args,
             sessions: Mutex::new(Vec::new()),
@@ -166,13 +170,14 @@ impl State {
 
         match opened {
             Ok(inner) => {
-                channel_guard.disarm();
                 session.opened_channels.fetch_add(1, Ordering::Relaxed);
                 session
                     .last_open_latency_ms
                     .store(duration_millis(started.elapsed()), Ordering::Relaxed);
                 *self.last_error.lock().await = None;
+                channel_guard.disarm();
                 Ok(Stream {
+                    bytes_until_bulk: self.track_bulk().then_some(BULK_THRESHOLD),
                     inner,
                     state: self.clone(),
                     session,
@@ -196,69 +201,123 @@ impl State {
     }
 
     async fn session(self: &Arc<Self>) -> Result<Arc<Session>> {
-        let mut sessions = self.sessions.lock().await;
-        let min_active_channels = sessions
-            .iter()
-            .map(|session| session.active_channels.load(Ordering::Relaxed))
-            .min()
-            .unwrap_or(0);
-        let all_sessions_busy = !sessions.is_empty() && min_active_channels > 0;
-        if sessions.len() > 0
-            && sessions.len() < self.pool_size
-            && all_sessions_busy
-            && min_active_channels < SSH_SESSION_GROWTH_MIN_ACTIVE_CHANNELS
-        {
-            self.session_growth_suppressed
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        if should_open_new_session(sessions.len(), self.pool_size, min_active_channels) {
-            self.ssh_session_connect_attempts
-                .fetch_add(1, Ordering::Relaxed);
-            let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-            let client = match ssh_client::Client::connect_proxy_args(&self.args).await {
-                Ok(client) => client,
-                Err(err) => {
-                    self.ssh_session_connect_failures
-                        .fetch_add(1, Ordering::Relaxed);
-                    *self.last_error.lock().await = Some(err.to_string());
-                    return Err(err);
+        loop {
+            let sessions = self.sessions.lock().await;
+            let now_ms = duration_millis(self.started.elapsed());
+            if let Some(best) = sessions.iter().min_by_key(|session| {
+                let score = self.session_score_components(session, now_ms);
+                let bulk = session.bulk_channels.load(Ordering::Relaxed);
+                (
+                    self.track_bulk() && score.recent_failure_penalty > 0,
+                    bulk,
+                    score.score(),
+                )
+            }) {
+                if sessions.len() < self.pool_size {
+                    let min_active = sessions
+                        .iter()
+                        .map(|s| s.active_channels.load(Ordering::Relaxed))
+                        .min()
+                        .unwrap_or(0);
+                    let all_bulk = self.track_bulk()
+                        && sessions
+                            .iter()
+                            .all(|s| s.bulk_channels.load(Ordering::Relaxed) > 0);
+                    if all_bulk
+                        || should_open_new_session(sessions.len(), self.pool_size, min_active)
+                    {
+                        self.start_background_connection();
+                    } else if min_active > 0 {
+                        self.session_growth_suppressed
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                 }
-            };
-            let session = Arc::new(Session {
-                id,
-                client,
-                active_channels: AtomicU32::new(0),
-                opened_channels: AtomicU64::new(0),
-                open_failures: AtomicU64::new(0),
-                last_open_latency_ms: AtomicU64::new(0),
-                last_failure_elapsed_ms: AtomicU64::new(0),
-                bytes_client_to_remote: AtomicU64::new(0),
-                bytes_remote_to_client: AtomicU64::new(0),
-                first_byte_samples: AtomicU64::new(0),
-                first_byte_latency_total_ms: AtomicU64::new(0),
-                last_first_byte_latency_ms: AtomicU64::new(0),
-                max_first_byte_latency_ms: AtomicU64::new(0),
-                first_byte_latency_buckets: empty_latency_buckets(),
-                graceful_closes: AtomicU64::new(0),
-                error_closes: AtomicU64::new(0),
-                last_close_reason: StdMutex::new(None),
-                last_channel_queue_depth: AtomicU64::new(0),
-                max_channel_queue_depth: AtomicU64::new(0),
-            });
+                self.acquire_session_channel(best);
+                return Ok(best.clone());
+            }
+            drop(sessions);
+            let _gate = self.connect_gate.lock().await;
+            if !self.sessions.lock().await.is_empty() {
+                continue;
+            }
+            let session = self.connect_session().await?;
+            let mut sessions = self.sessions.lock().await;
             sessions.push(session.clone());
             self.session_growth_events.fetch_add(1, Ordering::Relaxed);
             self.acquire_session_channel(&session);
             return Ok(session);
         }
+    }
 
-        let now_ms = duration_millis(self.started.elapsed());
-        let session = sessions
-            .iter()
-            .min_by_key(|session| self.session_score(session, now_ms))
-            .cloned()
-            .ok_or_else(|| anyhow!("ssh-native session pool is empty"))?;
-        self.acquire_session_channel(&session);
-        Ok(session)
+    // Called with the session list locked so that checking capacity and reserving a slot are atomic.
+    fn start_background_connection(self: &Arc<Self>) {
+        let Ok(mut gate) = self.connect_gate.clone().try_lock_owned() else {
+            return;
+        };
+        if gate.is_some_and(|retry| Instant::now() < retry) {
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            match state.connect_session().await {
+                Ok(session) => {
+                    state.sessions.lock().await.push(session);
+                    state.session_growth_events.fetch_add(1, Ordering::Relaxed);
+                    *gate = None;
+                }
+                Err(_) => {
+                    let delay = Duration::from_secs(state.args.reconnect_delay_secs.clamp(1, 60));
+                    *gate = Some(Instant::now() + delay);
+                }
+            }
+        });
+    }
+
+    fn track_bulk(&self) -> bool {
+        self.pool_size > 1 && self.args.workload_hint == Some(cli::RouteWorkloadHint::Mixed)
+    }
+
+    async fn connect_session(&self) -> Result<Arc<Session>> {
+        self.ssh_session_connect_attempts
+            .fetch_add(1, Ordering::Relaxed);
+        let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
+        let timeout = Duration::from_secs(self.args.connect_timeout_secs.max(1));
+        let connected = tokio::select! {
+            _ = self.shutdown_notified() => return Err(anyhow!("ssh-native shutting down")),
+            result = time::timeout(timeout, Client::connect_proxy_args(&self.args)) =>
+                result.map_err(|_| anyhow!("ssh-native session setup timed out after {timeout:?}")).and_then(|result| result),
+        };
+        let client = match connected {
+            Ok(client) => client,
+            Err(err) => {
+                self.ssh_session_connect_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                *self.last_error.lock().await = Some(err.to_string());
+                return Err(err);
+            }
+        };
+        Ok(Arc::new(Session {
+            id,
+            client,
+            active_channels: AtomicU32::new(0),
+            bulk_channels: AtomicU32::new(0),
+            opened_channels: AtomicU64::new(0),
+            open_failures: AtomicU64::new(0),
+            last_open_latency_ms: AtomicU64::new(0),
+            last_failure_elapsed_ms: AtomicU64::new(0),
+            bytes_client_to_remote: AtomicU64::new(0),
+            bytes_remote_to_client: AtomicU64::new(0),
+            first_byte_samples: AtomicU64::new(0),
+            first_byte_latency_total_ms: AtomicU64::new(0),
+            last_first_byte_latency_ms: AtomicU64::new(0),
+            max_first_byte_latency_ms: AtomicU64::new(0),
+            first_byte_latency_buckets: empty_latency_buckets(),
+            graceful_closes: AtomicU64::new(0),
+            error_closes: AtomicU64::new(0),
+            last_close_reason: StdMutex::new(None),
+            last_channel_queue_depth: AtomicU64::new(0),
+            max_channel_queue_depth: AtomicU64::new(0),
+        }))
     }
 
     fn acquire_session_channel(&self, session: &Session) {
@@ -273,10 +332,6 @@ impl State {
         self.last_channel_queue_depth
             .store(queue_depth, Ordering::Relaxed);
         update_atomic_max(&self.max_channel_queue_depth, queue_depth);
-    }
-
-    fn session_score(&self, session: &Session, now_ms: u64) -> u64 {
-        self.session_score_components(session, now_ms).score()
     }
 
     fn session_score_components(&self, session: &Session, now_ms: u64) -> SessionScoreComponents {
@@ -366,10 +421,10 @@ impl State {
     }
 
     async fn shutdown_notified(&self) {
-        if self.shutdown.load(Ordering::Relaxed) {
-            return;
+        let notified = self.shutdown_notify.notified();
+        if !self.shutdown.load(Ordering::Relaxed) {
+            notified.await;
         }
-        self.shutdown_notify.notified().await;
     }
 }
 
@@ -454,7 +509,20 @@ impl Session {
     }
 }
 
+const BULK_THRESHOLD: usize = 1024 * 1024;
+
 impl Stream {
+    fn observe_transfer(&mut self, bytes: usize) {
+        if let Some(left) = &mut self.bytes_until_bulk {
+            if *left != 0 {
+                *left = left.saturating_sub(bytes);
+                if *left == 0 {
+                    self.session.bulk_channels.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
     fn record_first_byte_latency(&self, latency: Duration) {
         let latency_ms = duration_millis(latency);
         record_latency_sample(
@@ -531,6 +599,9 @@ impl Drop for Stream {
         if !self.close_recorded {
             self.record_error_close("dropped before relay recorded close");
         }
+        if self.bytes_until_bulk == Some(0) {
+            self.session.bulk_channels.fetch_sub(1, Ordering::Relaxed);
+        }
         self.session.active_channels.fetch_sub(1, Ordering::Relaxed);
         self.state
             .active_ssh_channels
@@ -548,6 +619,7 @@ impl AsyncRead for Stream {
         let result = Pin::new(&mut self.inner).poll_read(cx, buf);
         if let Poll::Ready(Ok(())) = &result {
             let after = buf.filled().len();
+            self.observe_transfer(after - before);
             if after > before && !self.first_byte_recorded {
                 self.first_byte_recorded = true;
                 self.record_first_byte_latency(self.opened_at.elapsed());
@@ -563,7 +635,11 @@ impl AsyncWrite for Stream {
         cx: &mut TaskContext<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+        let result = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if let Poll::Ready(Ok(bytes)) = &result {
+            self.observe_transfer(*bytes);
+        }
+        result
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
@@ -642,6 +718,34 @@ mod tests {
             no_reconnect: false,
             control_listen: None,
         }
+    }
+
+    #[tokio::test]
+    async fn pending_handshake_allows_status_and_deduplicates_cold_connections() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut args = proxy_args();
+        args.target = "127.0.0.1".into();
+        args.port = Some(listener.local_addr().unwrap().port());
+        // An empty SSH config keeps the test independent of user-defined ProxyJump rules.
+        args.config = Some(if cfg!(windows) { "NUL" } else { "/dev/null" }.into());
+        let state = State::new(args);
+        let connect =
+            |state: Arc<State>| tokio::spawn(async move { state.session().await.is_ok() });
+        let first = connect(state.clone());
+        let (_socket, _) = time::timeout(Duration::from_secs(3), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let second = connect(state.clone());
+        tokio::task::yield_now().await;
+        let status = time::timeout(Duration::from_secs(1), state.status_value())
+            .await
+            .unwrap();
+        assert_eq!(status["active_ssh_sessions"], 0);
+        assert_eq!(status["ssh_session_connect_attempts"], 1);
+        state.request_shutdown();
+        assert!(!first.await.unwrap());
+        assert!(!second.await.unwrap());
     }
 
     #[test]

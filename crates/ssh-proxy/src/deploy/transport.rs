@@ -118,6 +118,7 @@ pub async fn open_remote_reverse_socks(
         &client,
         HelperCapability::ReverseSocks {
             listen: remote_listen,
+            fixed: args.tcp_target.is_some(),
         },
     )
     .await?;
@@ -125,6 +126,11 @@ pub async fn open_remote_reverse_socks(
         cli::RemoteOs::Auto => cli::RemoteOs::Unix,
         other => other,
     };
-    let command = remote_reverse_socks_command(&remote_path, remote_os, remote_listen);
+    let command = remote_reverse_socks_command(
+        &remote_path,
+        remote_os,
+        remote_listen,
+        args.tcp_target.as_ref(),
+    )?;
     client.exec_stream(command).await
 }

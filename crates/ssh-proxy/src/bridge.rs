@@ -21,8 +21,7 @@ use crate::{
     cli, deploy, peer_transport,
     protocol::{
         FRAME_CHANNEL_CAPACITY, Frame, FrameReader, FrameWriteBatchStats,
-        TCP_STREAM_BACKPRESSURE_TIMEOUT, TCP_STREAM_CHANNEL_CAPACITY,
-        UDP_ASSOC_BACKPRESSURE_TIMEOUT, UdpDatagram, write_frame_batch,
+        TCP_STREAM_CHANNEL_CAPACITY, UdpDatagram, write_frame_batch,
     },
 };
 
@@ -45,6 +44,8 @@ struct BridgeInner {
 pub struct Bridge {
     pub handle: BridgeHandle,
     pub lifecycle: JoinHandle<()>,
+    // Dropping the route owner also wakes the I/O task for normal cleanup.
+    _close_on_drop: oneshot::Sender<()>,
     pub selected_protocol: Option<peer_transport::PeerProtocol>,
     pub transport_timings: deploy::RemoteHelperTimings,
 }
@@ -61,8 +62,8 @@ pub struct BridgeMetricsSnapshot {
     pub frame_read_frames: u64,
     pub frame_read_data_frames: u64,
     pub frame_read_data_bytes: u64,
-    pub tcp_stream_backpressure_timeouts: u64,
-    pub udp_assoc_backpressure_timeouts: u64,
+    pub tcp_queue_overflow_closes: u64,
+    pub udp_queue_overflow_drops: u64,
 }
 
 impl BridgeMetricsSnapshot {
@@ -77,8 +78,8 @@ impl BridgeMetricsSnapshot {
         self.frame_read_frames += other.frame_read_frames;
         self.frame_read_data_frames += other.frame_read_data_frames;
         self.frame_read_data_bytes += other.frame_read_data_bytes;
-        self.tcp_stream_backpressure_timeouts += other.tcp_stream_backpressure_timeouts;
-        self.udp_assoc_backpressure_timeouts += other.udp_assoc_backpressure_timeouts;
+        self.tcp_queue_overflow_closes += other.tcp_queue_overflow_closes;
+        self.udp_queue_overflow_drops += other.udp_queue_overflow_drops;
     }
 }
 
@@ -94,8 +95,8 @@ struct BridgeMetrics {
     frame_read_frames: AtomicU64,
     frame_read_data_frames: AtomicU64,
     frame_read_data_bytes: AtomicU64,
-    tcp_stream_backpressure_timeouts: AtomicU64,
-    udp_assoc_backpressure_timeouts: AtomicU64,
+    tcp_queue_overflow_closes: AtomicU64,
+    udp_queue_overflow_drops: AtomicU64,
 }
 
 impl BridgeMetrics {
@@ -126,13 +127,13 @@ impl BridgeMetrics {
         }
     }
 
-    fn record_tcp_backpressure_timeout(&self) {
-        self.tcp_stream_backpressure_timeouts
+    fn record_tcp_queue_overflow(&self) {
+        self.tcp_queue_overflow_closes
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_udp_backpressure_timeout(&self) {
-        self.udp_assoc_backpressure_timeouts
+    fn record_udp_queue_overflow(&self) {
+        self.udp_queue_overflow_drops
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -148,12 +149,8 @@ impl BridgeMetrics {
             frame_read_frames: self.frame_read_frames.load(Ordering::Relaxed),
             frame_read_data_frames: self.frame_read_data_frames.load(Ordering::Relaxed),
             frame_read_data_bytes: self.frame_read_data_bytes.load(Ordering::Relaxed),
-            tcp_stream_backpressure_timeouts: self
-                .tcp_stream_backpressure_timeouts
-                .load(Ordering::Relaxed),
-            udp_assoc_backpressure_timeouts: self
-                .udp_assoc_backpressure_timeouts
-                .load(Ordering::Relaxed),
+            tcp_queue_overflow_closes: self.tcp_queue_overflow_closes.load(Ordering::Relaxed),
+            udp_queue_overflow_drops: self.udp_queue_overflow_drops.load(Ordering::Relaxed),
         }
     }
 }
@@ -307,7 +304,7 @@ where
     });
 
     let writer_metrics = inner.metrics.clone();
-    let writer_task = tokio::spawn(async move {
+    let write_frames = async move {
         while let Some(frame) = rx.recv().await {
             match write_frame_batch(&mut writer, frame, &mut rx).await {
                 Ok(stats) => writer_metrics.record_write_batch(&stats),
@@ -318,18 +315,21 @@ where
                 }
             }
         }
-    });
+    };
 
     let reader_inner = inner.clone();
-    let reader_task = tokio::spawn(async move {
-        if let Err(err) = reader_loop(reader, reader_inner).await {
-            warn!(error = %err, "bridge reader stopped");
-        }
-    });
-
     let lifecycle_inner = inner.clone();
+    let (close_on_drop, closed) = oneshot::channel();
     let lifecycle = tokio::spawn(async move {
-        reader_task.await.ok();
+        tokio::select! {
+            _ = closed => {}
+            _ = write_frames => {}
+            result = reader_loop(reader, reader_inner) => {
+                if let Err(err) = result {
+                    warn!(error = %err, "bridge reader stopped");
+                }
+            }
+        }
         {
             let mut pending = lifecycle_inner.pending_tcp.lock().await;
             for (_, tx) in pending.drain() {
@@ -338,12 +338,12 @@ where
         }
         lifecycle_inner.tcp_streams.write().await.clear();
         lifecycle_inner.udp_streams.write().await.clear();
-        writer_task.abort();
     });
 
     Ok(Bridge {
         handle: BridgeHandle { inner },
         lifecycle,
+        _close_on_drop: close_on_drop,
         selected_protocol: None,
         transport_timings: deploy::RemoteHelperTimings::default(),
     })
@@ -365,29 +365,23 @@ where
             Frame::Data { id, data } => {
                 let tx = inner.tcp_streams.read().await.get(&id).cloned();
                 if let Some(tx) = tx {
-                    match time::timeout(TCP_STREAM_BACKPRESSURE_TIMEOUT, tx.send(data)).await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(_)) => {
+                    match tx.try_send(data) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
                             inner.tcp_streams.write().await.remove(&id);
                         }
-                        Err(_) => {
-                            inner.metrics.record_tcp_backpressure_timeout();
-                            warn!(
-                                id,
-                                timeout_secs = TCP_STREAM_BACKPRESSURE_TIMEOUT.as_secs(),
-                                "local TCP stream receiver backpressure timed out"
-                            );
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            inner.metrics.record_tcp_queue_overflow();
                             inner.tcp_streams.write().await.remove(&id);
-                            let _ = inner
+                            // Losing a TCP frame invalidates this stream. If the writer cannot
+                            // carry its close, reconnect to release the peer's stream as well.
+                            inner
                                 .writer
-                                .send(Frame::Close {
+                                .try_send(Frame::Close {
                                     id,
-                                    reason: format!(
-                                        "local receiver backpressure timed out after {}s",
-                                        TCP_STREAM_BACKPRESSURE_TIMEOUT.as_secs()
-                                    ),
+                                    reason: "local TCP receiver queue full".into(),
                                 })
-                                .await;
+                                .context("cannot signal overloaded TCP stream")?;
                         }
                     }
                 }
@@ -400,34 +394,13 @@ where
             } => {
                 let tx = inner.udp_streams.read().await.get(&id).cloned();
                 if let Some(tx) = tx {
-                    match time::timeout(
-                        UDP_ASSOC_BACKPRESSURE_TIMEOUT,
-                        tx.send(UdpDatagram { host, port, data }),
-                    )
-                    .await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(_)) => {
-                            inner.udp_streams.write().await.remove(&id);
+                    match tx.try_send(UdpDatagram { host, port, data }) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            inner.metrics.record_udp_queue_overflow();
                         }
-                        Err(_) => {
-                            inner.metrics.record_udp_backpressure_timeout();
-                            warn!(
-                                id,
-                                timeout_secs = UDP_ASSOC_BACKPRESSURE_TIMEOUT.as_secs(),
-                                "local UDP association receiver backpressure timed out"
-                            );
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
                             inner.udp_streams.write().await.remove(&id);
-                            let _ = inner
-                                .writer
-                                .send(Frame::Close {
-                                    id,
-                                    reason: format!(
-                                        "local UDP receiver backpressure timed out after {}s",
-                                        UDP_ASSOC_BACKPRESSURE_TIMEOUT.as_secs()
-                                    ),
-                                })
-                                .await;
                         }
                     }
                 }
@@ -445,4 +418,61 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn writer_failure_ends_bridge_with_idle_reader() {
+        let (reader, _idle_peer) = io::duplex(64);
+        let (writer, disconnected) = io::duplex(64);
+        drop(disconnected);
+        let bridge = connect_io(reader, writer).await.unwrap();
+        let open = bridge.handle.open_tcp("localhost".into(), 80, None);
+        let (result, ended) = time::timeout(Duration::from_secs(2), async {
+            tokio::join!(open, bridge.lifecycle)
+        })
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        ended.unwrap();
+    }
+
+    #[tokio::test]
+    async fn full_tcp_receiver_does_not_delay_another_stream() {
+        let (reader, mut peer) = io::duplex(4096);
+        let bridge = connect_io(reader, io::sink()).await.unwrap();
+        let (slow, _stalled) = mpsc::channel(1);
+        slow.try_send(Bytes::from_static(b"full")).unwrap();
+        let (fast, mut received) = mpsc::channel(1);
+        {
+            let mut streams = bridge.handle.inner.tcp_streams.write().await;
+            streams.insert(1, slow);
+            streams.insert(2, fast);
+        }
+        let (_tx, mut empty) = mpsc::channel(1);
+        for id in [1, 2] {
+            write_frame_batch(
+                &mut peer,
+                Frame::Data {
+                    id,
+                    data: Bytes::from_static(b"x"),
+                },
+                &mut empty,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            time::timeout(Duration::from_secs(1), received.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            &b"x"[..]
+        );
+        drop(peer);
+        bridge.lifecycle.await.unwrap();
+    }
 }
